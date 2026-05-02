@@ -689,6 +689,12 @@ jobs:
           version = sys.argv[1]
           previous_manifest = sys.argv[2]
           artifacts = []
+          expected_platforms = {
+              "linux-aarch64",
+              "linux-x86_64",
+              "macos-aarch64",
+              "macos-x86_64",
+          }
           for raw in sys.argv[3:]:
               path = pathlib.Path(raw)
               name = path.name
@@ -703,6 +709,13 @@ jobs:
                   "url": f"https://tama.tools/releases/{name}",
                   "sha256": digest,
               })
+          platforms = [artifact["platform"] for artifact in artifacts]
+          if len(platforms) != len(set(platforms)):
+              raise SystemExit("duplicate platform archive in release artifacts")
+          if set(platforms) != expected_platforms:
+              expected = ", ".join(sorted(expected_platforms))
+              found = ", ".join(sorted(platforms)) or "<none>"
+              raise SystemExit(f"release artifacts must cover [{expected}], found [{found}]")
           current = {
               "version": version,
               "artifacts": sorted(artifacts, key=lambda item: item["platform"]),
