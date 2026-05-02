@@ -88,6 +88,8 @@ mirrors
 trust
 ```
 
+`selectors` includes function selectors, custom-error selectors, and event topic0 values.
+
 ## `tama clean [--deep]`
 
 Removes generated Tama artifacts and generated Solidity. `--deep` also removes the configured Lake build directory.

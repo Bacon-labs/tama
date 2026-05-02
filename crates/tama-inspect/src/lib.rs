@@ -75,16 +75,7 @@ fn inspect_json(
 ) -> Result<Value> {
     Ok(match field {
         Field::Manifest => serde_json::to_value(manifest)?,
-        Field::Selectors => json!(manifest
-            .abi
-            .functions
-            .iter()
-            .map(|function| json!({
-                "name": function.name,
-                "signature": function.signature,
-                "selector": function.selector
-            }))
-            .collect::<Vec<_>>()),
+        Field::Selectors => selectors_json(manifest),
         Field::Abi => serde_json::to_value(&manifest.abi)?,
         Field::StorageLayout => serde_json::to_value(&manifest.storage)?,
         Field::Yul => json!({ "yul": artifact(root, manifest, &manifest.artifacts.yul)? }),
@@ -115,19 +106,34 @@ fn inspect_human(
         Field::Selectors => {
             #[derive(Tabled)]
             struct Row {
+                kind: String,
                 name: String,
                 signature: String,
-                selector: String,
+                value: String,
             }
-            Ok(
-                Table::new(manifest.abi.functions.iter().map(|function| Row {
+            let rows = manifest
+                .abi
+                .functions
+                .iter()
+                .map(|function| Row {
+                    kind: "function".to_string(),
                     name: function.name.clone(),
                     signature: function.signature.clone(),
-                    selector: function.selector.clone(),
+                    value: function.selector.clone(),
+                })
+                .chain(manifest.abi.errors.iter().map(|error| Row {
+                    kind: "error".to_string(),
+                    name: error.name.clone(),
+                    signature: error.signature.clone(),
+                    value: error.selector.clone(),
                 }))
-                .to_string()
-                    + "\n",
-            )
+                .chain(manifest.abi.events.iter().map(|event| Row {
+                    kind: "event".to_string(),
+                    name: event.name.clone(),
+                    signature: event.signature.clone(),
+                    value: event.topic0.clone(),
+                }));
+            Ok(Table::new(rows).to_string() + "\n")
         }
         Field::Abi => Ok(serde_json::to_string_pretty(&manifest.abi)? + "\n"),
         Field::StorageLayout => Ok(serde_json::to_string_pretty(&manifest.storage)? + "\n"),
@@ -148,6 +154,41 @@ fn inspect_human(
             .unwrap_or_default()
             + "\n"),
     }
+}
+
+fn selectors_json(manifest: &ContractManifest) -> Value {
+    json!({
+        "functions": manifest
+            .abi
+            .functions
+            .iter()
+            .map(|function| json!({
+                "name": function.name,
+                "signature": function.signature,
+                "selector": function.selector
+            }))
+            .collect::<Vec<_>>(),
+        "errors": manifest
+            .abi
+            .errors
+            .iter()
+            .map(|error| json!({
+                "name": error.name,
+                "signature": error.signature,
+                "selector": error.selector
+            }))
+            .collect::<Vec<_>>(),
+        "events": manifest
+            .abi
+            .events
+            .iter()
+            .map(|event| json!({
+                "name": event.name,
+                "signature": event.signature,
+                "topic0": event.topic0
+            }))
+            .collect::<Vec<_>>()
+    })
 }
 
 fn trust_artifacts(root: &Utf8Path, paths: &PathsConfig) -> Value {
@@ -233,6 +274,44 @@ solc = "0.8.33"
 
         assert!(manifest_out.contains(r#""contract": "Counter""#));
         assert!(trust_out.contains("axiom_probe"));
+    }
+
+    #[test]
+    fn selectors_include_functions_errors_and_events() {
+        let mut manifest = counter_manifest("artifacts");
+        manifest.abi.functions.push(tama_manifest::Function {
+            name: "increment".to_string(),
+            signature: "increment()".to_string(),
+            selector: "0xd09de08a".to_string(),
+            visibility: "external".to_string(),
+            mutability: "nonpayable".to_string(),
+            inputs: vec![],
+            outputs: vec![],
+        });
+        manifest.abi.errors.push(tama_manifest::ErrorEntry {
+            name: "Bad".to_string(),
+            signature: "Bad(address)".to_string(),
+            selector: tama_common::error_selector("Bad(address)"),
+            inputs: vec![tama_manifest::Param {
+                name: "account".to_string(),
+                ty: "address".to_string(),
+            }],
+        });
+        manifest.abi.events.push(tama_manifest::Event {
+            name: "Transfer".to_string(),
+            signature: "Transfer(address,address,uint256)".to_string(),
+            topic0: tama_common::event_topic("Transfer(address,address,uint256)"),
+            fields: vec![],
+        });
+
+        let value = selectors_json(&manifest);
+
+        assert_eq!(value["functions"][0]["selector"], "0xd09de08a");
+        assert_eq!(value["errors"][0]["signature"], "Bad(address)");
+        assert_eq!(
+            value["events"][0]["topic0"],
+            "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        );
     }
 
     fn counter_manifest(out: &str) -> ContractManifest {
