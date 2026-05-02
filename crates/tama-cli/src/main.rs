@@ -223,7 +223,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Clean { deep } => {
             let root = project_root(cli.root)?;
-            clean(&root, deep).map_err(|err| err.to_string())?;
+            clean(&root, deep)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Doctor { fix } => {
@@ -807,30 +807,64 @@ fn prefixed_test_args(args: Vec<String>) -> Vec<String> {
     out
 }
 
-fn clean(root: &Utf8PathBuf, deep: bool) -> std::io::Result<()> {
+fn clean(root: &Utf8PathBuf, deep: bool) -> Result<(), String> {
+    let paths = tama_config::load_config(root)
+        .map(|config| config.paths)
+        .unwrap_or_default();
+    let foundry = tama_config::parse_foundry_config(root).unwrap_or_default();
     for rel in [
-        "artifacts/yul",
-        "artifacts/bytecode",
-        "artifacts/solc-json",
-        "artifacts/manifest",
-        "artifacts/lean",
-        "artifacts/trust-probe",
-        "out",
-        "cache",
-        "src/generated/verity",
+        paths.out.join("yul"),
+        paths.out.join("abi"),
+        paths.out.join("bytecode"),
+        paths.out.join("solc-json"),
+        paths.out.join("manifest"),
+        paths.out.join("lean"),
+        paths.out.join("trust-probe"),
+        foundry.out,
+        Utf8PathBuf::from("cache"),
+        paths.generated,
     ] {
-        let path = root.join(rel);
-        if path.exists() {
-            std::fs::remove_dir_all(path)?;
-        }
+        remove_project_dir(root, &rel)?;
+    }
+    for rel in [
+        paths.out.join("verity-modules.txt"),
+        paths.out.join("trust-report.json"),
+        paths.out.join("layout-report.json"),
+        paths.out.join("assumption-report.json"),
+    ] {
+        remove_project_file(root, &rel)?;
     }
     if deep {
-        let path = root.join(".lake");
-        if path.exists() {
-            std::fs::remove_dir_all(path)?;
-        }
+        remove_project_dir(root, Utf8Path::new(".lake"))?;
     }
     Ok(())
+}
+
+fn remove_project_dir(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
+    ensure_project_relative(rel)?;
+    let path = root.join(rel);
+    if !path.exists() {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(&path).map_err(|err| format!("failed to remove `{path}`: {err}"))
+}
+
+fn remove_project_file(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
+    ensure_project_relative(rel)?;
+    let path = root.join(rel);
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!("failed to remove `{path}`: {err}")),
+    }
+}
+
+fn ensure_project_relative(path: &Utf8Path) -> Result<(), String> {
+    if path.is_absolute() || path.components().any(|part| part.as_str() == "..") {
+        Err(format!("refusing to clean path outside project: `{path}`"))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -968,6 +1002,40 @@ mod tests {
         std::fs::create_dir_all(root.join("artifacts/lean")).unwrap();
         clean(&root, true).unwrap();
         assert!(!root.join(".lake").exists());
+    }
+
+    #[test]
+    fn clean_uses_configured_artifact_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            r#"[project]
+name = "x"
+verity = "v"
+
+[paths]
+out = "build/tama"
+generated = "gen/verity"
+
+[yul]
+solc = "0.8.33"
+"#,
+        )
+        .unwrap();
+        tama_common::write_string(&root.join("build/tama/yul/Token.yul"), "").unwrap();
+        tama_common::write_string(&root.join("build/tama/abi/Token.abi.json"), "").unwrap();
+        tama_common::write_string(&root.join("build/tama/trust-report.json"), "{}").unwrap();
+        tama_common::write_string(&root.join("gen/verity/TokenIface.sol"), "").unwrap();
+        tama_common::write_string(&root.join("artifacts/yul/Token.yul"), "").unwrap();
+
+        clean(&root, false).unwrap();
+
+        assert!(!root.join("build/tama/yul").exists());
+        assert!(!root.join("build/tama/abi").exists());
+        assert!(!root.join("build/tama/trust-report.json").exists());
+        assert!(!root.join("gen/verity").exists());
+        assert!(root.join("artifacts/yul/Token.yul").exists());
     }
 
     #[test]
