@@ -11,6 +11,10 @@ Global flags:
 --no-color          Disable colored output
 ```
 
+Without `RUST_LOG`, Tama defaults to info-level diagnostics. `-v` raises
+Tama-owned diagnostics to debug, and `-vv` raises them to trace. External tool
+output still follows the invoked tool's own behavior.
+
 `tama.toml` is strict: unknown Tama-owned table names or keys are rejected
 instead of ignored. This keeps misspelled compiler or path settings from
 silently changing build behavior. Foundry-specific settings remain in

@@ -105,7 +105,11 @@ fn main() -> ExitCode {
     if cli.no_color {
         std::env::set_var("NO_COLOR", "1");
     }
-    tama_common::init_logging(cli.json, matches!(cli.command, Command::Test(_)));
+    tama_common::init_logging(
+        cli.json,
+        matches!(cli.command, Command::Test(_)),
+        cli.verbose,
+    );
     match run(cli) {
         Ok(code) => code,
         Err(err) => {
@@ -1403,18 +1407,18 @@ fn run_process(program: &str, args: &[&str], cwd: Option<&Utf8PathBuf>) -> Resul
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    let display = command_display(program, args);
-    eprintln!("running `{display}`");
+    let rendered = command_display(program, args);
+    tracing::debug!(command = %rendered, "running external command");
     let status = command
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
-        .map_err(|err| format!("failed to run `{display}`: {err}"))?;
+        .map_err(|err| format!("failed to run `{rendered}`: {err}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("`{display}` failed with status {status}"))
+        Err(format!("`{rendered}` failed with status {status}"))
     }
 }
 

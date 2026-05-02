@@ -1025,6 +1025,7 @@ dependencies = [
  "tama-toolchain",
  "tempfile",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -1044,6 +1045,7 @@ dependencies = [
  "tama-toolchain",
  "tempfile",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

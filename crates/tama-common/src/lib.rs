@@ -163,13 +163,13 @@ pub fn write_generated(path: &Utf8Path, body: &str) -> Result<()> {
     write_string(path, &contents)
 }
 
-pub fn init_logging(json: bool, passthrough: bool) {
+pub fn init_logging(json: bool, passthrough: bool, verbose: u8) {
     if passthrough {
         return;
     }
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_log_filter(verbose)));
     let builder = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .with_writer(io::stderr);
@@ -180,6 +180,14 @@ pub fn init_logging(json: bool, passthrough: bool) {
         builder.try_init()
     };
     let _ = result;
+}
+
+fn default_log_filter(verbose: u8) -> &'static str {
+    match verbose {
+        0 => "info",
+        1 => "debug",
+        _ => "trace",
+    }
 }
 
 #[cfg(test)]
@@ -222,5 +230,13 @@ mod tests {
         let path = Utf8PathBuf::from_path_buf(dir.path().join("Bridge.sol")).unwrap();
         write_generated(&path, "pragma solidity ^0.8.20;\n").unwrap();
         write_generated(&path, "pragma solidity ^0.8.20;\n").unwrap();
+    }
+
+    #[test]
+    fn verbose_count_selects_default_log_filter() {
+        assert_eq!(default_log_filter(0), "info");
+        assert_eq!(default_log_filter(1), "debug");
+        assert_eq!(default_log_filter(2), "trace");
+        assert_eq!(default_log_filter(u8::MAX), "trace");
     }
 }

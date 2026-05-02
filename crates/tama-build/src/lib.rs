@@ -776,6 +776,11 @@ fn solidity_params(params: &[Param]) -> String {
 }
 
 fn run_owned(program: &str, args: &[String], cwd: &Utf8Path, json_output: bool) -> Result<()> {
+    tracing::debug!(
+        command = %owned_command_display(program, args),
+        cwd = %cwd,
+        "running external command"
+    );
     if json_output {
         return run_owned_json_safe(program, args, cwd);
     }
@@ -825,6 +830,11 @@ fn run_owned_json_safe(program: &str, args: &[String], cwd: &Utf8Path) -> Result
 }
 
 fn run_capture(program: &str, args: &[&str], cwd: &Utf8Path) -> Result<CommandOutput> {
+    tracing::debug!(
+        command = %borrowed_command_display(program, args),
+        cwd = %cwd,
+        "capturing external command output"
+    );
     let output = Command::new(program)
         .args(args)
         .current_dir(cwd)
@@ -851,6 +861,20 @@ fn run_capture(program: &str, args: &[&str], cwd: &Utf8Path) -> Result<CommandOu
             ),
         })
     }
+}
+
+fn owned_command_display(program: &str, args: &[String]) -> String {
+    std::iter::once(program)
+        .chain(args.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn borrowed_command_display(program: &str, args: &[&str]) -> String {
+    std::iter::once(program)
+        .chain(args.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 struct EvmyulConformanceGuard {

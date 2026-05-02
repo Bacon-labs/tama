@@ -24,3 +24,4 @@ tama-project = { path = "../tama-project" }
 tama-toolchain = { path = "../tama-toolchain" }
 tempfile.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
