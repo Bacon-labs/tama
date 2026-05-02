@@ -1261,6 +1261,7 @@ dependencies = [
  "sha2",
  "tama-common",
  "tar",
+ "tempfile",
  "thiserror",
  "ureq",
 ]

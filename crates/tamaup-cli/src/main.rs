@@ -1,5 +1,7 @@
 use std::fs;
 use std::io::{Cursor, Read};
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 use std::process::ExitCode;
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -144,13 +146,54 @@ fn install(version: &str, manifest_file: Option<Utf8PathBuf>, offline: bool) -> 
 }
 
 fn use_version(version: &str) -> Result<(), String> {
-    let home = tama_home();
+    use_version_at(&tama_home(), version)
+}
+
+fn use_version_at(home: &Utf8Path, version: &str) -> Result<(), String> {
     let active = home.join("active");
     let bin = home.join("bin");
+    let version_dir = home.join("versions").join(version);
+    if !version_dir.is_dir() {
+        return Err(format!("Tama version `{version}` is not installed"));
+    }
     fs::create_dir_all(&bin).map_err(|err| err.to_string())?;
-    fs::write(&active, version).map_err(|err| err.to_string())?;
+    for binary in ["tama", "tamaup"] {
+        let target = binary_path(&version_dir, binary)?;
+        atomic_symlink(&target, &bin.join(binary))?;
+    }
+    atomic_write(&active, version.as_bytes())?;
     println!("Active Tama version: {version}");
     Ok(())
+}
+
+fn binary_path(version_dir: &Utf8Path, binary: &str) -> Result<Utf8PathBuf, String> {
+    for candidate in [
+        version_dir.join("bin").join(binary),
+        version_dir.join(binary),
+    ] {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    Err(format!(
+        "installed version is missing expected binary `{binary}`"
+    ))
+}
+
+fn atomic_write(path: &Utf8Path, bytes: &[u8]) -> Result<(), String> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, bytes).map_err(|err| err.to_string())?;
+    fs::rename(&tmp, path).map_err(|err| err.to_string())
+}
+
+#[cfg(unix)]
+fn atomic_symlink(target: &Utf8Path, link: &Utf8Path) -> Result<(), String> {
+    let tmp = link.with_extension("tmp");
+    if tmp.exists() {
+        fs::remove_file(&tmp).map_err(|err| err.to_string())?;
+    }
+    symlink(target, &tmp).map_err(|err| err.to_string())?;
+    fs::rename(&tmp, link).map_err(|err| err.to_string())
 }
 
 fn list_versions() -> Result<(), String> {
@@ -284,5 +327,19 @@ mod tests {
     fn platform_is_not_windows() {
         let platform = platform().unwrap();
         assert!(!platform.contains("windows"));
+    }
+
+    #[test]
+    fn use_version_updates_active_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let version_bin = home.join("versions/0.1.0/bin");
+        fs::create_dir_all(&version_bin).unwrap();
+        fs::write(version_bin.join("tama"), b"tama").unwrap();
+        fs::write(version_bin.join("tamaup"), b"tamaup").unwrap();
+        use_version_at(&home, "0.1.0").unwrap();
+        assert_eq!(fs::read_to_string(home.join("active")).unwrap(), "0.1.0");
+        assert!(home.join("bin/tama").exists());
+        assert!(home.join("bin/tamaup").exists());
     }
 }
