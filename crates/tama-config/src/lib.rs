@@ -212,9 +212,14 @@ pub fn tracked_input_hashes(root: &Utf8Path) -> Result<BTreeMap<String, String>>
 pub fn lock_drift(root: &Utf8Path, lock: &TamaLock) -> Result<Vec<String>> {
     let actual = tracked_input_hashes(root)?;
     let mut drift = Vec::new();
-    for (path, hash) in actual {
-        if lock.inputs.get(&path) != Some(&hash) {
-            drift.push(path);
+    for (path, hash) in &actual {
+        if lock.inputs.get(path) != Some(hash) {
+            drift.push(path.clone());
+        }
+    }
+    for path in lock.inputs.keys() {
+        if !actual.contains_key(path) {
+            drift.push(path.clone());
         }
     }
     Ok(drift)
@@ -556,6 +561,59 @@ solc = "0.8.33"
             enforce_locked(&root, &lock),
             Err(Error::StaleLock(_))
         ));
+    }
+
+    #[test]
+    fn locked_detects_every_tracked_input_change_and_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let tracked = [
+            "tama.toml",
+            "lakefile.toml",
+            "lake-manifest.json",
+            "foundry.toml",
+            "lean-toolchain",
+            "TamaSrc.lean",
+            "TamaSpec.lean",
+            "TamaProof.lean",
+        ];
+        for path in tracked {
+            tama_common::write_string(&root.join(path), tracked_input_fixture(path)).unwrap();
+        }
+        let mut lock = TamaLock {
+            version: 1,
+            resolved: BTreeMap::new(),
+            inputs: BTreeMap::new(),
+            yul: BTreeMap::new(),
+        };
+        update_lock_inputs(&root, &mut lock).unwrap();
+        assert!(enforce_locked(&root, &lock).is_ok());
+
+        for path in tracked {
+            tama_common::write_string(&root.join(path), &format!("{path}\nchanged\n")).unwrap();
+            let drift = lock_drift(&root, &lock).unwrap();
+            assert!(
+                drift.contains(&path.to_string()),
+                "expected drift for {path}"
+            );
+            tama_common::write_string(&root.join(path), tracked_input_fixture(path)).unwrap();
+        }
+
+        std::fs::remove_file(root.join("TamaProof.lean")).unwrap();
+        let drift = lock_drift(&root, &lock).unwrap();
+        assert!(drift.contains(&"TamaProof.lean".to_string()));
+        assert!(matches!(
+            enforce_locked(&root, &lock),
+            Err(Error::StaleLock(_))
+        ));
+    }
+
+    fn tracked_input_fixture(path: &str) -> &'static str {
+        if path == "lake-manifest.json" {
+            r#"{"version":"1.1.0","packages":[]}"#
+        } else {
+            "tracked input\n"
+        }
     }
 
     #[test]
