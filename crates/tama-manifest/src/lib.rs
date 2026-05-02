@@ -410,9 +410,7 @@ mod tests {
                 function: Some("transfer".to_string()),
                 coverage: Coverage {
                     disposition: CoverageDisposition::Mirror,
-                    path: Some(
-                        "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransferPost".to_string(),
-                    ),
+                    path: Some("test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply".to_string()),
                     reason: None,
                 },
             }],
@@ -458,8 +456,9 @@ mod tests {
     #[test]
     fn coverage_path_traversal_fails() {
         let mut manifest = manifest();
-        manifest.obligations[0].coverage.path =
-            Some("../ERC20Lite.t.sol:ERC20LiteTest.testTransferPost".to_string());
+        manifest.obligations[0].coverage.path = Some(
+            "../ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply".to_string(),
+        );
         assert!(manifest.validate().is_err());
     }
 

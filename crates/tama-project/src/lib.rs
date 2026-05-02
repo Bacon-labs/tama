@@ -493,7 +493,7 @@ theorem totalSupply_returns_storage_supply (s : ContractState) :
   simp [totalSupply_spec, totalSupply, totalSupplySlot, getStorage, Contract.run,
     ContractResult.fst, Verity.bind, Bind.bind, Verity.pure, Pure.pure]
 
--- tama: obligation kind=postcondition function=owner coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testDeploymentSetsOwner
+-- tama: obligation kind=postcondition function=owner coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzDeploymentSetsOwner
 theorem owner_returns_storage_owner (s : ContractState) :
   let result := ((owner).run s).fst
   owner_spec result s := by
@@ -523,12 +523,16 @@ contract ERC20LiteTest is StdInvariant {
     }
 
     function deployToken() internal returns (ERC20LiteIface token) {
-        token = ERC20LiteDeployer.deploy(address(this));
+        token = deployToken(address(this));
     }
 
-    function testDeploymentSetsOwner() public {
-        ERC20LiteIface token = deployToken();
-        require(token.owner() == address(this), "owner");
+    function deployToken(address initialOwner) internal returns (ERC20LiteIface token) {
+        token = ERC20LiteDeployer.deploy(initialOwner);
+    }
+
+    function testFuzzDeploymentSetsOwner(address initialOwner) public {
+        ERC20LiteIface token = deployToken(initialOwner);
+        require(token.owner() == initialOwner, "owner");
         require(token.totalSupply() == 0, "initial supply");
     }
 
@@ -654,9 +658,13 @@ mod tests {
         assert!(proof.contains("((transfer toAddr amount).run s).snd"));
         assert!(proof.contains("((mint toAddr amount).run s).snd"));
         assert!(proof.contains("((balanceOf account).run s).fst"));
+        assert!(proof.contains("testFuzzDeploymentSetsOwner"));
         let test = read_to_string(&root.join("test/verity/ERC20Lite.t.sol")).unwrap();
         assert!(!test.contains("testTransferPostPlaceholder"));
-        assert!(test.contains("ERC20LiteDeployer.deploy(address(this))"));
+        assert!(!test.contains("function testDeploymentSetsOwner"));
+        assert!(test.contains("token = deployToken(address(this));"));
+        assert!(test.contains("ERC20LiteDeployer.deploy(initialOwner)"));
+        assert!(test.contains("function testFuzzDeploymentSetsOwner(address initialOwner)"));
         assert!(test.contains("testFuzzTransferPreservesTotalSupply"));
         assert!(test.contains("StdInvariant"));
         assert!(test.contains("invariant_totalSupplyTracksMinted"));

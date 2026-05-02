@@ -299,7 +299,7 @@ Example:
     {
       "name": "ERC20LiteProof.transfer_preserves_total_supply",
       "kind": "invariant",
-      "mirror": "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransferPreservesTotalSupply"
+      "mirror": "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply"
     }
   ]
 }
@@ -543,11 +543,15 @@ Coverage is not over every theorem in `verity/proof/`. Helper lemmas are not obl
 - linked to a Foundry mirror test; or
 - marked proof-only with a reason.
 
+Mirror links for executable public obligations must point to property-shaped Foundry
+symbols: fuzz tests named `testFuzz*` or invariants named `invariant_*`. Plain
+example tests may exist as smoke tests, but they do not satisfy mirror coverage.
+
 Example Lean shape:
 
 ```lean
 @[tama.obligation]
-@[tama.mirror "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransferPreservesTotalSupply"]
+@[tama.mirror "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply"]
 theorem transfer_preserves_total_supply : ... := by
   ...
 
@@ -563,7 +567,7 @@ theorem symbolic_refinement : ... := by
 The comment form exists for projects that have not loaded no-op Tama Lean attributes yet:
 
 ```lean
--- tama: obligation kind=postcondition function=transfer coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransferPost
+-- tama: obligation kind=postcondition function=transfer coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply
 theorem transfer_post : ... := by
   ...
 ```

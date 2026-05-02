@@ -17,7 +17,11 @@ contract CounterTest is StdInvariant {
         targetSelector(FuzzSelector({addr: address(this), selectors: selectors}));
     }
 
-    function testDeploymentStartsAtZero() public {
+    function testFuzzDeploymentStartsAtZero(uint8 preexistingSteps) public {
+        CounterIface existing = CounterDeployer.deploy();
+        for (uint256 i = 0; i < preexistingSteps; i++) {
+            existing.increment();
+        }
         CounterIface counter = CounterDeployer.deploy();
         require(counter.getCount() == 0, "initial count");
     }

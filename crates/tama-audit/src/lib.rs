@@ -444,6 +444,10 @@ fn solidity_function_declared(text: &str, name: &str) -> bool {
     re.is_match(&text)
 }
 
+fn mirror_symbol_is_property(name: &str) -> bool {
+    name.starts_with("testFuzz") || name.starts_with("invariant_")
+}
+
 fn strip_solidity_non_code(text: &str) -> String {
     #[derive(Clone, Copy)]
     enum State {
@@ -669,6 +673,17 @@ fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Is
                     if let Some((_, symbol)) = path_ref.split_once(':') {
                         let text = tama_common::read_to_string(&abs).unwrap_or_default();
                         let name = symbol.rsplit('.').next().unwrap_or(symbol);
+                        if !mirror_symbol_is_property(name) {
+                            issues.push(issue(
+                                "coverage",
+                                Some(&manifest.contract),
+                                "TAMA_COVERAGE_SHAPE",
+                                format!(
+                                    "mirror symbol `{symbol}` must be a fuzz test or invariant"
+                                ),
+                                Some(file.into()),
+                            ));
+                        }
                         if !solidity_function_declared(&text, name) {
                             issues.push(issue(
                                 "coverage",
@@ -1852,15 +1867,17 @@ interface Example {
         let mut obligation = public_obligation();
         obligation.coverage = tama_manifest::Coverage {
             disposition: CoverageDisposition::Mirror,
-            path: Some("test/verity/Counter.t.sol:CounterTest.testIncrementPost".to_string()),
+            path: Some(
+                "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string(),
+            ),
             reason: None,
         };
         manifest.obligations.push(obligation);
         tama_common::write_string(
             &root.join("test/verity/Counter.t.sol"),
-            r#"// function testIncrementPost() public {}
+            r#"// function testFuzzIncrementUpdatesCount(uint8 initialSteps, uint8 extraSteps) public {}
 contract CounterTest {
-    string constant S = "function testIncrementPost() public";
+    string constant S = "function testFuzzIncrementUpdatesCount(uint8,uint8) public";
 }
 "#,
         )
@@ -1875,7 +1892,7 @@ contract CounterTest {
         tama_common::write_string(
             &root.join("test/verity/Counter.t.sol"),
             r#"contract CounterTest {
-    function testIncrementPost() public {}
+    function testFuzzIncrementUpdatesCount(uint8 initialSteps, uint8 extraSteps) public {}
 }
 "#,
         )
@@ -1889,6 +1906,34 @@ contract CounterTest {
     }
 
     #[test]
+    fn coverage_requires_property_shaped_mirror_tests() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut manifest = counter_manifest();
+        let mut obligation = public_obligation();
+        obligation.coverage = tama_manifest::Coverage {
+            disposition: CoverageDisposition::Mirror,
+            path: Some("test/verity/Counter.t.sol:CounterTest.testIncrementPost".to_string()),
+            reason: None,
+        };
+        manifest.obligations.push(obligation);
+        tama_common::write_string(
+            &root.join("test/verity/Counter.t.sol"),
+            r#"contract CounterTest {
+    function testIncrementPost() public {}
+}
+"#,
+        )
+        .unwrap();
+
+        let mut issues = Vec::new();
+        coverage(&root, &[manifest], &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_COVERAGE_SHAPE"));
+    }
+
+    #[test]
     fn coverage_rejects_escaping_mirror_paths() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -1896,7 +1941,7 @@ contract CounterTest {
         let mut obligation = public_obligation();
         obligation.coverage = tama_manifest::Coverage {
             disposition: CoverageDisposition::Mirror,
-            path: Some("../Counter.t.sol:CounterTest.testIncrementPost".to_string()),
+            path: Some("../Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string()),
             reason: None,
         };
         manifest.obligations.push(obligation);

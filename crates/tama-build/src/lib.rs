@@ -1408,7 +1408,7 @@ mod tests {
 
 namespace proof.CounterProof
 
--- tama: obligation kind=postcondition function=increment coverage=mirror path=test/verity/Counter.t.sol:CounterTest.testIncrementPost
+-- tama: obligation kind=postcondition function=increment coverage=mirror path=test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount
 theorem increment_post : True := by
   trivial
 
@@ -1436,7 +1436,7 @@ end proof.CounterProof
         );
         assert_eq!(
             obligations[0].coverage.path.as_deref(),
-            Some("test/verity/Counter.t.sol:CounterTest.testIncrementPost")
+            Some("test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount")
         );
         assert_eq!(obligations[1].kind, ObligationKind::Helper);
         assert_eq!(
@@ -1514,7 +1514,10 @@ end proof.CounterProof
             function: Some("increment".to_string()),
             coverage: Coverage {
                 disposition: CoverageDisposition::Mirror,
-                path: Some("test/verity/Counter.t.sol:CounterTest.testIncrementPost".to_string()),
+                path: Some(
+                    "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount"
+                        .to_string(),
+                ),
                 reason: None,
             },
         };
@@ -1546,7 +1549,10 @@ TAMA_AXIOMS_END proof.CounterProof.increment_post
             function: Some("increment".to_string()),
             coverage: Coverage {
                 disposition: CoverageDisposition::Mirror,
-                path: Some("test/verity/Counter.t.sol:CounterTest.testIncrementPost".to_string()),
+                path: Some(
+                    "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount"
+                        .to_string(),
+                ),
                 reason: None,
             },
         };
