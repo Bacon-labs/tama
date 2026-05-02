@@ -393,7 +393,7 @@ fn verify_manifest_signature(manifest: &[u8], signature: &[u8]) -> Result<(), St
 fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), String> {
     validate_sha256(expected)?;
     let actual = hex::encode(Sha256::digest(bytes));
-    if actual.eq_ignore_ascii_case(expected) {
+    if actual == expected {
         Ok(())
     } else {
         Err(format!(
@@ -457,6 +457,15 @@ fn validate_release_version(version: &str) -> Result<(), String> {
     if version.is_empty()
         || !version
             .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric())
+        || !version
+            .chars()
+            .last()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric())
+        || version.contains("..")
+        || !version
+            .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '+' | '-'))
     {
         return Err(format!("unsafe release version `{version}`"));
@@ -465,7 +474,11 @@ fn validate_release_version(version: &str) -> Result<(), String> {
 }
 
 fn validate_sha256(value: &str) -> Result<(), String> {
-    if value.len() != 64 || !value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+    if value.len() != 64
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch))
+    {
         return Err(format!("invalid artifact SHA-256 `{value}`"));
     }
     Ok(())
@@ -769,6 +782,10 @@ mod tests {
     #[test]
     fn bad_sha_fails() {
         assert!(verify_sha256(b"abc", "deadbeef").is_err());
+        assert!(validate_sha256(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        )
+        .is_err());
     }
 
     #[test]
@@ -1054,6 +1071,15 @@ mod tests {
         let err = use_version_at(&home, "../evil").unwrap_err();
 
         assert!(err.contains("unsafe release version"));
+        assert!(use_version_at(&home, "..")
+            .unwrap_err()
+            .contains("unsafe release version"));
+        assert!(use_version_at(&home, ".")
+            .unwrap_err()
+            .contains("unsafe release version"));
+        assert!(use_version_at(&home, ".hidden")
+            .unwrap_err()
+            .contains("unsafe release version"));
     }
 
     #[test]
