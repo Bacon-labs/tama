@@ -28,6 +28,8 @@ pub enum Error {
     AlreadyExists(Utf8PathBuf),
     #[error("unsupported lakefile: {0}")]
     UnsupportedLakefile(String),
+    #[error("failed to serialize starter lake manifest: {0}")]
+    StarterManifest(#[source] serde_json::Error),
     #[error(
         "configured path `{path}` is not covered by Lake library `{library}` in lakefile.toml; expected `{expected}`"
     )]
@@ -96,7 +98,10 @@ pub fn init(path: &Utf8Path, opts: InitOptions) -> Result<()> {
     write_string(&path.join("tama.toml"), &tama_toml(&opts))?;
     write_string(&path.join("foundry.toml"), FOUNDRY_TOML)?;
     write_string(&path.join("lakefile.toml"), &lakefile_toml(&opts))?;
-    write_string(&path.join("lake-manifest.json"), &lake_manifest_json(&opts))?;
+    write_string(
+        &path.join("lake-manifest.json"),
+        &lake_manifest_json(&opts)?,
+    )?;
     write_string(
         &path.join("lean-toolchain"),
         &(opts.lean_toolchain.clone() + "\n"),
@@ -381,12 +386,12 @@ srcDir = "verity"
     )
 }
 
-fn lake_manifest_json(opts: &InitOptions) -> String {
+fn lake_manifest_json(opts: &InitOptions) -> Result<String> {
     let name = opts.name.replace('-', "_");
     if opts.verity_git == DEFAULT_VERITY_GIT && opts.verity_rev == DEFAULT_VERITY_REV {
-        return STARTER_LAKE_MANIFEST.replace("__TAMA_PROJECT_NAME__", &name);
+        return Ok(STARTER_LAKE_MANIFEST.replace("__TAMA_PROJECT_NAME__", &name));
     }
-    serde_json::to_string_pretty(&serde_json::json!({
+    let manifest = serde_json::to_string_pretty(&serde_json::json!({
         "version": "1.1.0",
         "packagesDir": ".lake/packages",
         "packages": [{
@@ -404,8 +409,8 @@ fn lake_manifest_json(opts: &InitOptions) -> String {
         "name": name,
         "lakeDir": ".lake"
     }))
-    .expect("starter lake manifest is serializable")
-        + "\n"
+    .map_err(Error::StarterManifest)?;
+    Ok(manifest + "\n")
 }
 
 fn contract_template(name: &str) -> String {
