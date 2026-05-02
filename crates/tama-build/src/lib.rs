@@ -1235,6 +1235,13 @@ fn parse_obligation_metadata(
 
 fn apply_tama_metadata(raw: &str, proof_path: &Utf8Path, meta: &mut ObligationMeta) -> Result<()> {
     let values = parse_key_values(raw);
+    for key in values.keys() {
+        if !tama_metadata_key_supported(key) {
+            return Err(Error::Adapter(format!(
+                "unsupported Tama metadata key `{key}` in {proof_path}"
+            )));
+        }
+    }
     if values.contains_key("obligation") {
         meta.tagged = true;
     }
@@ -1297,6 +1304,21 @@ fn apply_tama_metadata(raw: &str, proof_path: &Utf8Path, meta: &mut ObligationMe
         _ => {}
     }
     Ok(())
+}
+
+fn tama_metadata_key_supported(key: &str) -> bool {
+    matches!(
+        key,
+        "obligation"
+            | "kind"
+            | "function"
+            | "coverage"
+            | "path"
+            | "reason"
+            | "helper"
+            | "invariant"
+            | "postcondition"
+    )
 }
 
 fn apply_tama_attribute_metadata(line: &str, meta: &mut ObligationMeta) {
@@ -2177,6 +2199,27 @@ end proof.CounterProof
         assert!(matches!(
             err,
             Error::Adapter(message) if message.contains("unsupported Tama coverage disposition `example`")
+        ));
+
+        tama_common::write_string(
+            &proof,
+            r#"
+namespace proof.CounterProof
+
+-- tama: obligation kind=postcondition functon=increment coverage=mirror path=test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount
+theorem typoed_key : True := by
+  trivial
+
+end proof.CounterProof
+"#,
+        )
+        .unwrap();
+
+        let err = extract_obligations(&root, &config, "Counter", "proof.CounterProof").unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::Adapter(message) if message.contains("unsupported Tama metadata key `functon`")
         ));
     }
 
