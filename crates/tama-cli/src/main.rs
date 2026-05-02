@@ -628,9 +628,16 @@ fn apply_doctor_fix(
     if needs_lake_update && offline {
         return Err("`tama doctor --fix --offline` cannot repair Verity dependency drift because it must run `lake update`".to_string());
     }
+    let snapshot = snapshot_dependency_files(project_root);
     let changed = sync_verity_lake_dependency(project_root, &config, &mut lock)?;
     if changed {
-        run_lake_update(project_root, None)?;
+        if let Err(err) = run_lake_update(project_root, None) {
+            return Err(restore_dependency_files_after_failure(
+                project_root,
+                snapshot,
+                err,
+            ));
+        }
     }
     tama_config::update_lock_inputs(project_root, &mut lock).map_err(|err| err.to_string())?;
     tama_config::write_lock(project_root, &lock).map_err(|err| err.to_string())?;
@@ -2454,6 +2461,60 @@ mod tests {
         assert_eq!(
             tama_common::read_to_string(&root.join("lakefile.toml")).unwrap(),
             lakefile_before
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn doctor_fix_restores_dependency_files_when_lake_update_fails() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let old_rev = tama_config::load_lock(&root)
+            .unwrap()
+            .resolved
+            .get("verity_rev")
+            .cloned()
+            .unwrap();
+        let config = tama_common::read_to_string(&root.join("tama.toml"))
+            .unwrap()
+            .replace(&format!("verity = \"{old_rev}\""), "verity = \"0.2.0\"");
+        tama_common::write_string(&root.join("tama.toml"), &config).unwrap();
+        let lakefile_before = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+        let manifest_before =
+            tama_common::read_to_string(&root.join("lake-manifest.json")).unwrap();
+
+        let bin = Utf8PathBuf::from_path_buf(dir.path().join("bin")).unwrap();
+        let lake = bin.join("lake");
+        tama_common::write_string(
+            &lake,
+            "#!/bin/sh\nprintf '%s\\n' '{\"partial\":true}' > lake-manifest.json\nexit 42\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&lake).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&lake, permissions).unwrap();
+        }
+        let mut path_entries = vec![bin.as_std_path().to_path_buf()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        let _path_guard = EnvVarGuard::set("PATH", std::env::join_paths(path_entries).unwrap());
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, "off");
+
+        let err = apply_doctor_fix(&root, Some(&root), false).unwrap_err();
+
+        assert!(err.contains("lake update"));
+        assert_eq!(
+            tama_common::read_to_string(&root.join("lakefile.toml")).unwrap(),
+            lakefile_before
+        );
+        assert_eq!(
+            tama_common::read_to_string(&root.join("lake-manifest.json")).unwrap(),
+            manifest_before
         );
     }
 
