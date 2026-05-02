@@ -69,6 +69,12 @@ struct Artifact {
     sha256: String,
 }
 
+struct PendingArchiveEntry {
+    path: Utf8PathBuf,
+    mode: u32,
+    content: Vec<u8>,
+}
+
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -246,6 +252,9 @@ fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), String> {
 fn extract_archive(bytes: &[u8], dest: &Utf8Path) -> Result<(), String> {
     let decoder = GzDecoder::new(Cursor::new(bytes));
     let mut archive = tar::Archive::new(decoder);
+    let mut entries = Vec::new();
+    let mut has_tama = false;
+    let mut has_tamaup = false;
     for entry in archive.entries().map_err(|err| err.to_string())? {
         let mut entry = entry.map_err(|err| err.to_string())?;
         let path = entry.path().map_err(|err| err.to_string())?;
@@ -261,22 +270,36 @@ fn extract_archive(bytes: &[u8], dest: &Utf8Path) -> Result<(), String> {
         }
         let path = Utf8PathBuf::from_path_buf(path.to_path_buf())
             .map_err(|path| path.display().to_string())?;
-        let allowed = matches!(path.as_str(), "bin/tama" | "bin/tamaup" | "tama" | "tamaup");
-        if !allowed || !entry.header().entry_type().is_file() {
-            return Err(format!("unexpected archive entry: {path}"));
+        match path.as_str() {
+            "bin/tama" | "tama" => has_tama = true,
+            "bin/tamaup" | "tamaup" => has_tamaup = true,
+            _ => return Err(format!("unexpected archive entry: {path}")),
         }
-        let out = dest.join(&path);
-        if let Some(parent) = out.parent() {
-            fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        if !entry.header().entry_type().is_file() {
+            return Err(format!("unexpected archive entry: {path}"));
         }
         let mode = entry.header().mode().unwrap_or(0o755) & 0o777;
         let mut content = Vec::new();
         entry
             .read_to_end(&mut content)
             .map_err(|err| err.to_string())?;
-        fs::write(&out, content).map_err(|err| err.to_string())?;
+        entries.push(PendingArchiveEntry {
+            path,
+            mode,
+            content,
+        });
+    }
+    if !has_tama || !has_tamaup {
+        return Err("archive is missing expected tama or tamaup binary".to_string());
+    }
+    for entry in entries {
+        let out = dest.join(&entry.path);
+        if let Some(parent) = out.parent() {
+            fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+        fs::write(&out, entry.content).map_err(|err| err.to_string())?;
         #[cfg(unix)]
-        fs::set_permissions(&out, fs::Permissions::from_mode(mode))
+        fs::set_permissions(&out, fs::Permissions::from_mode(entry.mode))
             .map_err(|err| err.to_string())?;
     }
     Ok(())
@@ -350,19 +373,10 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn extract_archive_preserves_executable_mode() {
-        let mut tarball = Vec::new();
-        {
-            let encoder =
-                flate2::write::GzEncoder::new(&mut tarball, flate2::Compression::default());
-            let mut archive = tar::Builder::new(encoder);
-            let mut header = tar::Header::new_gnu();
-            header.set_path("bin/tama").unwrap();
-            header.set_size(4);
-            header.set_mode(0o755);
-            header.set_cksum();
-            archive.append(&header, &b"tama"[..]).unwrap();
-            archive.finish().unwrap();
-        }
+        let tarball = test_archive(&[
+            ("bin/tama", b"tama".as_slice(), 0o755),
+            ("bin/tamaup", b"tamaup".as_slice(), 0o755),
+        ]);
         let dir = tempfile::tempdir().unwrap();
         let dest = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         extract_archive(&tarball, &dest).unwrap();
@@ -371,5 +385,82 @@ mod tests {
             .permissions()
             .mode();
         assert_ne!(mode & 0o111, 0);
+    }
+
+    #[test]
+    fn extract_archive_rejects_incomplete_archive_before_writing() {
+        let tarball = test_archive(&[("bin/tama", b"tama".as_slice(), 0o755)]);
+        let dir = tempfile::tempdir().unwrap();
+        let dest = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let err = extract_archive(&tarball, &dest).unwrap_err();
+
+        assert!(err.contains("missing expected"));
+        assert!(!dest.join("bin/tama").exists());
+    }
+
+    #[test]
+    fn extract_archive_rejects_bad_entry_before_writing() {
+        let tarball = test_archive(&[
+            ("bin/tama", b"tama".as_slice(), 0o755),
+            ("bin/extra", b"evil".as_slice(), 0o755),
+            ("bin/tamaup", b"tamaup".as_slice(), 0o755),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let dest = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let err = extract_archive(&tarball, &dest).unwrap_err();
+
+        assert!(err.contains("unexpected archive entry"));
+        assert!(!dest.join("bin/tama").exists());
+        assert!(!dest.join("bin/tamaup").exists());
+    }
+
+    #[test]
+    fn extract_archive_rejects_traversal_before_writing() {
+        let tarball = test_archive_with_raw_name(b"../evil", b"evil");
+        let dir = tempfile::tempdir().unwrap();
+        let dest = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let err = extract_archive(&tarball, &dest).unwrap_err();
+
+        assert!(err.contains("escapes install dir"));
+        assert!(!dest.join("evil").exists());
+    }
+
+    fn test_archive(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
+        let mut tarball = Vec::new();
+        {
+            let encoder =
+                flate2::write::GzEncoder::new(&mut tarball, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            for (path, contents, mode) in entries {
+                let mut header = tar::Header::new_gnu();
+                header.set_path(path).unwrap();
+                header.set_size(contents.len() as u64);
+                header.set_mode(*mode);
+                header.set_cksum();
+                archive.append(&header, *contents).unwrap();
+            }
+            archive.finish().unwrap();
+        }
+        tarball
+    }
+
+    fn test_archive_with_raw_name(raw_name: &[u8], contents: &[u8]) -> Vec<u8> {
+        let mut tarball = Vec::new();
+        {
+            let encoder =
+                flate2::write::GzEncoder::new(&mut tarball, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o755);
+            header.as_gnu_mut().unwrap().name[..raw_name.len()].copy_from_slice(raw_name);
+            header.set_cksum();
+            archive.append(&header, contents).unwrap();
+            archive.finish().unwrap();
+        }
+        tarball
     }
 }
