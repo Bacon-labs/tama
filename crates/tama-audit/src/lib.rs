@@ -447,47 +447,66 @@ fn check_interface_abi(root: &Utf8Path, manifest: &ContractManifest, issues: &mu
     let functions = solidity_declarations(&text, "function");
     let events = solidity_declarations(&text, "event");
     let errors = solidity_declarations(&text, "error");
-    for function in &manifest.abi.functions {
-        if !functions.contains(&function.signature) {
-            issues.push(issue(
-                "selectors",
-                Some(&manifest.contract),
-                "TAMA_SELECTOR_INTERFACE_DRIFT",
-                format!(
-                    "generated interface does not declare function `{}`",
-                    function.signature
-                ),
-                Some(manifest.artifacts.interface.clone()),
-            ));
-        }
+    check_interface_declarations(
+        manifest,
+        "function",
+        &functions,
+        manifest
+            .abi
+            .functions
+            .iter()
+            .map(|function| function.signature.as_str()),
+        issues,
+    );
+    check_interface_declarations(
+        manifest,
+        "event",
+        &events,
+        manifest
+            .abi
+            .events
+            .iter()
+            .map(|event| event.signature.as_str()),
+        issues,
+    );
+    check_interface_declarations(
+        manifest,
+        "error",
+        &errors,
+        manifest
+            .abi
+            .errors
+            .iter()
+            .map(|error| error.signature.as_str()),
+        issues,
+    );
+}
+
+fn check_interface_declarations<'a>(
+    manifest: &ContractManifest,
+    kind: &str,
+    actual: &BTreeSet<String>,
+    expected: impl Iterator<Item = &'a str>,
+    issues: &mut Vec<Issue>,
+) {
+    let expected = expected.map(str::to_string).collect::<BTreeSet<_>>();
+    for signature in expected.difference(actual) {
+        issues.push(issue(
+            "selectors",
+            Some(&manifest.contract),
+            "TAMA_SELECTOR_INTERFACE_DRIFT",
+            format!("generated interface does not declare {kind} `{signature}`"),
+            Some(manifest.artifacts.interface.clone()),
+        ));
     }
-    for event in &manifest.abi.events {
-        if !events.contains(&event.signature) {
-            issues.push(issue(
-                "selectors",
-                Some(&manifest.contract),
-                "TAMA_SELECTOR_INTERFACE_DRIFT",
-                format!(
-                    "generated interface does not declare event `{}`",
-                    event.signature
-                ),
-                Some(manifest.artifacts.interface.clone()),
-            ));
-        }
-    }
-    for error in &manifest.abi.errors {
-        if !errors.contains(&error.signature) {
-            issues.push(issue(
-                "selectors",
-                Some(&manifest.contract),
-                "TAMA_SELECTOR_INTERFACE_DRIFT",
-                format!(
-                    "generated interface does not declare error `{}`",
-                    error.signature
-                ),
-                Some(manifest.artifacts.interface.clone()),
-            ));
-        }
+    for signature in actual.difference(&expected) {
+        issues.push(issue(
+            "selectors",
+            Some(&manifest.contract),
+            "TAMA_SELECTOR_INTERFACE_DRIFT",
+            format!("generated interface declares unexpected {kind} `{signature}`"),
+            Some(manifest.artifacts.interface.clone()),
+        ));
     }
 }
 
@@ -520,6 +539,13 @@ fn check_yul_dispatch(root: &Utf8Path, manifest: &ContractManifest, issues: &mut
         return;
     };
     let code = strip_solidity_non_code(&text).to_ascii_lowercase();
+    let expected_selectors = manifest
+        .abi
+        .functions
+        .iter()
+        .map(|function| function.selector.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    let actual_selectors = yul_dispatch_cases(&code);
     for function in &manifest.abi.functions {
         let selector = function.selector.to_ascii_lowercase();
         let label = Regex::new(&format!(r"\bcase\s+{}\b", regex::escape(&selector)))
@@ -537,6 +563,26 @@ fn check_yul_dispatch(root: &Utf8Path, manifest: &ContractManifest, issues: &mut
             ));
         }
     }
+    for selector in actual_selectors.difference(&expected_selectors) {
+        issues.push(issue(
+            "selectors",
+            Some(&manifest.contract),
+            "TAMA_SELECTOR_YUL_DRIFT",
+            format!("Yul dispatcher contains unexpected selector case `{selector}`"),
+            Some(manifest.artifacts.yul.clone()),
+        ));
+    }
+}
+
+fn yul_dispatch_cases(code: &str) -> BTreeSet<String> {
+    let re = Regex::new(r"\bcase\s+(0x[0-9a-f]{8})\b").expect("valid regex");
+    re.captures_iter(code)
+        .filter_map(|captures| {
+            captures
+                .get(1)
+                .map(|selector| selector.as_str().to_string())
+        })
+        .collect()
 }
 
 fn solidity_declarations(text: &str, kind: &str) -> BTreeSet<String> {
@@ -2426,6 +2472,55 @@ interface CounterIface {
     }
 
     #[test]
+    fn selectors_reject_extra_generated_interface_declarations() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        std::fs::create_dir_all(root.join("src/generated/verity")).unwrap();
+        std::fs::create_dir_all(root.join("artifacts/yul")).unwrap();
+        tama_common::write_generated(
+            &root.join("src/generated/verity/CounterIface.sol"),
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+interface CounterIface {
+    function increment() external;
+    function unexpected() external;
+}
+"#,
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("artifacts/yul/Counter.yul"),
+            r#"object "Counter" {
+    code {
+        switch shr(224, calldataload(0))
+        case 0xd09de08a { stop() }
+    }
+}
+"#,
+        )
+        .unwrap();
+        let mut manifest = counter_manifest();
+        manifest.abi.functions.push(tama_manifest::Function {
+            name: "increment".to_string(),
+            signature: "increment()".to_string(),
+            selector: tama_common::function_selector("increment()"),
+            visibility: "external".to_string(),
+            mutability: "nonpayable".to_string(),
+            inputs: vec![],
+            outputs: vec![],
+        });
+
+        let mut issues = Vec::new();
+        selectors(&root, &[manifest], &mut issues);
+
+        assert!(issues.iter().any(|issue| {
+            issue.code == "TAMA_SELECTOR_INTERFACE_DRIFT"
+                && issue.message.contains("unexpected function `unexpected()`")
+        }));
+    }
+
+    #[test]
     fn selectors_report_generated_yul_dispatch_drift() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -2470,6 +2565,28 @@ interface CounterIface {
         assert!(issues
             .iter()
             .any(|issue| issue.code == "TAMA_SELECTOR_YUL_DRIFT"));
+
+        tama_common::write_string(
+            &root.join("artifacts/yul/Counter.yul"),
+            r#"object "Counter" {
+    code {
+        switch shr(224, calldataload(0))
+        case 0xd09de08a { stop() }
+        case 0x11111111 { stop() }
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let mut extra_issues = Vec::new();
+        selectors(&root, &[manifest.clone()], &mut extra_issues);
+        assert!(extra_issues.iter().any(|issue| {
+            issue.code == "TAMA_SELECTOR_YUL_DRIFT"
+                && issue
+                    .message
+                    .contains("unexpected selector case `0x11111111`")
+        }));
 
         tama_common::write_string(
             &root.join("artifacts/yul/Counter.yul"),
