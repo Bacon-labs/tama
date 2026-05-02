@@ -86,6 +86,7 @@ impl Lake {
             .map_err(|source| tama_common::io_error(self.root.join(&out), source))?;
         fs::create_dir_all(self.root.join(&abi))
             .map_err(|source| tama_common::io_error(self.root.join(&abi), source))?;
+        clear_verity_codegen_outputs(&self.root, config, opts.contract.as_deref())?;
         let module_manifest = self.root.join(config.paths.out.join("verity-modules.txt"));
         let modules = if let Some(contract) = &opts.contract {
             format!("src.{contract}\n")
@@ -223,6 +224,58 @@ fn forge_build_args(offline: bool) -> Vec<String> {
         args.push("--offline".to_string());
     }
     args
+}
+
+fn clear_verity_codegen_outputs(
+    root: &Utf8Path,
+    config: &TamaConfig,
+    contract_filter: Option<&str>,
+) -> Result<()> {
+    let out = &config.paths.out;
+    for path in [
+        out.join("layout-report.json"),
+        out.join("trust-report.json"),
+        out.join("assumption-report.json"),
+    ] {
+        remove_file_if_exists(&root.join(path))?;
+    }
+
+    let abi_dir = root.join(out.join("abi"));
+    let yul_dir = root.join(out.join("yul"));
+    let manifest_dir = root.join(out.join("manifest"));
+    if let Some(contract) = contract_filter {
+        for path in [
+            abi_dir.join(format!("{contract}.json")),
+            abi_dir.join(format!("{contract}.abi.json")),
+            abi_dir.join(format!("{contract}.storage.json")),
+            yul_dir.join(format!("{contract}.yul")),
+            manifest_dir.join(format!("{contract}.json")),
+        ] {
+            remove_file_if_exists(&path)?;
+        }
+    } else {
+        remove_files_with_extension(&abi_dir, "json")?;
+        remove_files_with_extension(&yul_dir, "yul")?;
+        remove_files_with_extension(&manifest_dir, "json")?;
+    }
+    Ok(())
+}
+
+fn remove_files_with_extension(dir: &Utf8Path, extension: &str) -> Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    for entry in
+        fs::read_dir(dir).map_err(|source| tama_common::io_error(dir.to_owned(), source))?
+    {
+        let entry = entry.map_err(|source| tama_common::io_error(dir.to_owned(), source))?;
+        let path = Utf8PathBuf::from_path_buf(entry.path())
+            .map_err(|path| tama_common::Error::NonUtf8Path(path.display().to_string()))?;
+        if path.is_file() && path.extension() == Some(extension) {
+            remove_file_if_exists(&path)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn adapt_verity_outputs(
@@ -1802,6 +1855,49 @@ mod tests {
             Error::Common(tama_common::Error::GeneratedFileModified(_))
         ));
         assert!(root.join(&manifest.artifacts.interface).is_file());
+    }
+
+    #[test]
+    fn verity_codegen_cleanup_removes_stale_generated_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        for path in [
+            "artifacts/abi/Counter.abi.json",
+            "artifacts/abi/Counter.storage.json",
+            "artifacts/abi/Other.abi.json",
+            "artifacts/yul/Counter.yul",
+            "artifacts/yul/Other.yul",
+            "artifacts/manifest/Counter.json",
+            "artifacts/manifest/Other.json",
+            "artifacts/layout-report.json",
+            "artifacts/trust-report.json",
+            "artifacts/assumption-report.json",
+            "artifacts/abi/README.txt",
+        ] {
+            tama_common::write_string(&root.join(path), "stale\n").unwrap();
+        }
+
+        clear_verity_codegen_outputs(&root, &config, Some("Counter")).unwrap();
+
+        assert!(!root.join("artifacts/abi/Counter.abi.json").exists());
+        assert!(!root.join("artifacts/abi/Counter.storage.json").exists());
+        assert!(!root.join("artifacts/yul/Counter.yul").exists());
+        assert!(!root.join("artifacts/manifest/Counter.json").exists());
+        assert!(!root.join("artifacts/layout-report.json").exists());
+        assert!(!root.join("artifacts/trust-report.json").exists());
+        assert!(!root.join("artifacts/assumption-report.json").exists());
+        assert!(root.join("artifacts/abi/Other.abi.json").is_file());
+        assert!(root.join("artifacts/yul/Other.yul").is_file());
+        assert!(root.join("artifacts/manifest/Other.json").is_file());
+        assert!(root.join("artifacts/abi/README.txt").is_file());
+
+        clear_verity_codegen_outputs(&root, &config, None).unwrap();
+
+        assert!(!root.join("artifacts/abi/Other.abi.json").exists());
+        assert!(!root.join("artifacts/yul/Other.yul").exists());
+        assert!(!root.join("artifacts/manifest/Other.json").exists());
+        assert!(root.join("artifacts/abi/README.txt").is_file());
     }
 
     #[test]
