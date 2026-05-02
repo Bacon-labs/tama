@@ -225,28 +225,11 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Doctor { fix } => {
             let root = cli.root.unwrap_or_else(|| Utf8PathBuf::from("."));
-            let mut report = tama_toolchain::detect_required_tools();
             let project = tama_common::find_project_root(&root).ok();
-            if let Some(project_root) = &project {
-                match tama_config::load_lock(project_root) {
-                    Ok(lock) => {
-                        let drift = tama_config::lock_drift(project_root, &lock)
-                            .map_err(|err| err.to_string())?;
-                        report.lock_current = Some(drift.is_empty());
-                        if !drift.is_empty() {
-                            report
-                                .notes
-                                .push(format!("stale lock inputs: {}", drift.join(", ")));
-                        }
-                    }
-                    Err(err) => {
-                        report.lock_current = Some(false);
-                        report
-                            .notes
-                            .push(format!("lockfile could not be read: {err}"));
-                    }
-                }
+            if fix {
+                apply_doctor_fix(&root, project.as_ref())?;
             }
+            let report = doctor_report(project.as_ref())?;
             if cli.json {
                 println!(
                     "{}",
@@ -285,19 +268,6 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     println!("note {note}");
                 }
                 if fix {
-                    let repair_root = project.as_ref().unwrap_or(&root);
-                    for dir in ["artifacts", "src/generated/verity"] {
-                        std::fs::create_dir_all(repair_root.join(dir))
-                            .map_err(|err| err.to_string())?;
-                    }
-                    if let Some(project_root) = &project {
-                        let mut lock =
-                            tama_config::load_lock(project_root).map_err(|err| err.to_string())?;
-                        tama_config::update_lock_inputs(project_root, &mut lock)
-                            .map_err(|err| err.to_string())?;
-                        tama_config::write_lock(project_root, &lock)
-                            .map_err(|err| err.to_string())?;
-                    }
                     println!("Applied safe directory repairs");
                 }
             }
@@ -324,6 +294,42 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
     }
+}
+
+fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::DoctorReport, String> {
+    let mut report = tama_toolchain::detect_required_tools();
+    if let Some(project_root) = project {
+        match tama_config::load_lock(project_root) {
+            Ok(lock) => {
+                let drift =
+                    tama_config::lock_drift(project_root, &lock).map_err(|err| err.to_string())?;
+                report.lock_current = Some(drift.is_empty());
+                if !drift.is_empty() {
+                    report
+                        .notes
+                        .push(format!("stale lock inputs: {}", drift.join(", ")));
+                }
+            }
+            Err(err) => {
+                report.lock_current = Some(false);
+                report
+                    .notes
+                    .push(format!("lockfile could not be read: {err}"));
+            }
+        }
+    }
+    Ok(report)
+}
+
+fn apply_doctor_fix(root: &Utf8PathBuf, project: Option<&Utf8PathBuf>) -> Result<(), String> {
+    let repair_root = project.unwrap_or(root);
+    for dir in ["artifacts", "src/generated/verity"] {
+        std::fs::create_dir_all(repair_root.join(dir)).map_err(|err| err.to_string())?;
+    }
+    if let Some(project_root) = project {
+        refresh_lock(project_root)?;
+    }
+    Ok(())
 }
 
 fn finalize_init(root: &Utf8PathBuf, offline: bool) -> Result<(), String> {
@@ -581,5 +587,22 @@ mod tests {
         let instructions = offline_init_instructions().join("\n");
         assert!(instructions.contains("lake update"));
         assert!(instructions.contains("forge install foundry-rs/forge-std --no-commit"));
+    }
+
+    #[test]
+    fn doctor_fix_refreshes_lock_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        tama_common::write_string(
+            &root.join("TamaSrc.lean"),
+            "import src.ERC20Lite\n-- changed\n",
+        )
+        .unwrap();
+        let stale = doctor_report(Some(&root)).unwrap();
+        assert_eq!(stale.lock_current, Some(false));
+        apply_doctor_fix(&root, Some(&root)).unwrap();
+        let current = doctor_report(Some(&root)).unwrap();
+        assert_eq!(current.lock_current, Some(true));
     }
 }
