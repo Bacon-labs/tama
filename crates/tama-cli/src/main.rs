@@ -154,6 +154,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Build(args) => {
             let root = project_root(cli.root)?;
+            enforce_locked_if_requested(&root, cli.locked)?;
             seed_lake_package_cache_for_build(&root)?;
             let status = tama_build::Pipeline::new(root)
                 .run(tama_build::BuildOptions {
@@ -2461,6 +2462,48 @@ mod tests {
         assert!(err.contains("lockfile is stale"));
         assert!(err.contains("tama.toml"));
         enforce_locked_if_requested(&root, false).unwrap();
+    }
+
+    #[test]
+    fn build_locked_rejects_stale_inputs_before_seeding_lake_cache() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let rev = init_git_package(&cache.join("verity"), "cached").unwrap();
+        tama_common::write_string(
+            &root.join("lake-manifest.json"),
+            &format!(
+                r#"{{
+  "version": "1.1.0",
+  "packages": [
+    {{"type": "git", "name": "verity", "rev": "{rev}"}}
+  ]
+}}
+"#
+            ),
+        )
+        .unwrap();
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, cache.as_str());
+
+        let err = run(Cli {
+            root: Some(root.clone()),
+            locked: true,
+            offline: false,
+            json: false,
+            verbose: 0,
+            no_color: false,
+            command: Command::Build(BuildArgs {
+                no_solc: true,
+                no_forge: true,
+                contract_: None,
+            }),
+        })
+        .unwrap_err();
+
+        assert!(err.contains("lockfile is stale"));
+        assert!(!root.join(".lake/packages/verity").exists());
     }
 
     #[test]
