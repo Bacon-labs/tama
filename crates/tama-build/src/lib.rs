@@ -31,6 +31,8 @@ pub enum Error {
     SolcErrors { contract: String, errors: String },
     #[error("missing build artifact for {contract}: {path}")]
     MissingArtifact { contract: String, path: Utf8PathBuf },
+    #[error("missing required project file for {contract}: {path}")]
+    MissingProjectFile { contract: String, path: Utf8PathBuf },
     #[error("could not adapt Verity outputs for {0}")]
     Adapter(String),
 }
@@ -259,15 +261,17 @@ pub fn adapt_verity_outputs(
                 path: yul,
             });
         }
+        let source = SourcePaths {
+            implementation: config.paths.src.join(format!("{contract}.lean")),
+            spec: config.paths.spec.join(format!("{contract}Spec.lean")),
+            proof: config.paths.proof.join(format!("{contract}Proof.lean")),
+        };
+        require_contract_files(root, &contract, &source)?;
         let proof_module = format!("proof.{contract}Proof");
         let manifest = ContractManifest {
             schema: SCHEMA.to_string(),
             contract: contract.clone(),
-            source: SourcePaths {
-                implementation: config.paths.src.join(format!("{contract}.lean")),
-                spec: config.paths.spec.join(format!("{contract}Spec.lean")),
-                proof: config.paths.proof.join(format!("{contract}Proof.lean")),
-            },
+            source,
             lean: LeanModules {
                 implementation_module: format!("src.{contract}"),
                 spec_module: format!("spec.{contract}Spec"),
@@ -314,6 +318,18 @@ pub fn adapt_verity_outputs(
         return Err(Error::Adapter("no ABI/Yul outputs found".to_string()));
     }
     Ok(manifests)
+}
+
+fn require_contract_files(root: &Utf8Path, contract: &str, source: &SourcePaths) -> Result<()> {
+    for path in [&source.implementation, &source.spec, &source.proof] {
+        if !root.join(path).is_file() {
+            return Err(Error::MissingProjectFile {
+                contract: contract.to_string(),
+                path: path.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn contract_name_from_abi_path(path: &Utf8Path) -> Option<String> {
@@ -1859,6 +1875,7 @@ end proof.CounterProof
     fn adapter_accepts_upstream_abi_file_suffix() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        write_contract_files(&root, "Counter");
         tama_common::write_string(&root.join("artifacts/abi/Counter.abi.json"), "[]\n").unwrap();
         tama_common::write_string(&root.join("artifacts/yul/Counter.yul"), "{ }\n").unwrap();
         let manifests = adapt_verity_outputs(&root, &test_config(), None).unwrap();
@@ -1869,6 +1886,21 @@ end proof.CounterProof
             Utf8PathBuf::from("artifacts/yul/Counter.yul")
         );
         assert!(root.join("artifacts/manifest/Counter.json").is_file());
+    }
+
+    #[test]
+    fn adapter_rejects_generated_contracts_without_project_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(&root.join("artifacts/abi/Counter.abi.json"), "[]\n").unwrap();
+        tama_common::write_string(&root.join("artifacts/yul/Counter.yul"), "{ }\n").unwrap();
+
+        let err = adapt_verity_outputs(&root, &test_config(), None).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::MissingProjectFile { path, .. } if path.as_str() == "verity/src/Counter.lean"
+        ));
     }
 
     #[test]
@@ -2168,6 +2200,24 @@ TAMA_AXIOMS_END proof.CounterProof.increment_post
             },
             trust: tama_config::TrustConfig::default(),
         }
+    }
+
+    fn write_contract_files(root: &Utf8Path, contract: &str) {
+        tama_common::write_string(
+            &root.join(format!("verity/src/{contract}.lean")),
+            "import Contracts.Common\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join(format!("verity/spec/{contract}Spec.lean")),
+            &format!("import src.{contract}\n"),
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join(format!("verity/proof/{contract}Proof.lean")),
+            &format!("import spec.{contract}Spec\n"),
+        )
+        .unwrap();
     }
 
     fn test_manifest(contract: &str) -> ContractManifest {
