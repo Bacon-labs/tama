@@ -803,7 +803,7 @@ tamaup uninstall             # remove tama; keep tamaup
 
 Security requirements:
 
-1. Releases publish a signed manifest containing artifact URLs, versions, platform triples, and SHA-256 hashes.
+1. Releases publish a signed cumulative manifest containing a `stable` version and `releases[]` entries with artifact URLs, versions, platform triples, and SHA-256 hashes. Installers should continue to accept the legacy single-version manifest shape for local/offline tests.
 2. Installer verifies the signed manifest before installing binaries.
 3. Installer verifies artifact SHA-256 hashes before executing or placing binaries on `$PATH`.
 4. `tamaup` repeats signature and checksum verification for every install/update.

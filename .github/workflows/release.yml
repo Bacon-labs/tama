@@ -76,6 +76,8 @@ jobs:
           import json
           import pathlib
           import sys
+          import urllib.error
+          import urllib.request
 
           version = sys.argv[1]
           artifacts = []
@@ -93,7 +95,32 @@ jobs:
                   "url": f"https://tama.tools/releases/{name}",
                   "sha256": digest,
               })
-          print(json.dumps({"version": version, "artifacts": sorted(artifacts, key=lambda item: item["platform"])}, indent=2))
+          current = {
+              "version": version,
+              "artifacts": sorted(artifacts, key=lambda item: item["platform"]),
+          }
+
+          def releases_from(manifest):
+              if "releases" in manifest:
+                  return list(manifest["releases"])
+              if "version" in manifest and "artifacts" in manifest:
+                  return [{"version": manifest["version"], "artifacts": manifest["artifacts"]}]
+              return []
+
+          try:
+              with urllib.request.urlopen("https://tama.tools/manifest.json", timeout=10) as response:
+                  previous = json.load(response)
+              releases = releases_from(previous)
+          except (OSError, urllib.error.URLError, json.JSONDecodeError):
+              releases = []
+          releases = [release for release in releases if release.get("version") != version]
+          releases.append(current)
+          releases.sort(key=lambda release: release["version"])
+          print(json.dumps({
+              "schema": "tama.release-manifest.v1",
+              "stable": version,
+              "releases": releases,
+          }, indent=2))
           PY
       - name: Sign manifest
         env:

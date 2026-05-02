@@ -33,7 +33,7 @@ Each archive contains `tama` and `tamaup`. No Windows archive is published for v
 
 ## Signing
 
-The release workflow writes a cumulative `manifest.json`, computes SHA-256 for every archive, signs the manifest, and publishes the manifest, signature, and archives.
+The release workflow writes a cumulative `manifest.json` with `schema = "tama.release-manifest.v1"`, a `stable` version, and a `releases[]` list. It computes SHA-256 for every new archive, preserves older release entries when a previous published manifest exists, signs the manifest, and publishes the manifest, signature, and archives.
 
 `tamaup` verifies the manifest signature in process and verifies archive SHA-256 before extraction. `installer/install.sh` may require an external signature verifier, but it must hard fail if verification is unavailable.
 

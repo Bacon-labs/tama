@@ -60,6 +60,20 @@ enum SelfCommand {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ReleaseManifest {
+    #[serde(default)]
+    schema: Option<String>,
+    #[serde(default)]
+    stable: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    artifacts: Vec<Artifact>,
+    #[serde(default)]
+    releases: Vec<Release>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Release {
     version: String,
     artifacts: Vec<Artifact>,
 }
@@ -165,13 +179,7 @@ fn install(
     let manifest: ReleaseManifest =
         serde_json::from_slice(&manifest_bytes).map_err(|err| err.to_string())?;
     let platform = platform()?;
-    let artifact = manifest
-        .artifacts
-        .iter()
-        .find(|artifact| {
-            artifact.platform == platform && (version == "stable" || manifest.version == version)
-        })
-        .ok_or_else(|| format!("no artifact for {platform} version {version}"))?;
+    let (selected_version, artifact) = select_artifact(&manifest, &platform, version)?;
     let archive = if artifact.url.starts_with("file://") {
         fs::read(artifact.url.trim_start_matches("file://")).map_err(|err| err.to_string())?
     } else {
@@ -181,12 +189,53 @@ fn install(
         download(&artifact.url)?
     };
     verify_sha256(&archive, &artifact.sha256)?;
-    let version_dir = tama_home().join("versions").join(&manifest.version);
+    let version_dir = tama_home().join("versions").join(&selected_version);
     fs::create_dir_all(&version_dir).map_err(|err| err.to_string())?;
     extract_archive(&archive, &version_dir)?;
-    use_version(&manifest.version)?;
-    println!("Installed Tama {}", manifest.version);
+    use_version(&selected_version)?;
+    println!("Installed Tama {selected_version}");
     Ok(())
+}
+
+fn select_artifact(
+    manifest: &ReleaseManifest,
+    platform: &str,
+    requested: &str,
+) -> Result<(String, Artifact), String> {
+    if !manifest.releases.is_empty() {
+        let version = if requested == "stable" {
+            manifest
+                .stable
+                .as_deref()
+                .ok_or_else(|| "release manifest is missing stable version".to_string())?
+        } else {
+            requested
+        };
+        let release = manifest
+            .releases
+            .iter()
+            .find(|release| release.version == version)
+            .ok_or_else(|| format!("no release version {version}"))?;
+        let artifact = release
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.platform == platform)
+            .ok_or_else(|| format!("no artifact for {platform} version {version}"))?;
+        return Ok((release.version.clone(), artifact.clone()));
+    }
+
+    let Some(manifest_version) = manifest.version.as_deref() else {
+        return Err("release manifest has no releases".to_string());
+    };
+    if requested != "stable" && requested != manifest_version {
+        return Err(format!("no artifact for {platform} version {requested}"));
+    }
+    let artifact = manifest
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.platform == platform)
+        .ok_or_else(|| format!("no artifact for {platform} version {requested}"))?;
+    Ok((manifest_version.to_string(), artifact.clone()))
 }
 
 fn use_version(version: &str) -> Result<(), String> {
@@ -620,6 +669,61 @@ mod tests {
         )
         .unwrap();
         assert_eq!(actions, vec![BootstrapAction::Foundry]);
+    }
+
+    #[test]
+    fn release_manifest_selects_stable_and_specific_versions() {
+        let manifest = ReleaseManifest {
+            schema: Some("tama.release-manifest.v1".to_string()),
+            stable: Some("0.2.0".to_string()),
+            version: None,
+            artifacts: vec![],
+            releases: vec![
+                Release {
+                    version: "0.1.0".to_string(),
+                    artifacts: vec![Artifact {
+                        platform: "linux-x86_64".to_string(),
+                        url: "file:///tmp/tama-0.1.0.tar.gz".to_string(),
+                        sha256: "old".to_string(),
+                    }],
+                },
+                Release {
+                    version: "0.2.0".to_string(),
+                    artifacts: vec![Artifact {
+                        platform: "linux-x86_64".to_string(),
+                        url: "file:///tmp/tama-0.2.0.tar.gz".to_string(),
+                        sha256: "new".to_string(),
+                    }],
+                },
+            ],
+        };
+
+        let (version, artifact) = select_artifact(&manifest, "linux-x86_64", "stable").unwrap();
+        assert_eq!(version, "0.2.0");
+        assert_eq!(artifact.sha256, "new");
+
+        let (version, artifact) = select_artifact(&manifest, "linux-x86_64", "0.1.0").unwrap();
+        assert_eq!(version, "0.1.0");
+        assert_eq!(artifact.sha256, "old");
+    }
+
+    #[test]
+    fn release_manifest_keeps_legacy_single_version_shape() {
+        let manifest = ReleaseManifest {
+            schema: None,
+            stable: None,
+            version: Some("0.1.0".to_string()),
+            artifacts: vec![Artifact {
+                platform: "linux-x86_64".to_string(),
+                url: "file:///tmp/tama-0.1.0.tar.gz".to_string(),
+                sha256: "legacy".to_string(),
+            }],
+            releases: vec![],
+        };
+
+        let (version, artifact) = select_artifact(&manifest, "linux-x86_64", "stable").unwrap();
+        assert_eq!(version, "0.1.0");
+        assert_eq!(artifact.sha256, "legacy");
     }
 
     #[test]

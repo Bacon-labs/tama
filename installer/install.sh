@@ -80,14 +80,22 @@ import sys
 
 manifest_path, platform, version = sys.argv[1:4]
 manifest = json.load(open(manifest_path, encoding="utf-8"))
-for artifact in manifest["artifacts"]:
-    if artifact["platform"] == platform and (version == "stable" or manifest["version"] == version):
-        print("VERSION=" + manifest["version"])
-        print("URL=" + artifact["url"])
-        print("SHA256=" + artifact["sha256"])
-        break
+if manifest.get("releases"):
+    selected = manifest.get("stable") if version == "stable" else version
+    releases = manifest["releases"]
 else:
-    raise SystemExit(f"no artifact for {platform} {version}")
+    selected = manifest["version"] if version == "stable" else version
+    releases = [{"version": manifest["version"], "artifacts": manifest["artifacts"]}]
+for release in releases:
+    if release["version"] != selected:
+        continue
+    for artifact in release["artifacts"]:
+        if artifact["platform"] == platform:
+            print("VERSION=" + release["version"])
+            print("URL=" + artifact["url"])
+            print("SHA256=" + artifact["sha256"])
+            raise SystemExit(0)
+raise SystemExit(f"no artifact for {platform} {version}")
 PY
 . "$TMPDIR/artifact.env"
 
