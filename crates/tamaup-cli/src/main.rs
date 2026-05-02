@@ -343,20 +343,45 @@ fn atomic_symlink(target: &Utf8Path, link: &Utf8Path) -> Result<(), String> {
 
 fn list_versions() -> Result<(), String> {
     let home = tama_home();
-    let active = read_active_version(&home)?;
-    let versions = home.join("versions");
-    if versions.is_dir() {
-        for entry in fs::read_dir(versions).map_err(|err| err.to_string())? {
-            let entry = entry.map_err(|err| err.to_string())?;
-            let name = entry.file_name().to_string_lossy().to_string();
-            if active.as_deref() == Some(name.as_str()) {
-                println!("* {name}");
-            } else {
-                println!("  {name}");
-            }
+    for (name, active) in installed_versions_at(&home)? {
+        if active {
+            println!("* {name}");
+        } else {
+            println!("  {name}");
         }
     }
     Ok(())
+}
+
+fn installed_versions_at(home: &Utf8Path) -> Result<Vec<(String, bool)>, String> {
+    let active = read_active_version(home)?;
+    let versions = home.join("versions");
+    if !versions.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut rows = Vec::new();
+    for entry in fs::read_dir(&versions).map_err(|err| err.to_string())? {
+        let entry = entry.map_err(|err| err.to_string())?;
+        if !entry.file_type().map_err(|err| err.to_string())?.is_dir() {
+            continue;
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|name| format!("installed version entry `{name:?}` is not UTF-8"))?;
+        if validate_release_version(&name).is_err() {
+            continue;
+        }
+        let version_dir = versions.join(&name);
+        if binary_path(&version_dir, "tama").is_err()
+            || binary_path(&version_dir, "tamaup").is_err()
+        {
+            continue;
+        }
+        rows.push((name.clone(), active.as_deref() == Some(name.as_str())));
+    }
+    rows.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(rows)
 }
 
 fn uninstall() -> Result<(), String> {
@@ -1153,6 +1178,30 @@ mod tests {
         assert_eq!(fs::read_to_string(home.join("active")).unwrap(), "0.1.0");
         assert!(home.join("bin/tama").exists());
         assert!(home.join("bin/tamaup").exists());
+    }
+
+    #[test]
+    fn list_versions_is_sorted_and_filters_non_installs() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        fs::create_dir_all(home.join("versions/0.2.0/bin")).unwrap();
+        fs::write(home.join("versions/0.2.0/bin/tama"), b"tama").unwrap();
+        fs::write(home.join("versions/0.2.0/bin/tamaup"), b"tamaup").unwrap();
+        fs::create_dir_all(home.join("versions/0.1.0")).unwrap();
+        fs::write(home.join("versions/0.1.0/tama"), b"tama").unwrap();
+        fs::write(home.join("versions/0.1.0/tamaup"), b"tamaup").unwrap();
+        fs::create_dir_all(home.join("versions/0.3.0/bin")).unwrap();
+        fs::write(home.join("versions/0.3.0/bin/tama"), b"missing tamaup").unwrap();
+        fs::create_dir_all(home.join("versions/bad..name/bin")).unwrap();
+        fs::write(home.join("versions/bad..name/bin/tama"), b"tama").unwrap();
+        fs::write(home.join("versions/bad..name/bin/tamaup"), b"tamaup").unwrap();
+        fs::write(home.join("versions/README"), b"not a version").unwrap();
+        fs::write(home.join("active"), b"0.2.0").unwrap();
+
+        assert_eq!(
+            installed_versions_at(&home).unwrap(),
+            vec![("0.1.0".to_string(), false), ("0.2.0".to_string(), true)]
+        );
     }
 
     #[test]
