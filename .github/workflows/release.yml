@@ -12,6 +12,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  TAMA_LAKE_PACKAGE_CACHE: ${{ github.workspace }}/.cache/tama/lake-packages
 
 jobs:
   verify:
@@ -27,10 +28,99 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  real-e2e:
+    name: Release real e2e ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+          - name: macos-arm64
+            os: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: .cache/tama
+          key: tama-lake-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/lake-manifest.json') }}
+          restore-keys: |
+            tama-lake-release-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install Lean, Foundry, and solc
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          curl -fsSL https://foundry.paradigm.xyz | bash
+          foundryup
+          python3 -m pip install --user --upgrade solc-select
+          solc-select install 0.8.33
+          solc-select use 0.8.33
+          forge --version
+          solc --version
+      - name: Build Tama
+        run: cargo build --workspace
+      - name: Fresh starter quickstart
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          tmp="$(mktemp -d)"
+          project="$tmp/my-protocol"
+          tama init "$project"
+          cd "$project"
+          tama doctor
+          tama check
+          tama build --locked
+          tama test
+          tama audit
+          for field in manifest selectors abi storage-layout yul bytecode runtime-bytecode theorems obligations mirrors trust; do
+            tama inspect ERC20Lite "$field" >/dev/null
+            tama --json inspect ERC20Lite "$field" | python3 -m json.tool >/dev/null
+          done
+          tama new TipJar
+          tama check
+          printf '%s\n' '#check this_is_not_in_scope_for_tama_check' >> verity/proof/TipJarProof.lean
+          tama check
+          printf '%s\n' '#check this_breaks_tama_check' >> verity/spec/TipJarSpec.lean
+          if tama check; then
+            echo "expected tama check to fail after breaking a spec module" >&2
+            exit 1
+          fi
+      - name: Counter fixture e2e
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          counter="$PWD/fixtures/projects/counter"
+          git -C "$counter" init
+          (cd "$counter" && lake update)
+          (cd "$counter" && forge install foundry-rs/forge-std@v1.16.1 --shallow)
+          tama --root "$counter" doctor --fix
+          tama --root "$counter" doctor
+          tama --root "$counter" check
+          tama --root "$counter" --locked build
+          tama --root "$counter" test
+          tama --root "$counter" audit
+          for field in manifest selectors abi storage-layout yul bytecode runtime-bytecode theorems obligations mirrors trust; do
+            tama --root "$counter" inspect Counter "$field" >/dev/null
+            tama --root "$counter" --json inspect Counter "$field" | python3 -m json.tool >/dev/null
+          done
+
   build-artifacts:
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
-    needs: verify
+    needs:
+      - verify
+      - real-e2e
     strategy:
       fail-fast: false
       matrix:
