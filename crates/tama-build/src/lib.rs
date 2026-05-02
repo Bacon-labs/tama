@@ -127,6 +127,9 @@ impl Pipeline {
 
     pub fn run(&self, opts: BuildOptions) -> Result<BuildStatus> {
         let config = tama_config::load_config(&self.root)?;
+        if let Some(contract) = &opts.contract {
+            validate_contract_filter(contract)?;
+        }
         let mut lock = load_or_initialize_lock(&self.root)?;
         if opts.locked {
             tama_config::enforce_locked(&self.root, &lock)?;
@@ -320,6 +323,19 @@ fn contract_name_from_abi_path(path: &Utf8Path) -> Option<String> {
         .or_else(|| file_name.strip_suffix(".json"))
         .filter(|contract| !contract.is_empty())
         .map(str::to_string)
+}
+
+fn validate_contract_filter(contract: &str) -> Result<()> {
+    let mut chars = contract.chars();
+    let valid = matches!(chars.next(), Some(ch) if ch.is_ascii_uppercase())
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+    if valid {
+        Ok(())
+    } else {
+        Err(Error::Adapter(format!(
+            "invalid contract name `{contract}` for --contract"
+        )))
+    }
 }
 
 pub fn compile_yul_standard_json(
@@ -1554,6 +1570,19 @@ mod tests {
         assert_eq!(lake_build_args(&["TamaProof"]), vec!["build", "TamaProof"]);
         assert_eq!(forge_build_args(true), vec!["build", "--offline"]);
         assert_eq!(forge_build_args(false), vec!["build"]);
+    }
+
+    #[test]
+    fn contract_filter_rejects_invalid_names() {
+        assert!(validate_contract_filter("ERC20Lite").is_ok());
+        let err = validate_contract_filter("../ERC20Lite").unwrap_err();
+        assert!(
+            matches!(err, Error::Adapter(message) if message.contains("invalid contract name"))
+        );
+        let err = validate_contract_filter("erc20Lite").unwrap_err();
+        assert!(
+            matches!(err, Error::Adapter(message) if message.contains("invalid contract name"))
+        );
     }
 
     #[test]

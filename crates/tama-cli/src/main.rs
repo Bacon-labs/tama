@@ -1252,10 +1252,7 @@ fn prefixed_test_args(args: Vec<String>) -> Vec<String> {
 }
 
 fn clean(root: &Utf8PathBuf, deep: bool) -> Result<(), String> {
-    let paths = tama_config::load_config(root)
-        .map(|config| config.paths)
-        .unwrap_or_default();
-    let foundry = tama_config::parse_foundry_config(root).unwrap_or_default();
+    let (paths, foundry) = clean_paths(root)?;
     let configured_lake_build_dir = match tama_config::parse_lake_build_dir(root) {
         Ok(path) => path,
         Err(tama_config::Error::UnsupportedLakefile(_)) => None,
@@ -1290,6 +1287,26 @@ fn clean(root: &Utf8PathBuf, deep: bool) -> Result<(), String> {
         remove_project_dir(root, Utf8Path::new(".lake"))?;
     }
     Ok(())
+}
+
+fn clean_paths(
+    root: &Utf8Path,
+) -> Result<(tama_config::PathsConfig, tama_config::FoundryConfig), String> {
+    let paths = match tama_config::load_config(root) {
+        Ok(config) => config.paths,
+        Err(err) if is_missing_config_error(&err) => tama_config::PathsConfig::default(),
+        Err(err) => return Err(err.to_string()),
+    };
+    let foundry = tama_config::parse_foundry_config(root).map_err(|err| err.to_string())?;
+    Ok((paths, foundry))
+}
+
+fn is_missing_config_error(err: &tama_config::Error) -> bool {
+    matches!(
+        err,
+        tama_config::Error::Common(tama_common::Error::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 fn remove_generated_dir(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
@@ -1927,6 +1944,37 @@ buildDir = ""
         let err = clean(&root, false).unwrap_err();
 
         assert!(err.contains("refusing to clean path outside project"));
+    }
+
+    #[test]
+    fn clean_rejects_invalid_project_config_before_removing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(&root.join("tama.toml"), "not = [valid").unwrap();
+        tama_common::write_string(&root.join("artifacts/yul/Counter.yul"), "").unwrap();
+
+        let err = clean(&root, false).unwrap_err();
+
+        assert!(err.contains("failed to parse"));
+        assert!(root.join("artifacts/yul/Counter.yul").is_file());
+    }
+
+    #[test]
+    fn clean_rejects_invalid_foundry_config_before_removing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            "[project]\nname='x'\nverity='v'\n[yul]\nsolc='0.8.33'\n",
+        )
+        .unwrap();
+        tama_common::write_string(&root.join("foundry.toml"), "not = [valid").unwrap();
+        tama_common::write_string(&root.join("artifacts/yul/Counter.yul"), "").unwrap();
+
+        let err = clean(&root, false).unwrap_err();
+
+        assert!(err.contains("failed to parse"));
+        assert!(root.join("artifacts/yul/Counter.yul").is_file());
     }
 
     #[test]

@@ -207,6 +207,18 @@ impl ContractManifest {
             if function.name.trim().is_empty() {
                 return self.invalid("function name cannot be empty");
             }
+            validate_params(&function.inputs, "function input", &function.name).map_err(
+                |message| Error::Invalid {
+                    contract: self.contract.clone(),
+                    message,
+                },
+            )?;
+            validate_params(&function.outputs, "function output", &function.name).map_err(
+                |message| Error::Invalid {
+                    contract: self.contract.clone(),
+                    message,
+                },
+            )?;
             let expected_signature = function_signature(function);
             if function.signature != expected_signature {
                 return self.invalid(format!(
@@ -241,6 +253,12 @@ impl ContractManifest {
             if error.name.trim().is_empty() {
                 return self.invalid("error name cannot be empty");
             }
+            validate_params(&error.inputs, "error input", &error.name).map_err(|message| {
+                Error::Invalid {
+                    contract: self.contract.clone(),
+                    message,
+                }
+            })?;
             let expected_signature = error_signature(error);
             if error.signature != expected_signature {
                 return self.invalid(format!(
@@ -260,6 +278,12 @@ impl ContractManifest {
             if event.name.trim().is_empty() {
                 return self.invalid("event name cannot be empty");
             }
+            validate_event_fields(&event.fields, &event.name).map_err(|message| {
+                Error::Invalid {
+                    contract: self.contract.clone(),
+                    message,
+                }
+            })?;
             let expected_signature = event_signature(event);
             if event.signature != expected_signature {
                 return self.invalid(format!(
@@ -276,6 +300,12 @@ impl ContractManifest {
             }
         }
         for storage in &self.storage {
+            if storage.name.trim().is_empty() {
+                return self.invalid("storage name cannot be empty");
+            }
+            if storage.ty.trim().is_empty() {
+                return self.invalid(format!("storage `{}` type cannot be empty", storage.name));
+            }
             validate_hex_slot(&storage.slot).map_err(|message| Error::Invalid {
                 contract: self.contract.clone(),
                 message: format!("storage `{}` {message}", storage.name),
@@ -447,6 +477,28 @@ fn validate_hex_slot(slot: &str) -> std::result::Result<(), &'static str> {
     Ok(())
 }
 
+fn validate_params(params: &[Param], label: &str, owner: &str) -> std::result::Result<(), String> {
+    for (index, param) in params.iter().enumerate() {
+        if param.ty.trim().is_empty() {
+            return Err(format!(
+                "{label} {index} for `{owner}` type cannot be empty"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_event_fields(fields: &[EventField], event: &str) -> std::result::Result<(), String> {
+    for (index, field) in fields.iter().enumerate() {
+        if field.ty.trim().is_empty() {
+            return Err(format!(
+                "event field {index} for `{event}` type cannot be empty"
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,6 +651,32 @@ mod tests {
         assert!(matches!(
             manifest.validate(),
             Err(Error::Invalid { message, .. }) if message.contains("unsupported mutability")
+        ));
+    }
+
+    #[test]
+    fn abi_and_storage_types_cannot_be_empty() {
+        let mut empty_function_param = manifest();
+        empty_function_param.abi.functions[0].inputs[0].ty = " ".to_string();
+        assert!(matches!(
+            empty_function_param.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("function input")
+                && message.contains("type cannot be empty")
+        ));
+
+        let mut empty_event_field = manifest();
+        empty_event_field.abi.events[0].fields[0].ty = String::new();
+        assert!(matches!(
+            empty_event_field.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("event field")
+                && message.contains("type cannot be empty")
+        ));
+
+        let mut empty_storage_type = manifest();
+        empty_storage_type.storage[0].ty = String::new();
+        assert!(matches!(
+            empty_storage_type.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("storage `balances` type cannot be empty")
         ));
     }
 
