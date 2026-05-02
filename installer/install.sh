@@ -191,13 +191,20 @@ if [ "$ACTUAL" != "$SHA256" ]; then
 fi
 
 tar -tzf "$INSTALL_TMPDIR/tama.tar.gz" > "$INSTALL_TMPDIR/archive.entries"
+TAMA_ENTRY_COUNT=0
+TAMAUP_ENTRY_COUNT=0
 while IFS= read -r entry; do
   case "$entry" in
     /*|*../*|../*) echo "unsafe archive path: $entry" >&2; exit 1 ;;
-    bin/tama|bin/tamaup|tama|tamaup) ;;
+    bin/tama|tama) TAMA_ENTRY_COUNT=$((TAMA_ENTRY_COUNT + 1)) ;;
+    bin/tamaup|tamaup) TAMAUP_ENTRY_COUNT=$((TAMAUP_ENTRY_COUNT + 1)) ;;
     *) echo "unexpected archive entry: $entry" >&2; exit 1 ;;
   esac
 done < "$INSTALL_TMPDIR/archive.entries"
+if [ "$TAMA_ENTRY_COUNT" -ne 1 ] || [ "$TAMAUP_ENTRY_COUNT" -ne 1 ]; then
+  echo "archive must contain exactly one tama and one tamaup binary" >&2
+  exit 1
+fi
 
 ARCHIVE_STAGE="$INSTALL_TMPDIR/archive"
 mkdir -p "$ARCHIVE_STAGE"

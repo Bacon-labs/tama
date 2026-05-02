@@ -846,8 +846,18 @@ fn extract_archive(bytes: &[u8], dest: &Utf8Path) -> Result<(), String> {
         let path = Utf8PathBuf::from_path_buf(path.to_path_buf())
             .map_err(|path| path.display().to_string())?;
         match path.as_str() {
-            "bin/tama" | "tama" => has_tama = true,
-            "bin/tamaup" | "tamaup" => has_tamaup = true,
+            "bin/tama" | "tama" => {
+                if has_tama {
+                    return Err("archive contains duplicate tama binary entries".to_string());
+                }
+                has_tama = true;
+            }
+            "bin/tamaup" | "tamaup" => {
+                if has_tamaup {
+                    return Err("archive contains duplicate tamaup binary entries".to_string());
+                }
+                has_tamaup = true;
+            }
             _ => return Err(format!("unexpected archive entry: {path}")),
         }
         if !entry.header().entry_type().is_file() {
@@ -1953,6 +1963,24 @@ mod tests {
 
         assert!(err.contains("unexpected archive entry"));
         assert!(!dest.join("bin/tama").exists());
+        assert!(!dest.join("bin/tamaup").exists());
+    }
+
+    #[test]
+    fn extract_archive_rejects_duplicate_binary_roles_before_writing() {
+        let tarball = test_archive(&[
+            ("bin/tama", b"first".as_slice(), 0o755),
+            ("tama", b"second".as_slice(), 0o755),
+            ("bin/tamaup", b"tamaup".as_slice(), 0o755),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let dest = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let err = extract_archive(&tarball, &dest).unwrap_err();
+
+        assert!(err.contains("duplicate tama binary"));
+        assert!(!dest.join("bin/tama").exists());
+        assert!(!dest.join("tama").exists());
         assert!(!dest.join("bin/tamaup").exists());
     }
 
