@@ -375,15 +375,15 @@ verity_contract ERC20Lite where
       setMapping balancesSlot toAddr newRecipientBalance
     return true
 
-  function balanceOf (addr : Address) : Uint256 := do
+  function view balanceOf (addr : Address) : Uint256 := do
     let currentBalance ← getMapping balancesSlot addr
     return currentBalance
 
-  function totalSupply () : Uint256 := do
+  function view totalSupply () : Uint256 := do
     let currentSupply ← getStorage totalSupplySlot
     return currentSupply
 
-  function owner () : Address := do
+  function view owner () : Address := do
     let currentOwner ← getStorageAddr ownerSlot
     return currentOwner
 
@@ -400,28 +400,102 @@ open Verity.EVM.Uint256
 def transfer_total_supply_preserved (s s' : ContractState) : Prop :=
   s'.storage 2 = s.storage 2
 
+def mint_owner_preserved (s s' : ContractState) : Prop :=
+  s'.storageAddr 0 = s.storageAddr 0
+
 def balanceOf_spec (account : Address) (result : Uint256) (s : ContractState) : Prop :=
   result = s.storageMap 1 account
+
+def totalSupply_spec (result : Uint256) (s : ContractState) : Prop :=
+  result = s.storage 2
+
+def owner_spec (result : Address) (s : ContractState) : Prop :=
+  result = s.storageAddr 0
 
 end spec.ERC20LiteSpec
 "#;
 
 const ERC20LITE_PROOF_LEAN: &str = r#"import spec.ERC20LiteSpec
+import Verity.Proofs.Stdlib.Automation
+
+set_option linter.unusedSimpArgs false
 
 namespace proof.ERC20LiteProof
 
 open Verity
+open Verity.EVM.Uint256
 open spec.ERC20LiteSpec
+open src.ERC20Lite
 
--- tama: obligation kind=postcondition function=transfer coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransferPostPlaceholder
-theorem transfer_total_supply_preserved_refl (s : ContractState) :
-  transfer_total_supply_preserved s s := by
-  simp [transfer_total_supply_preserved]
+-- tama: obligation kind=postcondition function=mint coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzMintUpdatesBalanceAndSupply
+theorem mint_preserves_owner_after_run (toAddr : Address) (amount : Uint256) (s : ContractState) :
+  let s' := ((mint toAddr amount).run s).snd
+  mint_owner_preserved s s' := by
+  unfold mint_owner_preserved
+  by_cases h_owner : s.sender = s.storageAddr 0
+  · simp [mint, ownerSlot, balancesSlot, totalSupplySlot, msgSender, getStorageAddr,
+      getMapping, getStorage, setMapping, setStorage, Contract.run, ContractResult.snd,
+      Verity.bind, Bind.bind, Verity.pure, Pure.pure, Verity.require,
+      Verity.Stdlib.Math.requireSomeUint, Verity.Stdlib.Math.safeAdd, h_owner]
+    by_cases h_balance_overflow : Verity.Stdlib.Math.MAX_UINT256 <
+        (s.storageMap 1 toAddr).val + amount.val
+    · simp [h_balance_overflow, Verity.require, Verity.bind, Bind.bind, Verity.pure,
+        Pure.pure, Contract.run, ContractResult.snd]
+    · by_cases h_supply_overflow : Verity.Stdlib.Math.MAX_UINT256 <
+          (s.storage 2).val + amount.val
+      · simp [h_balance_overflow, h_supply_overflow, Verity.require, Verity.bind,
+          Bind.bind, Verity.pure, Pure.pure, Contract.run, ContractResult.snd]
+      · simp [h_balance_overflow, h_supply_overflow, setMapping, setStorage,
+          Verity.bind, Bind.bind, Verity.pure, Pure.pure, Contract.run,
+          ContractResult.snd]
+  · simp [mint, ownerSlot, msgSender, getStorageAddr, Contract.run, ContractResult.snd,
+      Verity.bind, Bind.bind, Verity.require, h_owner]
 
--- tama: obligation kind=postcondition function=balanceOf coverage=proof_only reason="Pure read specification; Foundry mirror coverage is provided by generated ABI tests."
-theorem balanceOf_spec_refl (account : Address) (s : ContractState) :
-  balanceOf_spec account (s.storageMap 1 account) s := by
-  simp [balanceOf_spec]
+-- tama: obligation kind=postcondition function=transfer coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply
+theorem transfer_total_supply_preserved_after_run (toAddr : Address) (amount : Uint256) (s : ContractState) :
+  let s' := ((transfer toAddr amount).run s).snd
+  transfer_total_supply_preserved s s' := by
+  unfold transfer_total_supply_preserved
+  by_cases h_balance : amount.val ≤ (s.storageMap 1 s.sender).val
+  · simp [transfer, balancesSlot, msgSender, getMapping, setMapping, Contract.run,
+      ContractResult.snd, Verity.bind, Bind.bind, Verity.pure, Pure.pure,
+      Verity.require, Verity.Stdlib.Math.requireSomeUint, Verity.Stdlib.Math.safeAdd,
+      h_balance]
+    by_cases h_same : s.sender = toAddr
+    · simp [h_same, Verity.pure, Pure.pure, Contract.run, ContractResult.snd]
+    · by_cases h_overflow : Verity.Stdlib.Math.MAX_UINT256 <
+          (s.storageMap 1 toAddr).val + amount.val
+      · simp [h_same, h_overflow, getMapping, setMapping, Verity.require,
+          Verity.Stdlib.Math.requireSomeUint, Verity.Stdlib.Math.safeAdd,
+          Verity.bind, Bind.bind, Verity.pure, Pure.pure, Contract.run,
+          ContractResult.snd]
+      · simp [h_same, h_overflow, getMapping, setMapping,
+          Verity.Stdlib.Math.requireSomeUint, Verity.Stdlib.Math.safeAdd,
+          Verity.bind, Bind.bind, Verity.pure, Pure.pure, Contract.run,
+          ContractResult.snd]
+  · simp [transfer, balancesSlot, msgSender, getMapping, Contract.run, ContractResult.snd,
+      Verity.bind, Bind.bind, Verity.require, h_balance]
+
+-- tama: obligation kind=postcondition function=balanceOf coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzBalanceOfMirrorsGeneratedBytecode
+theorem balanceOf_returns_storage_balance (account : Address) (s : ContractState) :
+  let result := ((balanceOf account).run s).fst
+  balanceOf_spec account result s := by
+  simp [balanceOf_spec, balanceOf, balancesSlot, getMapping, Contract.run,
+    ContractResult.fst, Verity.bind, Bind.bind, Verity.pure, Pure.pure]
+
+-- tama: obligation kind=postcondition function=totalSupply coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzMintUpdatesBalanceAndSupply
+theorem totalSupply_returns_storage_supply (s : ContractState) :
+  let result := ((totalSupply).run s).fst
+  totalSupply_spec result s := by
+  simp [totalSupply_spec, totalSupply, totalSupplySlot, getStorage, Contract.run,
+    ContractResult.fst, Verity.bind, Bind.bind, Verity.pure, Pure.pure]
+
+-- tama: obligation kind=postcondition function=owner coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testDeploymentSetsOwner
+theorem owner_returns_storage_owner (s : ContractState) :
+  let result := ((owner).run s).fst
+  owner_spec result s := by
+  simp [owner_spec, owner, ownerSlot, getStorageAddr, Contract.run, ContractResult.fst,
+    Verity.bind, Bind.bind, Verity.pure, Pure.pure]
 
 end proof.ERC20LiteProof
 "#;
@@ -431,10 +505,86 @@ pragma solidity ^0.8.20;
 
 import {ERC20LiteDeployer} from "../../src/generated/verity/ERC20LiteDeployer.sol";
 import {ERC20LiteIface} from "../../src/generated/verity/ERC20LiteIface.sol";
+import {StdInvariant} from "forge-std/StdInvariant.sol";
 
-contract ERC20LiteTest {
-    function testTransferPostPlaceholder() public pure {
-        require(true);
+contract ERC20LiteTest is StdInvariant {
+    ERC20LiteIface internal invariantToken;
+    uint256 internal invariantMinted;
+
+    function setUp() public {
+        invariantToken = deployToken();
+        bytes4[] memory selectors = new bytes4[](2);
+        selectors[0] = this.handlerMint.selector;
+        selectors[1] = this.handlerTransferFromOwner.selector;
+        targetSelector(FuzzSelector({addr: address(this), selectors: selectors}));
+    }
+
+    function deployToken() internal returns (ERC20LiteIface token) {
+        token = ERC20LiteDeployer.deploy(address(this));
+    }
+
+    function testDeploymentSetsOwner() public {
+        ERC20LiteIface token = deployToken();
+        require(token.owner() == address(this), "owner");
+        require(token.totalSupply() == 0, "initial supply");
+    }
+
+    function testFuzzMintUpdatesBalanceAndSupply(address account, uint256 rawAmount) public {
+        ERC20LiteIface token = deployToken();
+        uint256 amount = rawAmount % 1e36;
+        require(token.mint(account, amount), "mint");
+        require(token.balanceOf(account) == amount, "minted balance");
+        require(token.totalSupply() == amount, "minted supply");
+        require(token.owner() == address(this), "owner preserved");
+    }
+
+    function testFuzzTransferPreservesTotalSupply(address recipient, uint256 rawMint, uint256 rawTransfer) public {
+        ERC20LiteIface token = deployToken();
+        uint256 minted = rawMint % 1e36;
+        uint256 amount = minted == 0 ? 0 : rawTransfer % (minted + 1);
+        require(token.mint(address(this), minted), "mint");
+        require(token.transfer(recipient, amount), "transfer");
+        if (recipient == address(this)) {
+            require(token.balanceOf(address(this)) == minted, "self transfer balance");
+        } else {
+            require(token.balanceOf(address(this)) == minted - amount, "sender balance");
+            require(token.balanceOf(recipient) == amount, "recipient balance");
+        }
+        require(token.totalSupply() == minted, "supply preserved");
+    }
+
+    function testFuzzBalanceOfMirrorsGeneratedBytecode(address account, uint256 rawAmount) public {
+        ERC20LiteIface token = deployToken();
+        uint256 amount = rawAmount % 1e36;
+        require(token.mint(account, amount), "mint");
+        require(token.balanceOf(account) == amount, "balanceOf");
+    }
+
+    function handlerMint(uint8 accountIndex, uint256 rawAmount) public {
+        uint256 amount = rawAmount % 1e24;
+        require(invariantToken.mint(invariantAccount(accountIndex), amount), "invariant mint");
+        invariantMinted += amount;
+    }
+
+    function handlerTransferFromOwner(uint8 accountIndex, uint256 rawAmount) public {
+        uint256 balance = invariantToken.balanceOf(address(this));
+        uint256 amount = balance == 0 ? 0 : rawAmount % (balance + 1);
+        require(invariantToken.transfer(invariantAccount(accountIndex), amount), "invariant transfer");
+    }
+
+    function invariant_totalSupplyTracksMinted() public view {
+        require(invariantToken.totalSupply() == invariantMinted, "invariant supply");
+    }
+
+    function invariantAccount(uint8 index) internal view returns (address) {
+        uint8 account = index % 3;
+        if (account == 0) {
+            return address(this);
+        }
+        if (account == 1) {
+            return address(0xA11CE);
+        }
+        return address(0xB0B);
     }
 }
 "#;
@@ -457,7 +607,8 @@ pragma solidity ^0.8.20;
 import {ERC20LiteIface} from "./ERC20LiteIface.sol";
 
 library ERC20LiteDeployer {
-    function deploy() internal pure returns (ERC20LiteIface token) {
+    function deploy(address initialOwner) internal pure returns (ERC20LiteIface token) {
+        initialOwner;
         token;
         revert("TAMA_BUILD_REQUIRED");
     }
@@ -494,9 +645,21 @@ mod tests {
         assert!(!root.join("test/Counter.t.sol").exists());
         let proof = read_to_string(&root.join("verity/proof/ERC20LiteProof.lean")).unwrap();
         assert!(!proof.contains("sorry"));
+        assert!(!proof.contains("Placeholder"));
+        assert!(!proof.contains("coverage=proof_only"));
         assert!(proof.contains("tama: obligation kind=postcondition function=transfer"));
-        assert!(proof.contains("coverage=proof_only"));
+        assert!(proof.contains("((transfer toAddr amount).run s).snd"));
+        assert!(proof.contains("((mint toAddr amount).run s).snd"));
+        assert!(proof.contains("((balanceOf account).run s).fst"));
+        let test = read_to_string(&root.join("test/verity/ERC20Lite.t.sol")).unwrap();
+        assert!(!test.contains("testTransferPostPlaceholder"));
+        assert!(test.contains("ERC20LiteDeployer.deploy(address(this))"));
+        assert!(test.contains("testFuzzTransferPreservesTotalSupply"));
+        assert!(test.contains("StdInvariant"));
+        assert!(test.contains("invariant_totalSupplyTracksMinted"));
+        assert!(test.contains("token.transfer(recipient, amount)"));
         let source = read_to_string(&root.join("verity/src/ERC20Lite.lean")).unwrap();
+        assert!(source.contains("function view balanceOf"));
         assert!(!source.contains(r#"emit "Transfer""#));
     }
 
