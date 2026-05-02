@@ -435,6 +435,36 @@ solc = "0.8.33"
     }
 
     #[test]
+    fn inspect_missing_bytecode_points_to_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            r#"[project]
+name = "custom"
+verity = "0.1.0"
+
+[yul]
+solc = "0.8.33"
+"#,
+        )
+        .unwrap();
+        let manifest = counter_manifest("artifacts");
+        manifest
+            .write_pretty(&root.join("artifacts/manifest/Counter.json"))
+            .unwrap();
+
+        let err = inspect(&root, "Counter", Field::Bytecode, false).unwrap_err();
+
+        assert!(matches!(
+            &err,
+            Error::MissingArtifact { contract, path }
+                if contract == "Counter" && path.as_str() == "artifacts/bytecode/Counter.bin"
+        ));
+        assert!(err.to_string().contains("Run `tama build`"));
+    }
+
+    #[test]
     fn selectors_include_functions_errors_and_events() {
         let mut manifest = counter_manifest("artifacts");
         manifest.abi.functions.push(tama_manifest::Function {
