@@ -82,6 +82,8 @@ Useful flags:
 
 Executes `forge test` with arguments unchanged. Forge stdout, stderr, and exit code are preserved. Tama-owned JSON output does not wrap or corrupt Foundry passthrough output.
 
+The Tama global `--offline` flag is translated to Forge's `--offline` flag for this command. Other Forge arguments, filters, and verbosity flags are preserved as provided.
+
 ## `tama audit [check]`
 
 Runs structure, selector/topic, storage-layout, coverage, and trust-boundary audits. `--json` emits the canonical audit issue format.

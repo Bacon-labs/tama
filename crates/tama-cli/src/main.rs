@@ -184,7 +184,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             enforce_locked_if_requested(&root, cli.locked)?;
             let status = tama_toolchain::run_passthrough(
                 "forge",
-                &prefixed_test_args(args.forge_args),
+                &prefixed_test_args(args.forge_args, cli.offline),
                 &root,
             )
             .map_err(|err| err.to_string())?;
@@ -1262,9 +1262,13 @@ fn canonicalize_utf8(path: &Utf8Path) -> Result<Utf8PathBuf, String> {
     Utf8PathBuf::from_path_buf(path).map_err(|path| path.display().to_string())
 }
 
-fn prefixed_test_args(args: Vec<String>) -> Vec<String> {
-    let mut out = Vec::with_capacity(args.len() + 1);
+fn prefixed_test_args(args: Vec<String>, offline: bool) -> Vec<String> {
+    let add_offline = offline && !args.iter().any(|arg| arg == "--offline");
+    let mut out = Vec::with_capacity(args.len() + 1 + usize::from(add_offline));
     out.push("test".to_string());
+    if add_offline {
+        out.push("--offline".to_string());
+    }
     out.extend(args);
     out
 }
@@ -1406,12 +1410,34 @@ mod tests {
     #[test]
     fn test_args_are_prefixed_without_rewriting() {
         assert_eq!(
-            prefixed_test_args(vec![
-                "--match-test".to_string(),
-                "foo".to_string(),
-                "-vvv".to_string(),
-            ]),
+            prefixed_test_args(
+                vec![
+                    "--match-test".to_string(),
+                    "foo".to_string(),
+                    "-vvv".to_string(),
+                ],
+                false
+            ),
             vec!["test", "--match-test", "foo", "-vvv"]
+        );
+    }
+
+    #[test]
+    fn offline_test_args_gate_forge_network_without_rewriting_filters() {
+        assert_eq!(
+            prefixed_test_args(
+                vec![
+                    "--match-test".to_string(),
+                    "foo".to_string(),
+                    "-vvv".to_string(),
+                ],
+                true
+            ),
+            vec!["test", "--offline", "--match-test", "foo", "-vvv"]
+        );
+        assert_eq!(
+            prefixed_test_args(vec!["--offline".to_string(), "-vvv".to_string()], true),
+            vec!["test", "--offline", "-vvv"]
         );
     }
 
@@ -1421,7 +1447,7 @@ mod tests {
             Cli::try_parse_from(["tama", "test", "--", "--match-test", "foo", "-vvv"]).unwrap();
         match cli.command {
             Command::Test(args) => assert_eq!(
-                prefixed_test_args(args.forge_args),
+                prefixed_test_args(args.forge_args, cli.offline),
                 vec!["test", "--match-test", "foo", "-vvv"]
             ),
             other => panic!("unexpected command: {other:?}"),
@@ -1433,8 +1459,22 @@ mod tests {
         let cli = Cli::try_parse_from(["tama", "test", "--match-test", "foo", "-vvv"]).unwrap();
         match cli.command {
             Command::Test(args) => assert_eq!(
-                prefixed_test_args(args.forge_args),
+                prefixed_test_args(args.forge_args, cli.offline),
                 vec!["test", "--match-test", "foo", "-vvv"]
+            ),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn global_offline_is_translated_for_test_passthrough() {
+        let cli =
+            Cli::try_parse_from(["tama", "--offline", "test", "--match-test", "foo"]).unwrap();
+        assert!(cli.offline);
+        match cli.command {
+            Command::Test(args) => assert_eq!(
+                prefixed_test_args(args.forge_args, cli.offline),
+                vec!["test", "--offline", "--match-test", "foo"]
             ),
             other => panic!("unexpected command: {other:?}"),
         }

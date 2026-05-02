@@ -522,6 +522,8 @@ forge test [forge-args...]
 
 Tama does not inject test paths, does not override filters, and does not force mirror tests to run. Mirror tests are included by default because they live under Foundry's normal test tree. If the user passes Foundry filters that exclude mirror tests, Tama respects that. Coverage enforcement belongs to `tama audit coverage`, not `tama test`.
 
+The only Tama-owned flag translated for this passthrough is global `--offline`, which maps to Forge's `--offline`. User-provided Forge arguments remain otherwise unchanged.
+
 Examples:
 
 ```text
