@@ -336,7 +336,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
 }
 
 fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::DoctorReport, String> {
-    let mut report = tama_toolchain::detect_required_tools();
+    let mut report = tama_toolchain::detect_required_tools_at(project.map(|root| root.as_path()));
     if let Some(project_root) = project {
         let config = match tama_config::load_config(project_root) {
             Ok(config) => Some(config),
@@ -1901,7 +1901,12 @@ mod tests {
         let log = Utf8PathBuf::from_path_buf(dir.path().join("lake.log")).unwrap();
         tama_common::write_string(
             &lake,
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$TAMA_TEST_LAKE_LOG\"\n",
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--version\" ]; then\n\
+             echo 'Lake version 5.0.0-src+test (Lean version 4.22.0)'\n\
+             exit 0\n\
+             fi\n\
+             printf '%s\\n' \"$@\" >> \"$TAMA_TEST_LAKE_LOG\"\n",
         )
         .unwrap();
         {

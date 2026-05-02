@@ -58,10 +58,14 @@ pub struct DoctorReport {
 }
 
 pub fn detect_tool(name: &str) -> Result<Tool> {
+    detect_tool_at(name, None)
+}
+
+pub fn detect_tool_at(name: &str, cwd: Option<&Utf8Path>) -> Result<Tool> {
     let path = which::which(name).map_err(|_| Error::MissingTool(name.to_string()))?;
     let path = Utf8PathBuf::from_path_buf(path)
         .map_err(|path| tama_common::Error::NonUtf8Path(path.display().to_string()))?;
-    let version = tool_version(name, &path).ok();
+    let version = tool_version_at(name, &path, cwd).ok();
     Ok(Tool {
         name: name.to_string(),
         path,
@@ -70,9 +74,13 @@ pub fn detect_tool(name: &str) -> Result<Tool> {
 }
 
 pub fn detect_required_tools() -> DoctorReport {
+    detect_required_tools_at(None)
+}
+
+pub fn detect_required_tools_at(cwd: Option<&Utf8Path>) -> DoctorReport {
     let mut report = DoctorReport::default();
     for name in ["lean", "lake", "forge", "solc", "git", "tar"] {
-        match detect_tool(name) {
+        match detect_tool_at(name, cwd) {
             Ok(tool) => report.tools.push(ToolStatus::Ok(tool)),
             Err(_) => report.tools.push(ToolStatus::Missing {
                 name: name.to_string(),
@@ -84,13 +92,19 @@ pub fn detect_required_tools() -> DoctorReport {
 }
 
 pub fn tool_version(name: &str, path: &Utf8Path) -> Result<String> {
-    let output = Command::new(path)
-        .arg("--version")
-        .output()
-        .map_err(|source| Error::Process {
-            program: name.to_string(),
-            source,
-        })?;
+    tool_version_at(name, path, None)
+}
+
+pub fn tool_version_at(name: &str, path: &Utf8Path, cwd: Option<&Utf8Path>) -> Result<String> {
+    let mut command = Command::new(path);
+    command.arg("--version");
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let output = command.output().map_err(|source| Error::Process {
+        program: name.to_string(),
+        source,
+    })?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let text = if stdout.trim().is_empty() {
