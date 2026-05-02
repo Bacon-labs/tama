@@ -237,6 +237,24 @@ jobs:
           PY
           expect_audit_failure "$project" coverage
 
+          project="$(copy_case example-shaped-mirror)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" "$project/test/verity/ERC20Lite.t.sol" <<'PY'
+          import json
+          import sys
+          manifest_path, test_path = sys.argv[1:]
+          data = json.load(open(manifest_path, encoding="utf-8"))
+          data["obligations"][0]["coverage"] = {
+              "disposition": "mirror",
+              "path": "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransferExample",
+              "reason": None,
+          }
+          json.dump(data, open(manifest_path, "w", encoding="utf-8"), indent=2)
+          text = open(test_path, encoding="utf-8").read()
+          text = text.rstrip().removesuffix("}") + "\n    function testTransferExample() public {}\n}\n"
+          open(test_path, "w", encoding="utf-8").write(text)
+          PY
+          expect_audit_failure "$project" coverage
+
           project="$(copy_case empty-proof-only-reason)"
           python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
           import json
