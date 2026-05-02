@@ -71,8 +71,8 @@ struct ReleaseManifest {
     nightly: Option<String>,
     #[serde(default)]
     version: Option<String>,
-    #[serde(default)]
-    artifacts: Vec<Artifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    artifacts: Option<Vec<Artifact>>,
     #[serde(default)]
     releases: Vec<Release>,
 }
@@ -241,8 +241,11 @@ fn select_artifact(
     if requested != "stable" && requested != manifest_version {
         return Err(format!("no artifact for {platform} version {requested}"));
     }
-    let artifact = manifest
+    let artifacts = manifest
         .artifacts
+        .as_deref()
+        .ok_or_else(|| "legacy release manifest is missing artifacts".to_string())?;
+    let artifact = artifacts
         .iter()
         .find(|artifact| artifact.platform == platform)
         .ok_or_else(|| format!("no artifact for {platform} version {requested}"))?;
@@ -281,7 +284,7 @@ fn validate_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
     if let Some(version) = &manifest.version {
         validate_release_version(version)?;
     }
-    validate_artifacts(&manifest.artifacts)?;
+    validate_artifacts(manifest.artifacts.as_deref().unwrap_or(&[]))?;
     for release in &manifest.releases {
         validate_release_version(&release.version)?;
         validate_artifacts(&release.artifacts)?;
@@ -303,7 +306,7 @@ fn validate_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
         if manifest.releases.is_empty() {
             return Err("cumulative release manifest must contain releases[]".to_string());
         }
-        if manifest.version.is_some() || !manifest.artifacts.is_empty() {
+        if manifest.version.is_some() || manifest.artifacts.is_some() {
             return Err(
                 "cumulative release manifest must not mix legacy version/artifacts fields"
                     .to_string(),
@@ -313,7 +316,11 @@ fn validate_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
         if manifest.version.is_none() {
             return Err("legacy release manifest is missing version".to_string());
         }
-        if manifest.artifacts.is_empty() {
+        if manifest
+            .artifacts
+            .as_deref()
+            .map_or(true, |artifacts| artifacts.is_empty())
+        {
             return Err("legacy release manifest is missing artifacts".to_string());
         }
     }
@@ -1042,7 +1049,7 @@ mod tests {
             stable: Some("0.2.0".to_string()),
             nightly: Some("0.3.0-nightly".to_string()),
             version: None,
-            artifacts: vec![],
+            artifacts: None,
             releases: vec![
                 Release {
                     version: "0.1.0".to_string(),
@@ -1091,7 +1098,7 @@ mod tests {
             stable: Some("0.1.0".to_string()),
             nightly: None,
             version: None,
-            artifacts: vec![],
+            artifacts: None,
             releases: vec![],
         };
 
@@ -1152,7 +1159,7 @@ mod tests {
             stable: Some("0.1.0".to_string()),
             nightly: None,
             version: None,
-            artifacts: vec![],
+            artifacts: None,
             releases: vec![],
         };
         assert!(validate_release_manifest(&manifest)
@@ -1181,14 +1188,34 @@ mod tests {
             .contains("must declare schema"));
 
         manifest.version = Some("0.1.0".to_string());
-        manifest.artifacts = vec![Artifact {
+        manifest.artifacts = Some(vec![Artifact {
             platform: "linux-x86_64".to_string(),
             url: "file:///tmp/tama.tar.gz".to_string(),
             sha256: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-        }];
+        }]);
         assert!(validate_release_manifest(&manifest)
             .unwrap_err()
             .contains("must declare schema"));
+
+        let manifest = serde_json::from_str::<ReleaseManifest>(
+            r#"{
+  "schema": "tama.release-manifest.v1",
+  "stable": "0.1.0",
+  "artifacts": [],
+  "releases": [{
+    "version": "0.1.0",
+    "artifacts": [{
+      "platform": "linux-x86_64",
+      "url": "file:///tmp/tama.tar.gz",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }]
+  }]
+}"#,
+        )
+        .unwrap();
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("must not mix"));
     }
 
     #[test]
@@ -1198,7 +1225,7 @@ mod tests {
             stable: Some("../evil".to_string()),
             nightly: None,
             version: None,
-            artifacts: vec![],
+            artifacts: None,
             releases: vec![],
         };
         assert!(validate_release_manifest(&manifest)
@@ -1233,11 +1260,11 @@ mod tests {
             stable: None,
             nightly: None,
             version: Some("0.1.0".to_string()),
-            artifacts: vec![Artifact {
+            artifacts: Some(vec![Artifact {
                 platform: "linux-x86_64".to_string(),
                 url: "file:///tmp/tama-0.1.0.tar.gz".to_string(),
                 sha256: "legacy".to_string(),
-            }],
+            }]),
             releases: vec![],
         };
 
