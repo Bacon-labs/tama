@@ -1161,7 +1161,7 @@ fn extract_obligations(
     let mut pending = ObligationMeta::default();
     for line in strip_lean_block_comments(&text).lines() {
         let trimmed = line.trim();
-        let metadata_line = parse_obligation_metadata(trimmed, &mut pending);
+        let metadata_line = parse_obligation_metadata(trimmed, &proof_path, &mut pending)?;
         if let Some(captures) = theorem_re.captures(trimmed) {
             if let Some(meta) = pending.take_if_obligation() {
                 let name = captures.get(1).expect("theorem name").as_str();
@@ -1216,20 +1216,24 @@ impl ObligationMeta {
     }
 }
 
-fn parse_obligation_metadata(line: &str, meta: &mut ObligationMeta) -> bool {
+fn parse_obligation_metadata(
+    line: &str,
+    proof_path: &Utf8Path,
+    meta: &mut ObligationMeta,
+) -> Result<bool> {
     let mut parsed = false;
     if let Some(raw) = line.trim_start().strip_prefix("-- tama:") {
         parsed = true;
-        apply_tama_metadata(raw, meta);
+        apply_tama_metadata(raw, proof_path, meta)?;
     }
     if line.contains("tama.") {
         parsed = true;
         apply_tama_attribute_metadata(line, meta);
     }
-    parsed
+    Ok(parsed)
 }
 
-fn apply_tama_metadata(raw: &str, meta: &mut ObligationMeta) {
+fn apply_tama_metadata(raw: &str, proof_path: &Utf8Path, meta: &mut ObligationMeta) -> Result<()> {
     let values = parse_key_values(raw);
     if values.contains_key("obligation") {
         meta.tagged = true;
@@ -1259,6 +1263,11 @@ fn apply_tama_metadata(raw: &str, meta: &mut ObligationMeta) {
             meta.tagged = true;
             meta.kind = Some(ObligationKind::Postcondition);
         }
+        Some(kind) => {
+            return Err(Error::Adapter(format!(
+                "unsupported Tama obligation kind `{kind}` in {proof_path}"
+            )));
+        }
         _ => {}
     }
     if let Some(function) = values.get("function").filter(|value| !value.is_empty()) {
@@ -1280,8 +1289,14 @@ fn apply_tama_metadata(raw: &str, meta: &mut ObligationMeta) {
             meta.coverage.path = None;
             meta.coverage.reason = None;
         }
+        Some(coverage) => {
+            return Err(Error::Adapter(format!(
+                "unsupported Tama coverage disposition `{coverage}` in {proof_path}"
+            )));
+        }
         _ => {}
     }
+    Ok(())
 }
 
 fn apply_tama_attribute_metadata(line: &str, meta: &mut ObligationMeta) {
@@ -2114,6 +2129,55 @@ end proof.CounterProof
             obligations[3].coverage.reason.as_deref(),
             Some("Symbolic state only.")
         );
+    }
+
+    #[test]
+    fn obligation_metadata_rejects_unknown_comment_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        let proof = root.join("verity/proof/CounterProof.lean");
+        tama_common::write_string(
+            &proof,
+            r#"
+namespace proof.CounterProof
+
+-- tama: obligation kind=safety coverage=mirror path=test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount
+theorem bad_kind : True := by
+  trivial
+
+end proof.CounterProof
+"#,
+        )
+        .unwrap();
+
+        let err = extract_obligations(&root, &config, "Counter", "proof.CounterProof").unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::Adapter(message) if message.contains("unsupported Tama obligation kind `safety`")
+        ));
+
+        tama_common::write_string(
+            &proof,
+            r#"
+namespace proof.CounterProof
+
+-- tama: obligation kind=postcondition coverage=example path=test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount
+theorem bad_coverage : True := by
+  trivial
+
+end proof.CounterProof
+"#,
+        )
+        .unwrap();
+
+        let err = extract_obligations(&root, &config, "Counter", "proof.CounterProof").unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::Adapter(message) if message.contains("unsupported Tama coverage disposition `example`")
+        ));
     }
 
     #[test]
