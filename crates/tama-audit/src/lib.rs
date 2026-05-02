@@ -80,7 +80,7 @@ pub fn run(root: &Utf8Path, opts: AuditOptions) -> Result<AuditReport> {
     let mut issues = Vec::new();
     for check in checks {
         match check {
-            Check::Structure => structure(root, &manifests, &mut issues),
+            Check::Structure => structure(root, &config, &manifests, &mut issues),
             Check::Selectors => selectors(&manifests, &mut issues),
             Check::StorageLayout => storage(&manifests, &mut issues),
             Check::Coverage => coverage(root, &manifests, &mut issues),
@@ -118,7 +118,12 @@ fn load_manifests(root: &Utf8Path, manifest_dir: &Utf8Path) -> Result<Vec<Contra
     Ok(manifests)
 }
 
-fn structure(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
+fn structure(
+    root: &Utf8Path,
+    config: &tama_config::TamaConfig,
+    manifests: &[ContractManifest],
+    issues: &mut Vec<Issue>,
+) {
     if manifests.is_empty() {
         issues.push(issue(
             "structure",
@@ -127,6 +132,46 @@ fn structure(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<I
             "no contract manifests found",
             None,
         ));
+    }
+    for path in [
+        &config.paths.src,
+        &config.paths.spec,
+        &config.paths.proof,
+        &config.paths.test,
+        &config.paths.generated,
+        &config.paths.out,
+    ] {
+        if !root.join(path).is_dir() {
+            issues.push(issue(
+                "structure",
+                None,
+                "TAMA_STRUCTURE_MISSING_DIR",
+                format!("configured directory is missing: {path}"),
+                Some(path.clone()),
+            ));
+        }
+    }
+    match tama_config::parse_foundry_config(root) {
+        Ok(foundry) if !config.paths.test.starts_with(&foundry.test) => {
+            issues.push(issue(
+                "structure",
+                None,
+                "TAMA_STRUCTURE_TEST_ROOT",
+                format!(
+                    "mirror test path `{}` is outside Foundry test directory `{}`",
+                    config.paths.test, foundry.test
+                ),
+                Some(config.paths.test.clone()),
+            ));
+        }
+        Ok(_) => {}
+        Err(err) => issues.push(issue(
+            "structure",
+            None,
+            "TAMA_STRUCTURE_FOUNDRY_CONFIG",
+            format!("could not read foundry.toml: {err}"),
+            Some("foundry.toml".into()),
+        )),
     }
     for manifest in manifests {
         for path in [
@@ -147,6 +192,26 @@ fn structure(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<I
                 ));
             }
         }
+        let test_path = config
+            .paths
+            .test
+            .join(format!("{}.t.sol", manifest.contract));
+        if !root.join(&test_path).is_file() {
+            issues.push(issue(
+                "structure",
+                Some(&manifest.contract),
+                "TAMA_STRUCTURE_MISSING_TEST",
+                format!("mirror test file is missing: {test_path}"),
+                Some(test_path),
+            ));
+        }
+        for (aggregate, import) in [
+            ("TamaSrc.lean", manifest.lean.implementation_module.as_str()),
+            ("TamaSpec.lean", manifest.lean.spec_module.as_str()),
+            ("TamaProof.lean", manifest.lean.proof_module.as_str()),
+        ] {
+            check_aggregate_import(root, manifest, aggregate, import, issues);
+        }
         for path in [&manifest.artifacts.interface, &manifest.artifacts.deployer] {
             let abs = root.join(path);
             if abs.is_file() && !tama_common::has_generated_header(&abs).unwrap_or(false) {
@@ -159,6 +224,36 @@ fn structure(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<I
                 ));
             }
         }
+    }
+}
+
+fn check_aggregate_import(
+    root: &Utf8Path,
+    manifest: &ContractManifest,
+    aggregate: &str,
+    import: &str,
+    issues: &mut Vec<Issue>,
+) {
+    let path = root.join(aggregate);
+    let Ok(text) = tama_common::read_to_string(&path) else {
+        issues.push(issue(
+            "structure",
+            Some(&manifest.contract),
+            "TAMA_STRUCTURE_MISSING_AGGREGATE",
+            format!("aggregate module is missing: {aggregate}"),
+            Some(aggregate.into()),
+        ));
+        return;
+    };
+    let expected = format!("import {import}");
+    if !text.lines().any(|line| line.trim() == expected) {
+        issues.push(issue(
+            "structure",
+            Some(&manifest.contract),
+            "TAMA_STRUCTURE_AGGREGATE_IMPORT",
+            format!("{aggregate} does not import {import}"),
+            Some(aggregate.into()),
+        ));
     }
 }
 
@@ -381,5 +476,89 @@ mod tests {
         };
         assert!(!report.has_failures(false));
         assert!(report.has_failures(true));
+    }
+
+    #[test]
+    fn structure_reports_missing_test_and_aggregate_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = tama_config::TamaConfig {
+            project: tama_config::ProjectConfig {
+                name: "test".to_string(),
+                verity: "0.1.0".to_string(),
+            },
+            paths: tama_config::PathsConfig::default(),
+            yul: tama_config::YulConfig {
+                solc: "0.8.33".to_string(),
+                optimizer: true,
+                optimizer_runs: 200,
+                evm_version: "cancun".to_string(),
+                metadata_hash: "none".to_string(),
+            },
+            trust: tama_config::TrustConfig::default(),
+        };
+        for dir in [
+            &config.paths.src,
+            &config.paths.spec,
+            &config.paths.proof,
+            &config.paths.test,
+            &config.paths.generated,
+            &config.paths.out,
+            &config.paths.out.join("yul"),
+        ] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        tama_common::write_string(&root.join("verity/src/Counter.lean"), "").unwrap();
+        tama_common::write_string(&root.join("verity/spec/CounterSpec.lean"), "").unwrap();
+        tama_common::write_string(&root.join("verity/proof/CounterProof.lean"), "").unwrap();
+        tama_common::write_string(&root.join("artifacts/yul/Counter.yul"), "").unwrap();
+        tama_common::write_generated(&root.join("src/generated/verity/CounterIface.sol"), "")
+            .unwrap();
+        tama_common::write_generated(&root.join("src/generated/verity/CounterDeployer.sol"), "")
+            .unwrap();
+        tama_common::write_string(&root.join("TamaSrc.lean"), "import src.Other\n").unwrap();
+        tama_common::write_string(&root.join("TamaSpec.lean"), "import spec.CounterSpec\n")
+            .unwrap();
+        tama_common::write_string(&root.join("TamaProof.lean"), "import proof.CounterProof\n")
+            .unwrap();
+
+        let mut issues = Vec::new();
+        structure(&root, &config, &[counter_manifest()], &mut issues);
+        let codes = issues
+            .iter()
+            .map(|issue| issue.code.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(codes.contains("TAMA_STRUCTURE_MISSING_TEST"));
+        assert!(codes.contains("TAMA_STRUCTURE_AGGREGATE_IMPORT"));
+    }
+
+    fn counter_manifest() -> ContractManifest {
+        ContractManifest {
+            schema: tama_manifest::SCHEMA.to_string(),
+            contract: "Counter".to_string(),
+            source: tama_manifest::SourcePaths {
+                implementation: "verity/src/Counter.lean".into(),
+                spec: "verity/spec/CounterSpec.lean".into(),
+                proof: "verity/proof/CounterProof.lean".into(),
+            },
+            lean: tama_manifest::LeanModules {
+                implementation_module: "src.Counter".to_string(),
+                spec_module: "spec.CounterSpec".to_string(),
+                proof_module: "proof.CounterProof".to_string(),
+            },
+            abi: tama_manifest::Abi::default(),
+            storage: vec![],
+            obligations: vec![],
+            artifacts: tama_manifest::ArtifactPaths {
+                yul: "artifacts/yul/Counter.yul".into(),
+                creation_bytecode: "artifacts/bytecode/Counter.bin".into(),
+                runtime_bytecode: "artifacts/bytecode/Counter.runtime.bin".into(),
+                bytecode_hash: None,
+                solc_input: "artifacts/solc-json/Counter.input.json".into(),
+                solc_output: "artifacts/solc-json/Counter.output.json".into(),
+                interface: "src/generated/verity/CounterIface.sol".into(),
+                deployer: "src/generated/verity/CounterDeployer.sol".into(),
+            },
+        }
     }
 }

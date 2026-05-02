@@ -1124,6 +1124,7 @@ dependencies = [
  "tama-common",
  "tama-config",
  "tama-manifest",
+ "tempfile",
  "thiserror",
 ]
 
