@@ -20,6 +20,12 @@ pub enum Error {
     UnknownField(String),
     #[error("missing artifact for {contract}: {path}. Run `tama build`.")]
     MissingArtifact { contract: String, path: Utf8PathBuf },
+    #[error("failed to parse JSON artifact {path}: {source}")]
+    InvalidJsonArtifact {
+        path: Utf8PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +97,7 @@ fn inspect_json(
             .iter()
             .filter_map(|obligation| obligation.coverage.path.as_ref())
             .collect::<Vec<_>>()),
-        Field::Trust => trust_artifacts(root, paths),
+        Field::Trust => trust_artifacts(root, paths)?,
     })
 }
 
@@ -150,9 +156,7 @@ fn inspect_human(
             .collect::<Vec<_>>()
             .join("\n")
             + "\n"),
-        Field::Trust => Ok(serde_json::to_string_pretty(&trust_artifacts(root, paths))
-            .unwrap_or_default()
-            + "\n"),
+        Field::Trust => Ok(serde_json::to_string_pretty(&trust_artifacts(root, paths)?)? + "\n"),
     }
 }
 
@@ -191,18 +195,18 @@ fn selectors_json(manifest: &ContractManifest) -> Value {
     })
 }
 
-fn trust_artifacts(root: &Utf8Path, paths: &PathsConfig) -> Value {
-    let axiom_probe = read_json(root.join(paths.out.join("trust-probe/axioms.json")));
-    let trust_report = read_json(root.join(paths.out.join("trust-report.json")));
-    let assumption_report = read_json(root.join(paths.out.join("assumption-report.json")));
+fn trust_artifacts(root: &Utf8Path, paths: &PathsConfig) -> Result<Value> {
+    let axiom_probe = read_json(root.join(paths.out.join("trust-probe/axioms.json")))?;
+    let trust_report = read_json(root.join(paths.out.join("trust-report.json")))?;
+    let assumption_report = read_json(root.join(paths.out.join("assumption-report.json")))?;
     if axiom_probe.is_none() && trust_report.is_none() && assumption_report.is_none() {
-        json!({})
+        Ok(json!({}))
     } else {
-        json!({
+        Ok(json!({
             "axiom_probe": axiom_probe,
             "trust_report": trust_report,
             "assumption_report": assumption_report,
-        })
+        }))
     }
 }
 
@@ -217,9 +221,15 @@ fn artifact(root: &Utf8Path, manifest: &ContractManifest, path: &Utf8Path) -> Re
     Ok(tama_common::read_to_string(&abs)?)
 }
 
-fn read_json(path: Utf8PathBuf) -> Option<Value> {
-    let text = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&text).ok()
+fn read_json(path: Utf8PathBuf) -> Result<Option<Value>> {
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(tama_common::io_error(path, err).into()),
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|source| Error::InvalidJsonArtifact { path, source })
 }
 
 impl From<serde_json::Error> for Error {
@@ -274,6 +284,36 @@ solc = "0.8.33"
 
         assert!(manifest_out.contains(r#""contract": "Counter""#));
         assert!(trust_out.contains("axiom_probe"));
+    }
+
+    #[test]
+    fn inspect_trust_rejects_invalid_json_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            r#"[project]
+name = "custom"
+verity = "0.1.0"
+
+[yul]
+solc = "0.8.33"
+"#,
+        )
+        .unwrap();
+        let manifest = counter_manifest("artifacts");
+        manifest
+            .write_pretty(&root.join("artifacts/manifest/Counter.json"))
+            .unwrap();
+        tama_common::write_string(&root.join("artifacts/trust-report.json"), "{").unwrap();
+
+        let err = inspect(&root, "Counter", Field::Trust, true).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::InvalidJsonArtifact { path, .. }
+                if path.as_str().ends_with("artifacts/trust-report.json")
+        ));
     }
 
     #[test]
