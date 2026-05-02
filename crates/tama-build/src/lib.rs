@@ -311,7 +311,7 @@ pub fn adapt_verity_outputs(
     fs::create_dir_all(&manifest_dir)
         .map_err(|source| tama_common::io_error(manifest_dir.clone(), source))?;
     let storage_report =
-        read_json_optional(&root.join(config.paths.out.join("layout-report.json")))?;
+        read_json_required(&root.join(config.paths.out.join("layout-report.json")))?;
     let mut manifests = Vec::new();
     let mut abi_paths = Vec::new();
     for entry in
@@ -915,16 +915,18 @@ fn discover_modules(src: &Utf8Path) -> Result<Vec<String>> {
     Ok(modules)
 }
 
-fn read_json_optional(path: &Utf8Path) -> Result<Option<Value>> {
+fn read_json_required(path: &Utf8Path) -> Result<Value> {
     if !path.is_file() {
-        return Ok(None);
+        return Err(Error::Adapter(format!(
+            "Verity layout report is missing: {path}"
+        )));
     }
     let text = tama_common::read_to_string(path)?;
     let value = serde_json::from_str(&text).map_err(|source| tama_manifest::Error::Json {
         path: path.to_owned(),
         source,
     })?;
-    Ok(Some(value))
+    Ok(value)
 }
 
 fn parse_abi(path: &Utf8Path) -> Result<Abi> {
@@ -1064,10 +1066,7 @@ fn abi_entry_name(path: &Utf8Path, kind: &str, name: Option<String>) -> Result<S
     Ok(name)
 }
 
-fn parse_storage(report: &Option<Value>, contract: &str) -> Result<Vec<StorageEntry>> {
-    let Some(report) = report else {
-        return Ok(Vec::new());
-    };
+fn parse_storage(report: &Value, contract: &str) -> Result<Vec<StorageEntry>> {
     let Some(contracts) = report.get("contracts").and_then(Value::as_array) else {
         return Err(Error::Adapter(
             "layout report is missing `contracts[]`".to_string(),
@@ -1077,7 +1076,9 @@ fn parse_storage(report: &Option<Value>, contract: &str) -> Result<Vec<StorageEn
         .iter()
         .find(|entry| entry.get("contract").and_then(Value::as_str) == Some(contract))
     else {
-        return Ok(Vec::new());
+        return Err(Error::Adapter(format!(
+            "{contract} layout report entry is missing"
+        )));
     };
     let Some(fields) = fields.get("fields").and_then(Value::as_array) else {
         return Err(Error::Adapter(format!(
@@ -2120,6 +2121,7 @@ end proof.CounterProof
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         write_contract_files(&root, "Counter");
+        write_empty_layout_report(&root, &["Counter"]);
         tama_common::write_string(&root.join("artifacts/abi/Counter.abi.json"), "[]\n").unwrap();
         tama_common::write_string(&root.join("artifacts/yul/Counter.yul"), "{ }\n").unwrap();
         let manifests = adapt_verity_outputs(&root, &test_config(), None).unwrap();
@@ -2146,6 +2148,7 @@ end proof.CounterProof
             tama_common::write_string(&root.join(format!("artifacts/yul/{contract}.yul")), "{ }\n")
                 .unwrap();
         }
+        write_empty_layout_report(&root, &["Zed", "Alpha"]);
 
         let manifests = adapt_verity_outputs(&root, &test_config(), None).unwrap();
 
@@ -2164,6 +2167,7 @@ end proof.CounterProof
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         tama_common::write_string(&root.join("artifacts/abi/Counter.abi.json"), "[]\n").unwrap();
         tama_common::write_string(&root.join("artifacts/yul/Counter.yul"), "{ }\n").unwrap();
+        write_empty_layout_report(&root, &["Counter"]);
 
         let err = adapt_verity_outputs(&root, &test_config(), None).unwrap_err();
 
@@ -2174,8 +2178,25 @@ end proof.CounterProof
     }
 
     #[test]
+    fn adapter_rejects_missing_layout_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        write_contract_files(&root, "Counter");
+        tama_common::write_string(&root.join("artifacts/abi/Counter.abi.json"), "[]\n").unwrap();
+        tama_common::write_string(&root.join("artifacts/yul/Counter.yul"), "{ }\n").unwrap();
+
+        let err = adapt_verity_outputs(&root, &test_config(), None).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::Adapter(message) if message.contains("layout report is missing")
+        ));
+        assert!(!root.join("artifacts/manifest/Counter.json").exists());
+    }
+
+    #[test]
     fn storage_adapter_parses_supported_layout_fields() {
-        let report = Some(json!({
+        let report = json!({
             "contracts": [{
                 "contract": "Counter",
                 "fields": [
@@ -2185,7 +2206,7 @@ end proof.CounterProof
                     {"name": "balances", "canonicalSlot": 3, "type": {"kind": "mapping"}}
                 ]
             }]
-        }));
+        });
 
         let storage = parse_storage(&report, "Counter").unwrap();
 
@@ -2205,29 +2226,40 @@ end proof.CounterProof
 
     #[test]
     fn storage_adapter_rejects_malformed_layout_fields() {
-        let missing_contracts = Some(json!({}));
+        let missing_contracts = json!({});
         assert!(matches!(
             parse_storage(&missing_contracts, "Counter"),
             Err(Error::Adapter(message)) if message.contains("contracts")
         ));
 
-        let missing_slot = Some(json!({
+        let missing_contract = json!({
+            "contracts": [{
+                "contract": "Other",
+                "fields": []
+            }]
+        });
+        assert!(matches!(
+            parse_storage(&missing_contract, "Counter"),
+            Err(Error::Adapter(message)) if message.contains("Counter layout report entry is missing")
+        ));
+
+        let missing_slot = json!({
             "contracts": [{
                 "contract": "Counter",
                 "fields": [{"name": "count", "type": {"kind": "uint256"}}]
             }]
-        }));
+        });
         assert!(matches!(
             parse_storage(&missing_slot, "Counter"),
             Err(Error::Adapter(message)) if message.contains("canonicalSlot")
         ));
 
-        let unsupported_type = Some(json!({
+        let unsupported_type = json!({
             "contracts": [{
                 "contract": "Counter",
                 "fields": [{"name": "nested", "canonicalSlot": 0, "type": {"kind": "nestedMapping"}}]
             }]
-        }));
+        });
         assert!(matches!(
             parse_storage(&unsupported_type, "Counter"),
             Err(Error::Adapter(message)) if message.contains("unsupported storage type")
@@ -2523,6 +2555,18 @@ TAMA_AXIOMS_END proof.CounterProof.increment_post
         tama_common::write_string(
             &root.join(format!("verity/proof/{contract}Proof.lean")),
             &format!("import spec.{contract}Spec\n"),
+        )
+        .unwrap();
+    }
+
+    fn write_empty_layout_report(root: &Utf8Path, contracts: &[&str]) {
+        let contracts = contracts
+            .iter()
+            .map(|contract| json!({ "contract": contract, "fields": [] }))
+            .collect::<Vec<_>>();
+        tama_common::write_string(
+            &root.join("artifacts/layout-report.json"),
+            &(serde_json::to_string_pretty(&json!({ "contracts": contracts })).unwrap() + "\n"),
         )
         .unwrap();
     }
