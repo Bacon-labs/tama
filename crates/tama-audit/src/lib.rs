@@ -839,6 +839,24 @@ fn audit_axiom_probe(
     seen_decls: &mut BTreeSet<String>,
     issues: &mut Vec<Issue>,
 ) {
+    if value.get("schema").and_then(|value| value.as_str()) != Some("tama.trust-probe.v1") {
+        issues.push(issue(
+            "trust-boundary",
+            None,
+            "TAMA_TRUST_PROBE_INVALID",
+            "trust probe has unsupported or missing schema",
+            Some(relative_path(root, path)),
+        ));
+    }
+    if value.get("method").and_then(|value| value.as_str()) != Some("lean.collectAxioms") {
+        issues.push(issue(
+            "trust-boundary",
+            None,
+            "TAMA_TRUST_PROBE_INVALID",
+            "trust probe must be generated with Lean.collectAxioms",
+            Some(relative_path(root, path)),
+        ));
+    }
     let Some(obligations) = value.get("obligations").and_then(|value| value.as_array()) else {
         issues.push(issue(
             "trust-boundary",
@@ -1684,7 +1702,7 @@ mod tests {
         std::fs::create_dir_all(root.join("artifacts/trust-probe")).unwrap();
         tama_common::write_string(
             &root.join("artifacts/trust-probe/axioms.json"),
-            r#"{"obligations":[]}"#,
+            r#"{"schema":"tama.trust-probe.v1","method":"lean.collectAxioms","obligations":[]}"#,
         )
         .unwrap();
         let mut manifest = counter_manifest();
@@ -1694,6 +1712,26 @@ mod tests {
         assert!(issues
             .iter()
             .any(|issue| issue.code == "TAMA_TRUST_DECL_MISSING"));
+    }
+
+    #[test]
+    fn trust_rejects_legacy_probe_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        std::fs::create_dir_all(root.join("artifacts/trust-probe")).unwrap();
+        tama_common::write_string(
+            &root.join("artifacts/trust-probe/axioms.json"),
+            r#"{"obligations":[]}"#,
+        )
+        .unwrap();
+
+        let mut issues = Vec::new();
+        trust(&root, &config, &[counter_manifest()], &mut issues);
+
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_TRUST_PROBE_INVALID"));
     }
 
     #[test]

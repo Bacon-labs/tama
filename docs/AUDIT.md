@@ -10,6 +10,7 @@ Checks:
 - `coverage`: every public invariant and postcondition has mirror or proof-only coverage; proof-only entries require a reason.
 - Mirror coverage must point to a property-shaped Foundry symbol: `testFuzz*` or `invariant_*`.
 - `trust-boundary`: Lean axiom dependencies, `sorryAx`, unallowlisted axioms, unresolved declarations, and Verity trust-surface reports from `artifacts/trust-report.json` and `artifacts/assumption-report.json`.
+- Trust probes are generated with Lean's `collectAxioms` API and must emit `tama.trust-probe.v1` JSON.
 
 Negative fixture coverage must include deleted files, corrupt selectors/topics, duplicate storage slots, missing mirrors, example-shaped mirror tests, empty proof-only reasons, unresolved Lean declarations, inserted `sorry`, inserted custom axioms, and hand-edited generated bridge files.
 

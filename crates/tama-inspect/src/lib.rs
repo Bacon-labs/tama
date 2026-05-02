@@ -265,7 +265,7 @@ solc = "0.8.33"
             .unwrap();
         tama_common::write_string(
             &root.join("build/tama/trust-probe/axioms.json"),
-            r#"{"obligations":[]}"#,
+            r#"{"schema":"tama.trust-probe.v1","method":"lean.collectAxioms","obligations":[]}"#,
         )
         .unwrap();
 
