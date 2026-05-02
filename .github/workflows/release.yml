@@ -67,12 +67,12 @@ jobs:
           forge --version
           solc --version
       - name: Build Tama
-        run: cargo build --workspace
+        run: cargo build --workspace --release
       - name: Fresh starter quickstart
         shell: bash
         run: |
           set -euxo pipefail
-          export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          export PATH="$PWD/target/release:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
           tmp="$(mktemp -d)"
           project="$tmp/my-protocol"
           tama init "$project"
@@ -99,7 +99,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          export PATH="$PWD/target/release:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
           counter="$PWD/fixtures/projects/counter"
           git -C "$counter" init
           (cd "$counter" && lake update)
@@ -146,8 +146,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
-          cargo build --workspace
+          export PATH="$PWD/target/release:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          cargo build --workspace --release
           tmp="$(mktemp -d)"
           echo "TAMA_RELEASE_NEGATIVE_TMP=$tmp" >> "$GITHUB_ENV"
           tama init "$tmp/base"
@@ -157,7 +157,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          export PATH="$PWD/target/release:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
           base="$TAMA_RELEASE_NEGATIVE_TMP/base"
 
           expect_audit_failure() {
