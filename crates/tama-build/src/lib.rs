@@ -1747,6 +1747,29 @@ impl From<AbiParam> for Param {
 mod tests {
     use super::*;
 
+    struct EnvVarGuard {
+        key: &'static str,
+        old: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let old = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.old {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
     #[test]
     fn canned_solc_error_is_detected() {
         let value = json!({
@@ -2713,6 +2736,43 @@ TAMA_AXIOMS_END proof.CounterProof.increment_post
         assert_eq!(input["settings"]["optimizer"]["enabled"], false);
         assert_eq!(input["settings"]["optimizer"]["runs"], 1);
         assert_eq!(input["settings"]["optimizer"]["details"]["yul"], false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compile_yul_rejects_wrong_solc_version_before_bytecode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let solc = root.join("solc");
+        tama_common::write_string(
+            &solc,
+            "#!/bin/sh\nprintf '%s\\n' 'Version: 0.8.32+commit.test'\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&solc).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&solc, permissions).unwrap();
+        let _solc_guard = EnvVarGuard::set("TAMA_SOLC", solc.as_os_str());
+        let config = test_config();
+        let mut manifest = test_manifest("Counter");
+        tama_common::write_string(
+            &root.join(&manifest.artifacts.yul),
+            "object \"Counter\" { code { stop() } }\n",
+        )
+        .unwrap();
+
+        let err = compile_yul_standard_json(&root, &config, &mut manifest).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::Toolchain(tama_toolchain::Error::ToolVersionMismatch(message))
+                if message.contains("0.8.32") && message.contains("0.8.33")
+        ));
+        assert!(!root.join(&manifest.artifacts.creation_bytecode).exists());
+        assert!(!root.join(&manifest.artifacts.runtime_bytecode).exists());
+        assert_eq!(manifest.artifacts.bytecode_hash, None);
     }
 
     fn test_config() -> TamaConfig {
