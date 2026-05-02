@@ -453,14 +453,26 @@ pub fn compile_yul_standard_json(
 }
 
 pub fn generate_bridge(root: &Utf8Path, manifest: &ContractManifest) -> Result<()> {
-    let bytecode = if root.join(&manifest.artifacts.creation_bytecode).is_file() {
-        tama_common::read_to_string(&root.join(&manifest.artifacts.creation_bytecode))?
-            .trim()
-            .trim_start_matches("0x")
-            .to_string()
-    } else {
-        String::new()
-    };
+    let bytecode_path = root.join(&manifest.artifacts.creation_bytecode);
+    if !bytecode_path.is_file() {
+        return Err(Error::MissingArtifact {
+            contract: manifest.contract.clone(),
+            path: bytecode_path,
+        });
+    }
+    let bytecode = tama_common::read_to_string(&bytecode_path)?
+        .trim()
+        .trim_start_matches("0x")
+        .to_string();
+    if bytecode.is_empty()
+        || bytecode.len() % 2 != 0
+        || !bytecode.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        return Err(Error::Adapter(format!(
+            "creation bytecode for {} is empty or not valid hex",
+            manifest.contract
+        )));
+    }
     tama_common::write_generated(
         &root.join(&manifest.artifacts.interface),
         &interface_sol(manifest),
@@ -1552,6 +1564,33 @@ mod tests {
         };
         assert!(interface_sol(&manifest)
             .contains("function getCount() external view returns (uint256);"));
+    }
+
+    #[test]
+    fn bridge_generation_requires_valid_creation_bytecode() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let manifest = test_manifest("Counter");
+
+        let err = generate_bridge(&root, &manifest).unwrap_err();
+        assert!(matches!(err, Error::MissingArtifact { .. }));
+
+        tama_common::write_string(&root.join(&manifest.artifacts.creation_bytecode), "0x0\n")
+            .unwrap();
+        let err = generate_bridge(&root, &manifest).unwrap_err();
+        assert!(matches!(err, Error::Adapter(message) if message.contains("valid hex")));
+
+        tama_common::write_string(
+            &root.join(&manifest.artifacts.creation_bytecode),
+            "0x6000\n",
+        )
+        .unwrap();
+        generate_bridge(&root, &manifest).unwrap();
+        assert!(
+            tama_common::read_to_string(&root.join(&manifest.artifacts.deployer))
+                .unwrap()
+                .contains(r#"hex"6000""#)
+        );
     }
 
     #[test]
