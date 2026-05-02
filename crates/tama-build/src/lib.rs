@@ -2261,6 +2261,52 @@ end proof.CounterProof
     }
 
     #[test]
+    fn counter_fixture_obligations_cover_behavior_with_properties() {
+        let root =
+            Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/counter");
+        let config = tama_config::load_config(&root).unwrap();
+        let obligations =
+            extract_obligations(&root, &config, "Counter", "proof.CounterProof").unwrap();
+        let test = tama_common::read_to_string(&root.join("test/verity/Counter.t.sol")).unwrap();
+
+        let functions = obligations
+            .iter()
+            .filter_map(|obligation| obligation.function.as_deref())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(functions.contains("increment"));
+        assert!(functions.contains("decrement"));
+        assert!(functions.contains("getCount"));
+        assert!(test.contains("function invariant_countTracksModel"));
+        assert!(test.contains("handlerIncrement"));
+        assert!(test.contains("handlerDecrement"));
+
+        for obligation in &obligations {
+            assert_ne!(obligation.coverage.disposition, CoverageDisposition::None);
+            let path = obligation
+                .coverage
+                .path
+                .as_deref()
+                .expect("fixture obligations use mirror coverage paths");
+            let symbol = path
+                .rsplit_once(':')
+                .map(|(_, symbol)| symbol)
+                .expect("mirror path is symbol-qualified");
+            let name = symbol
+                .rsplit_once('.')
+                .map(|(_, name)| name)
+                .expect("mirror path includes contract and function");
+            assert!(
+                name.starts_with("testFuzz") || name.starts_with("invariant_"),
+                "{name} should be a Foundry property"
+            );
+            assert!(
+                test.contains(&format!("function {name}")),
+                "{name} should be declared in Counter.t.sol"
+            );
+        }
+    }
+
+    #[test]
     fn adapter_accepts_upstream_abi_file_suffix() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
