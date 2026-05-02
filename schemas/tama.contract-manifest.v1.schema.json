@@ -238,6 +238,30 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["disposition", "path", "reason"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "disposition": { "const": "mirror" } },
+            "required": ["disposition"]
+          },
+          "then": {
+            "properties": {
+              "path": { "$ref": "#/$defs/mirrorPath" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "disposition": { "const": "proof_only" } },
+            "required": ["disposition"]
+          },
+          "then": {
+            "properties": {
+              "reason": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ],
       "properties": {
         "disposition": { "enum": ["mirror", "proof_only", "none"] },
         "path": {
@@ -254,6 +278,23 @@
         }
       }
     },
+    "mirrorPath": {
+      "type": "string",
+      "minLength": 1,
+      "allOf": [
+        {
+          "not": {
+            "anyOf": [
+              { "pattern": "^/" },
+              { "pattern": "(^|/)\\.\\.(/|$)" }
+            ]
+          }
+        },
+        {
+          "pattern": "^[^:]+:[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*\\.(testFuzz[A-Za-z0-9_]*|invariant_[A-Za-z0-9_]*)$"
+        }
+      ]
+    },
     "obligation": {
       "type": "object",
       "additionalProperties": false,
@@ -265,6 +306,25 @@
         "contract",
         "function",
         "coverage"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": { "enum": ["invariant", "postcondition"] }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "coverage": {
+                "properties": {
+                  "disposition": { "enum": ["mirror", "proof_only"] }
+                }
+              }
+            }
+          }
+        }
       ],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
