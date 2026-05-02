@@ -9,6 +9,8 @@ artifacts/bytecode/<Contract>.runtime.bin
 artifacts/solc-json/<Contract>.input.json
 artifacts/solc-json/<Contract>.output.json
 artifacts/manifest/<Contract>.json
+artifacts/trust-report.json
+artifacts/assumption-report.json
 artifacts/trust-probe/
 src/generated/verity/<Contract>Iface.sol
 src/generated/verity/<Contract>Deployer.sol

@@ -559,6 +559,8 @@ For each public obligation, Tama queries or extracts the Lean environment depend
 
 The allowlist lives in `tama.toml` under `[trust.allow_axioms]`. `sorryAx` is hard-denied and is not allowlistable for `tama audit`.
 
+Tama also consumes Verity compiler trust-surface artifacts when present. `artifacts/trust-report.json` localizes unsupported or partially modeled mechanics, unsafe blocks, and unchecked dependency buckets; `artifacts/assumption-report.json` flattens undischarged compiler assumptions. Undischarged assumptions must be explicitly allowlisted by their stable assumption or axiom identifier.
+
 ### `tama inspect <Contract> <field>`
 
 `forge inspect` analog for Verity artifacts.

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -42,6 +42,13 @@ pub enum Check {
     StorageLayout,
     Coverage,
     TrustBoundary,
+}
+
+struct TrustContext<'a> {
+    root: &'a Utf8Path,
+    path: &'a Utf8Path,
+    deny: &'a BTreeSet<String>,
+    allow: &'a BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -539,6 +546,8 @@ fn trust(
     let deny = BTreeSet::from(["sorryAx".to_string()]);
     let allow = &config.trust.allow_axioms;
     let probe = root.join(config.paths.out.join("trust-probe").join("axioms.json"));
+    let trust_report = root.join(config.paths.out.join("trust-report.json"));
+    let assumption_report = root.join(config.paths.out.join("assumption-report.json"));
     let public_obligations = manifests
         .iter()
         .flat_map(|manifest| {
@@ -551,33 +560,14 @@ fn trust(
         .collect::<Vec<_>>();
     let mut seen_decls = BTreeSet::new();
     if probe.is_file() {
-        let text = tama_common::read_to_string(&probe).unwrap_or_default();
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-        if let Some(obligations) = value.get("obligations").and_then(|value| value.as_array()) {
-            for obligation in obligations {
-                let decl = obligation
-                    .get("lean_decl")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("<unknown>");
-                seen_decls.insert(decl.to_string());
-                for axiom in obligation
-                    .get("axioms")
-                    .and_then(|value| value.as_array())
-                    .into_iter()
-                    .flatten()
-                {
-                    let axiom = axiom.as_str().unwrap_or("");
-                    if deny.contains(axiom) || !allow.contains_key(axiom) {
-                        issues.push(issue(
-                            "trust-boundary",
-                            None,
-                            "TAMA_TRUST_AXIOM",
-                            format!("{decl} depends on unallowlisted axiom `{axiom}`"),
-                            Some(probe.clone()),
-                        ));
-                    }
-                }
-            }
+        if let Some(value) = read_trust_json(
+            root,
+            &probe,
+            "TAMA_TRUST_PROBE_INVALID",
+            "trust probe",
+            issues,
+        ) {
+            audit_axiom_probe(root, &probe, &value, &deny, allow, &mut seen_decls, issues);
         }
     } else if !public_obligations.is_empty() {
         issues.push(issue(
@@ -590,6 +580,40 @@ fn trust(
             ),
             Some(probe.strip_prefix(root).unwrap_or(&probe).to_owned()),
         ));
+    }
+    let assumption_report_is_valid = if assumption_report.is_file() {
+        read_trust_json(
+            root,
+            &assumption_report,
+            "TAMA_TRUST_ASSUMPTION_REPORT_INVALID",
+            "assumption report",
+            issues,
+        )
+        .map(|value| {
+            audit_assumption_report(root, &assumption_report, &value, &deny, allow, issues);
+        })
+        .is_some()
+    } else {
+        false
+    };
+    if trust_report.is_file() {
+        if let Some(value) = read_trust_json(
+            root,
+            &trust_report,
+            "TAMA_TRUST_REPORT_INVALID",
+            "trust report",
+            issues,
+        ) {
+            audit_verity_trust_report(
+                root,
+                &trust_report,
+                &value,
+                !assumption_report_is_valid,
+                &deny,
+                allow,
+                issues,
+            );
+        }
     }
     for (manifest, obligation) in public_obligations {
         if !obligation.lean_decl.contains('.') {
@@ -614,6 +638,707 @@ fn trust(
             ));
         }
     }
+}
+
+fn audit_axiom_probe(
+    root: &Utf8Path,
+    path: &Utf8Path,
+    value: &serde_json::Value,
+    deny: &BTreeSet<String>,
+    allow: &BTreeMap<String, String>,
+    seen_decls: &mut BTreeSet<String>,
+    issues: &mut Vec<Issue>,
+) {
+    let Some(obligations) = value.get("obligations").and_then(|value| value.as_array()) else {
+        issues.push(issue(
+            "trust-boundary",
+            None,
+            "TAMA_TRUST_PROBE_INVALID",
+            "trust probe is missing `obligations[]`",
+            Some(relative_path(root, path)),
+        ));
+        return;
+    };
+    for obligation in obligations {
+        let decl = obligation
+            .get("lean_decl")
+            .and_then(|value| value.as_str())
+            .unwrap_or("<unknown>");
+        seen_decls.insert(decl.to_string());
+        let Some(axioms) = obligation.get("axioms").and_then(|value| value.as_array()) else {
+            issues.push(issue(
+                "trust-boundary",
+                None,
+                "TAMA_TRUST_PROBE_INVALID",
+                format!("{decl} trust probe entry is missing `axioms[]`"),
+                Some(relative_path(root, path)),
+            ));
+            continue;
+        };
+        for axiom in axioms {
+            let Some(axiom) = axiom.as_str() else {
+                issues.push(issue(
+                    "trust-boundary",
+                    None,
+                    "TAMA_TRUST_PROBE_INVALID",
+                    format!("{decl} trust probe entry contains a non-string axiom"),
+                    Some(relative_path(root, path)),
+                ));
+                continue;
+            };
+            if deny.contains(axiom) || !allow.contains_key(axiom) {
+                issues.push(issue(
+                    "trust-boundary",
+                    None,
+                    "TAMA_TRUST_AXIOM",
+                    format!("{decl} depends on unallowlisted axiom `{axiom}`"),
+                    Some(relative_path(root, path)),
+                ));
+            }
+        }
+    }
+}
+
+fn audit_verity_trust_report(
+    root: &Utf8Path,
+    path: &Utf8Path,
+    value: &serde_json::Value,
+    audit_assumptions: bool,
+    deny: &BTreeSet<String>,
+    allow: &BTreeMap<String, String>,
+    issues: &mut Vec<Issue>,
+) {
+    let Some(contracts) = value.get("contracts").and_then(|value| value.as_array()) else {
+        issues.push(issue(
+            "trust-boundary",
+            None,
+            "TAMA_TRUST_REPORT_INVALID",
+            "trust report is missing `contracts[]`",
+            Some(relative_path(root, path)),
+        ));
+        return;
+    };
+    for contract in contracts {
+        let Some(name) = contract.get("contract").and_then(|value| value.as_str()) else {
+            issues.push(issue(
+                "trust-boundary",
+                None,
+                "TAMA_TRUST_REPORT_INVALID",
+                "trust report contract entry is missing `contract`",
+                Some(relative_path(root, path)),
+            ));
+            continue;
+        };
+        audit_contract_trust_surfaces(root, path, contract, name, issues);
+        audit_contract_unchecked_dependencies(root, path, contract, name, issues);
+        if audit_assumptions {
+            audit_contract_external_assumptions(root, path, contract, name, deny, allow, issues);
+        }
+    }
+}
+
+fn audit_contract_trust_surfaces(
+    root: &Utf8Path,
+    path: &Utf8Path,
+    contract: &serde_json::Value,
+    contract_name: &str,
+    issues: &mut Vec<Issue>,
+) {
+    let surface_fields = [
+        ("modeledLowLevelMechanics", "low-level mechanics"),
+        ("notModeledEventEmission", "not-modeled event emission"),
+        (
+            "notModeledProxyUpgradeability",
+            "proxy/delegatecall upgradeability",
+        ),
+        (
+            "partiallyModeledLinearMemoryMechanics",
+            "partially modeled linear-memory mechanics",
+        ),
+        (
+            "partiallyModeledRuntimeIntrospection",
+            "partially modeled runtime introspection",
+        ),
+        ("unsafeBlocks", "unsafe blocks"),
+    ];
+    let mut contract_surfaces = Vec::new();
+    for (field, label) in surface_fields {
+        let Some(values) = contract.get(field).and_then(|value| value.as_array()) else {
+            issues.push(issue(
+                "trust-boundary",
+                Some(contract_name),
+                "TAMA_TRUST_REPORT_INVALID",
+                format!("{contract_name} trust report is missing `{field}[]`"),
+                Some(relative_path(root, path)),
+            ));
+            continue;
+        };
+        if values.iter().any(|value| !value.is_string()) {
+            issues.push(issue(
+                "trust-boundary",
+                Some(contract_name),
+                "TAMA_TRUST_REPORT_INVALID",
+                format!("{contract_name} trust report `{field}[]` contains a non-string value"),
+                Some(relative_path(root, path)),
+            ));
+            continue;
+        }
+        let values = values
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+        if !values.is_empty() {
+            contract_surfaces.push((label, values.join(", ")));
+        }
+    }
+    let Some(sites) = contract
+        .get("usageSites")
+        .and_then(|value| value.as_array())
+    else {
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_REPORT_INVALID",
+            format!("{contract_name} trust report is missing `usageSites[]`"),
+            Some(relative_path(root, path)),
+        ));
+        return;
+    };
+    if sites.is_empty() {
+        for (label, values) in contract_surfaces {
+            issues.push(issue(
+                "trust-boundary",
+                Some(contract_name),
+                "TAMA_TRUST_SURFACE",
+                format!("{contract_name} uses {label}: {values}"),
+                Some(relative_path(root, path)),
+            ));
+        }
+    }
+    for site in sites {
+        let kind = site
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .unwrap_or("site");
+        let name = site
+            .get("name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("<unknown>");
+        for (field, label) in surface_fields {
+            let Some(values) = site.get(field).and_then(|value| value.as_array()) else {
+                issues.push(issue(
+                    "trust-boundary",
+                    Some(contract_name),
+                    "TAMA_TRUST_REPORT_INVALID",
+                    format!("{contract_name} [{kind}:{name}] trust site is missing `{field}[]`"),
+                    Some(relative_path(root, path)),
+                ));
+                continue;
+            };
+            if values.iter().any(|value| !value.is_string()) {
+                issues.push(issue(
+                    "trust-boundary",
+                    Some(contract_name),
+                    "TAMA_TRUST_REPORT_INVALID",
+                    format!(
+                        "{contract_name} [{kind}:{name}] trust site `{field}[]` contains a non-string value"
+                    ),
+                    Some(relative_path(root, path)),
+                ));
+                continue;
+            }
+            let values = values
+                .iter()
+                .filter_map(|value| value.as_str())
+                .collect::<Vec<_>>();
+            if !values.is_empty() {
+                issues.push(issue(
+                    "trust-boundary",
+                    Some(contract_name),
+                    "TAMA_TRUST_SURFACE",
+                    format!(
+                        "{contract_name} [{kind}:{name}] uses {label}: {}",
+                        values.join(", ")
+                    ),
+                    Some(relative_path(root, path)),
+                ));
+            }
+        }
+    }
+}
+
+fn audit_contract_unchecked_dependencies(
+    root: &Utf8Path,
+    path: &Utf8Path,
+    contract: &serde_json::Value,
+    contract_name: &str,
+    issues: &mut Vec<Issue>,
+) {
+    let Some(has_unchecked) = contract
+        .get("hasUncheckedDependencies")
+        .and_then(|value| value.as_bool())
+    else {
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_REPORT_INVALID",
+            format!("{contract_name} trust report is missing `hasUncheckedDependencies`"),
+            Some(relative_path(root, path)),
+        ));
+        return;
+    };
+    if !has_unchecked {
+        return;
+    }
+    let unchecked = contract
+        .get("proofStatus")
+        .and_then(|value| value.get("unchecked"))
+        .map(describe_status_bucket)
+        .unwrap_or_else(|| "unchecked dependencies".to_string());
+    issues.push(issue(
+        "trust-boundary",
+        Some(contract_name),
+        "TAMA_TRUST_UNCHECKED",
+        format!("{contract_name} has unchecked trust dependencies: {unchecked}"),
+        Some(relative_path(root, path)),
+    ));
+}
+
+fn audit_contract_external_assumptions(
+    root: &Utf8Path,
+    path: &Utf8Path,
+    contract: &serde_json::Value,
+    contract_name: &str,
+    deny: &BTreeSet<String>,
+    allow: &BTreeMap<String, String>,
+    issues: &mut Vec<Issue>,
+) {
+    let ctx = TrustContext {
+        root,
+        path,
+        deny,
+        allow,
+    };
+    let Some(external) = contract.get("externalAssumptions") else {
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_REPORT_INVALID",
+            format!("{contract_name} trust report is missing `externalAssumptions`"),
+            Some(relative_path(root, path)),
+        ));
+        return;
+    };
+    let Some(local_obligations) = contract
+        .get("localObligations")
+        .and_then(|value| value.as_array())
+    else {
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_REPORT_INVALID",
+            format!("{contract_name} trust report is missing `localObligations[]`"),
+            Some(relative_path(root, path)),
+        ));
+        return;
+    };
+    for obligation in local_obligations {
+        let name = obligation
+            .get("name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("<unknown>");
+        let status = obligation
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("<unknown>");
+        if status != "proved" {
+            issues.push(issue(
+                "trust-boundary",
+                Some(contract_name),
+                "TAMA_TRUST_LOCAL_OBLIGATION",
+                format!("{contract_name} has undischarged local obligation `{name}` ({status})"),
+                Some(relative_path(root, path)),
+            ));
+        }
+    }
+    let Some(primitives) = external
+        .get("axiomatizedPrimitives")
+        .and_then(|value| value.as_array())
+    else {
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_REPORT_INVALID",
+            format!("{contract_name} trust report is missing `externalAssumptions.axiomatizedPrimitives[]`"),
+            Some(relative_path(root, path)),
+        ));
+        return;
+    };
+    for primitive in primitives {
+        let assumption = primitive
+            .get("assumption")
+            .and_then(|value| value.as_str())
+            .or_else(|| primitive.get("primitive").and_then(|value| value.as_str()))
+            .unwrap_or("");
+        check_allowed_assumption(
+            &ctx,
+            contract_name,
+            assumption,
+            "axiomatized primitive",
+            issues,
+        );
+    }
+    let Some(externals) = external
+        .get("linkedExternals")
+        .and_then(|value| value.as_array())
+    else {
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_REPORT_INVALID",
+            format!(
+                "{contract_name} trust report is missing `externalAssumptions.linkedExternals[]`"
+            ),
+            Some(relative_path(root, path)),
+        ));
+        return;
+    };
+    for entry in externals {
+        let name = entry
+            .get("name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("<unknown>");
+        check_axiom_array(&ctx, contract_name, entry, name, "linked external", issues);
+    }
+    let Some(ecm_axioms) = external.get("ecmAxioms").and_then(|value| value.as_array()) else {
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_REPORT_INVALID",
+            format!("{contract_name} trust report is missing `externalAssumptions.ecmAxioms[]`"),
+            Some(relative_path(root, path)),
+        ));
+        return;
+    };
+    for entry in ecm_axioms {
+        let assumption = entry
+            .get("assumption")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let module = entry
+            .get("module")
+            .and_then(|value| value.as_str())
+            .unwrap_or("<unknown>");
+        check_allowed_assumption(
+            &ctx,
+            contract_name,
+            assumption,
+            &format!("ECM module `{module}`"),
+            issues,
+        );
+    }
+    let Some(modules) = external
+        .get("ecmModules")
+        .and_then(|value| value.as_array())
+    else {
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_REPORT_INVALID",
+            format!("{contract_name} trust report is missing `externalAssumptions.ecmModules[]`"),
+            Some(relative_path(root, path)),
+        ));
+        return;
+    };
+    for entry in modules {
+        let module = entry
+            .get("module")
+            .and_then(|value| value.as_str())
+            .unwrap_or("<unknown>");
+        if entry
+            .get("axioms")
+            .and_then(|value| value.as_array())
+            .is_some_and(|axioms| axioms.is_empty())
+            && entry.get("status").and_then(|value| value.as_str()) != Some("proved")
+        {
+            issues.push(issue(
+                "trust-boundary",
+                Some(contract_name),
+                "TAMA_TRUST_ASSUMPTION",
+                format!(
+                    "{contract_name} ECM module `{module}` has an undischarged assumption without a declared allowlist identifier"
+                ),
+                Some(relative_path(root, path)),
+            ));
+        }
+    }
+}
+
+fn audit_assumption_report(
+    root: &Utf8Path,
+    path: &Utf8Path,
+    value: &serde_json::Value,
+    deny: &BTreeSet<String>,
+    allow: &BTreeMap<String, String>,
+    issues: &mut Vec<Issue>,
+) {
+    let ctx = TrustContext {
+        root,
+        path,
+        deny,
+        allow,
+    };
+    let Some(contracts) = value.get("contracts").and_then(|value| value.as_array()) else {
+        issues.push(issue(
+            "trust-boundary",
+            None,
+            "TAMA_TRUST_ASSUMPTION_REPORT_INVALID",
+            "assumption report is missing `contracts[]`",
+            Some(relative_path(root, path)),
+        ));
+        return;
+    };
+    for contract in contracts {
+        let Some(contract_name) = contract.get("contract").and_then(|value| value.as_str()) else {
+            issues.push(issue(
+                "trust-boundary",
+                None,
+                "TAMA_TRUST_ASSUMPTION_REPORT_INVALID",
+                "assumption report contract entry is missing `contract`",
+                Some(relative_path(root, path)),
+            ));
+            continue;
+        };
+        let Some(undischarged) = contract
+            .get("undischarged")
+            .and_then(|value| value.as_array())
+        else {
+            issues.push(issue(
+                "trust-boundary",
+                Some(contract_name),
+                "TAMA_TRUST_ASSUMPTION_REPORT_INVALID",
+                format!("{contract_name} assumption report is missing `undischarged[]`"),
+                Some(relative_path(root, path)),
+            ));
+            continue;
+        };
+        for entry in undischarged {
+            audit_assumption_entry(&ctx, contract_name, entry, issues);
+        }
+    }
+}
+
+fn audit_assumption_entry(
+    ctx: &TrustContext<'_>,
+    contract_name: &str,
+    entry: &serde_json::Value,
+    issues: &mut Vec<Issue>,
+) {
+    let category = entry
+        .get("category")
+        .and_then(|value| value.as_str())
+        .unwrap_or("<unknown>");
+    let name = entry
+        .get("name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("<unknown>");
+    let status = entry
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or("<unknown>");
+    if status == "unchecked" {
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_UNCHECKED",
+            format!("{contract_name} has unchecked {category} `{name}`"),
+            Some(relative_path(ctx.root, ctx.path)),
+        ));
+    }
+    match category {
+        "axiomatizedPrimitive" => {
+            let assumption = entry
+                .get("assumption")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.is_empty())
+                .unwrap_or(name);
+            check_allowed_assumption(
+                ctx,
+                contract_name,
+                assumption,
+                "axiomatized primitive",
+                issues,
+            );
+        }
+        "linkedExternal" => {
+            check_axiom_array(ctx, contract_name, entry, name, "linked external", issues)
+        }
+        "ecmAxiom" => check_allowed_assumption(ctx, contract_name, name, "ECM axiom", issues),
+        "localObligation" => issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_LOCAL_OBLIGATION",
+            format!("{contract_name} has undischarged local obligation `{name}` ({status})"),
+            Some(relative_path(ctx.root, ctx.path)),
+        )),
+        "ecmModule" => {
+            if entry
+                .get("axioms")
+                .and_then(|value| value.as_array())
+                .is_some_and(|axioms| axioms.is_empty())
+            {
+                issues.push(issue(
+                    "trust-boundary",
+                    Some(contract_name),
+                    "TAMA_TRUST_ASSUMPTION",
+                    format!(
+                        "{contract_name} ECM module `{name}` has an undischarged assumption without a declared allowlist identifier"
+                    ),
+                    Some(relative_path(ctx.root, ctx.path)),
+                ));
+            }
+        }
+        _ => issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_ASSUMPTION_REPORT_INVALID",
+            format!("{contract_name} assumption report has unknown category `{category}`"),
+            Some(relative_path(ctx.root, ctx.path)),
+        )),
+    }
+}
+
+fn check_axiom_array(
+    ctx: &TrustContext<'_>,
+    contract_name: &str,
+    entry: &serde_json::Value,
+    name: &str,
+    label: &str,
+    issues: &mut Vec<Issue>,
+) {
+    let Some(axioms) = entry.get("axioms").and_then(|value| value.as_array()) else {
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_ASSUMPTION",
+            format!("{contract_name} {label} `{name}` is missing declared axioms"),
+            Some(relative_path(ctx.root, ctx.path)),
+        ));
+        return;
+    };
+    if axioms.is_empty() && entry.get("status").and_then(|value| value.as_str()) != Some("proved") {
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_ASSUMPTION",
+            format!("{contract_name} {label} `{name}` has an undischarged assumption without a declared allowlist identifier"),
+            Some(relative_path(ctx.root, ctx.path)),
+        ));
+    }
+    for axiom in axioms {
+        let Some(axiom) = axiom.as_str() else {
+            issues.push(issue(
+                "trust-boundary",
+                Some(contract_name),
+                "TAMA_TRUST_ASSUMPTION",
+                format!("{contract_name} {label} `{name}` contains a non-string axiom"),
+                Some(relative_path(ctx.root, ctx.path)),
+            ));
+            continue;
+        };
+        check_allowed_assumption(ctx, contract_name, axiom, label, issues);
+    }
+}
+
+fn check_allowed_assumption(
+    ctx: &TrustContext<'_>,
+    contract_name: &str,
+    identifier: &str,
+    label: &str,
+    issues: &mut Vec<Issue>,
+) {
+    if identifier.is_empty() {
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_ASSUMPTION",
+            format!("{contract_name} {label} has an empty allowlist identifier"),
+            Some(relative_path(ctx.root, ctx.path)),
+        ));
+    } else if ctx.deny.contains(identifier) || !ctx.allow.contains_key(identifier) {
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_ASSUMPTION",
+            format!("{contract_name} {label} depends on unallowlisted assumption `{identifier}`"),
+            Some(relative_path(ctx.root, ctx.path)),
+        ));
+    }
+}
+
+fn describe_status_bucket(value: &serde_json::Value) -> String {
+    let mut parts = Vec::new();
+    for key in [
+        "axiomatizedPrimitives",
+        "linkedExternals",
+        "ecmModules",
+        "localObligations",
+    ] {
+        let entries = value
+            .get(key)
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+        if !entries.is_empty() {
+            parts.push(format!("{key}={}", entries.join(",")));
+        }
+    }
+    if parts.is_empty() {
+        "unchecked dependencies".to_string()
+    } else {
+        parts.join("; ")
+    }
+}
+
+fn read_trust_json(
+    root: &Utf8Path,
+    path: &Utf8Path,
+    code: &str,
+    label: &str,
+    issues: &mut Vec<Issue>,
+) -> Option<serde_json::Value> {
+    let text = match tama_common::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => {
+            issues.push(issue(
+                "trust-boundary",
+                None,
+                code,
+                format!("could not read {label}: {err}"),
+                Some(relative_path(root, path)),
+            ));
+            return None;
+        }
+    };
+    match serde_json::from_str(&text) {
+        Ok(value) => Some(value),
+        Err(err) => {
+            issues.push(issue(
+                "trust-boundary",
+                None,
+                code,
+                format!("could not parse {label}: {err}"),
+                Some(relative_path(root, path)),
+            ));
+            None
+        }
+    }
+}
+
+fn relative_path(root: &Utf8Path, path: &Utf8Path) -> Utf8PathBuf {
+    path.strip_prefix(root).unwrap_or(path).to_owned()
 }
 
 fn issue(
@@ -731,6 +1456,113 @@ mod tests {
         assert!(issues
             .iter()
             .any(|issue| issue.code == "TAMA_TRUST_DECL_MISSING"));
+    }
+
+    #[test]
+    fn trust_report_fails_on_unallowlisted_compiler_assumption() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        write_trust_report(&root, verity_trust_report_json());
+        let mut issues = Vec::new();
+        trust(&root, &config, &[counter_manifest()], &mut issues);
+        assert!(issues.iter().any(|issue| {
+            issue.code == "TAMA_TRUST_ASSUMPTION"
+                && issue.message.contains("keccak256_memory_slice_matches_evm")
+        }));
+    }
+
+    #[test]
+    fn trust_report_accepts_allowlisted_compiler_assumption() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut config = test_config();
+        config.trust.allow_axioms.insert(
+            "keccak256_memory_slice_matches_evm".to_string(),
+            "Accepted pinned Verity keccak primitive assumption".to_string(),
+        );
+        write_trust_report(&root, verity_trust_report_json());
+        let mut issues = Vec::new();
+        trust(&root, &config, &[counter_manifest()], &mut issues);
+        assert!(!issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_TRUST_ASSUMPTION"));
+    }
+
+    #[test]
+    fn assumption_report_fails_on_unallowlisted_undischarged_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        tama_common::write_string(
+            &root.join("artifacts/assumption-report.json"),
+            r#"{"contracts":[{"contract":"Counter","entries":[],"undischarged":[{"category":"axiomatizedPrimitive","siteKind":"function","siteName":"increment","name":"keccak256","status":"assumed","detail":"","assumption":"keccak256_memory_slice_matches_evm","module":"","axioms":[]}]}]}"#,
+        )
+        .unwrap();
+        let mut issues = Vec::new();
+        trust(&root, &config, &[counter_manifest()], &mut issues);
+        assert!(issues.iter().any(|issue| {
+            issue.code == "TAMA_TRUST_ASSUMPTION"
+                && issue.message.contains("keccak256_memory_slice_matches_evm")
+        }));
+    }
+
+    #[test]
+    fn trust_report_fails_on_undischarged_local_obligation_without_assumption_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut config = test_config();
+        config.trust.allow_axioms.insert(
+            "keccak256_memory_slice_matches_evm".to_string(),
+            "Accepted pinned Verity keccak primitive assumption".to_string(),
+        );
+        let report = verity_trust_report_json().replacen(
+            r#""localObligations": []"#,
+            r#""localObligations": [{"name":"manual_refinement","status":"assumed","obligation":"Manual proof required"}]"#,
+            1,
+        );
+        write_trust_report(&root, &report);
+        let mut issues = Vec::new();
+        trust(&root, &config, &[counter_manifest()], &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_TRUST_LOCAL_OBLIGATION"));
+    }
+
+    #[test]
+    fn trust_report_fails_on_low_level_surface() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut config = test_config();
+        config.trust.allow_axioms.insert(
+            "keccak256_memory_slice_matches_evm".to_string(),
+            "Accepted pinned Verity keccak primitive assumption".to_string(),
+        );
+        write_trust_report(
+            &root,
+            &verity_trust_report_json().replace(
+                r#""modeledLowLevelMechanics": []"#,
+                r#""modeledLowLevelMechanics": ["staticcall"]"#,
+            ),
+        );
+        let mut issues = Vec::new();
+        trust(&root, &config, &[counter_manifest()], &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_TRUST_SURFACE"));
+    }
+
+    #[test]
+    fn trust_report_fails_closed_on_unknown_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        write_trust_report(&root, r#"{"contracts":{}}"#);
+        let mut issues = Vec::new();
+        trust(&root, &config, &[counter_manifest()], &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_TRUST_REPORT_INVALID"));
     }
 
     #[test]
@@ -884,6 +1716,113 @@ solc = "0.8.33"
 "#,
         )
         .unwrap();
+    }
+
+    fn write_trust_report(root: &Utf8Path, contents: &str) {
+        tama_common::write_string(&root.join("artifacts/trust-report.json"), contents).unwrap();
+    }
+
+    fn verity_trust_report_json() -> &'static str {
+        r#"{
+  "contracts": [
+    {
+      "contract": "Counter",
+      "modeledLowLevelMechanics": [],
+      "notModeledEventEmission": [],
+      "notModeledProxyUpgradeability": [],
+      "partiallyModeledLinearMemoryMechanics": [],
+      "partiallyModeledRuntimeIntrospection": [],
+      "axiomatizedPrimitives": ["keccak256"],
+      "localObligations": [],
+      "unsafeBlocks": [],
+      "proofStatus": {
+        "proved": {
+          "axiomatizedPrimitives": [],
+          "linkedExternals": [],
+          "ecmModules": [],
+          "localObligations": []
+        },
+        "assumed": {
+          "axiomatizedPrimitives": ["keccak256"],
+          "linkedExternals": [],
+          "ecmModules": [],
+          "localObligations": []
+        },
+        "unchecked": {
+          "axiomatizedPrimitives": [],
+          "linkedExternals": [],
+          "ecmModules": [],
+          "localObligations": []
+        }
+      },
+      "hasUncheckedDependencies": false,
+      "proofBoundary": {
+        "compilerModelsMechanics": true,
+        "proofInterpretersModelMechanics": false,
+        "calleeBehaviorRequiresAssumptions": true
+      },
+      "usageSites": [
+        {
+          "kind": "function",
+          "name": "increment",
+          "modeledLowLevelMechanics": [],
+          "notModeledEventEmission": [],
+          "notModeledProxyUpgradeability": [],
+          "partiallyModeledLinearMemoryMechanics": [],
+          "partiallyModeledRuntimeIntrospection": [],
+          "axiomatizedPrimitives": ["keccak256"],
+          "proofStatus": {
+            "proved": {
+              "axiomatizedPrimitives": [],
+              "linkedExternals": [],
+              "ecmModules": [],
+              "localObligations": []
+            },
+            "assumed": {
+              "axiomatizedPrimitives": ["keccak256"],
+              "linkedExternals": [],
+              "ecmModules": [],
+              "localObligations": []
+            },
+            "unchecked": {
+              "axiomatizedPrimitives": [],
+              "linkedExternals": [],
+              "ecmModules": [],
+              "localObligations": []
+            }
+          },
+          "localObligations": [],
+          "unsafeBlocks": [],
+          "hasUncheckedDependencies": false,
+          "externalAssumptions": {
+            "axiomatizedPrimitives": [
+              {
+                "primitive": "keccak256",
+                "status": "assumed",
+                "assumption": "keccak256_memory_slice_matches_evm"
+              }
+            ],
+            "linkedExternals": [],
+            "ecmAxioms": [],
+            "ecmModules": []
+          }
+        }
+      ],
+      "externalAssumptions": {
+        "axiomatizedPrimitives": [
+          {
+            "primitive": "keccak256",
+            "status": "assumed",
+            "assumption": "keccak256_memory_slice_matches_evm"
+          }
+        ],
+        "linkedExternals": [],
+        "ecmAxioms": [],
+        "ecmModules": []
+      }
+    }
+  ]
+}"#
     }
 
     fn test_config() -> tama_config::TamaConfig {

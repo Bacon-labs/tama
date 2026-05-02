@@ -91,9 +91,7 @@ fn inspect_json(root: &Utf8Path, manifest: &ContractManifest, field: Field) -> R
             .iter()
             .filter_map(|obligation| obligation.coverage.path.as_ref())
             .collect::<Vec<_>>()),
-        Field::Trust => {
-            read_json(root.join("artifacts/trust-probe/axioms.json")).unwrap_or_else(|| json!({}))
-        }
+        Field::Trust => trust_artifacts(root),
     })
 }
 
@@ -132,9 +130,24 @@ fn inspect_human(root: &Utf8Path, manifest: &ContractManifest, field: Field) -> 
             .collect::<Vec<_>>()
             .join("\n")
             + "\n"),
-        Field::Trust => Ok(read_json(root.join("artifacts/trust-probe/axioms.json"))
-            .map(|value| serde_json::to_string_pretty(&value).unwrap_or_default() + "\n")
-            .unwrap_or_else(|| "{}\n".to_string())),
+        Field::Trust => {
+            Ok(serde_json::to_string_pretty(&trust_artifacts(root)).unwrap_or_default() + "\n")
+        }
+    }
+}
+
+fn trust_artifacts(root: &Utf8Path) -> Value {
+    let axiom_probe = read_json(root.join("artifacts/trust-probe/axioms.json"));
+    let trust_report = read_json(root.join("artifacts/trust-report.json"));
+    let assumption_report = read_json(root.join("artifacts/assumption-report.json"));
+    if axiom_probe.is_none() && trust_report.is_none() && assumption_report.is_none() {
+        json!({})
+    } else {
+        json!({
+            "axiom_probe": axiom_probe,
+            "trust_report": trust_report,
+            "assumption_report": assumption_report,
+        })
     }
 }
 
