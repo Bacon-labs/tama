@@ -810,7 +810,7 @@ fn lake_package_cache() -> Result<Option<Utf8PathBuf>, String> {
     if let Some(value) = std::env::var_os(LAKE_PACKAGE_CACHE_ENV) {
         return lake_package_cache_from_override(value);
     }
-    default_lake_package_cache().map(Some)
+    Ok(default_lake_package_cache())
 }
 
 fn lake_package_cache_from_override(
@@ -827,15 +827,27 @@ fn lake_package_cache_from_override(
     utf8_path_from_path_buf(PathBuf::from(value), LAKE_PACKAGE_CACHE_ENV).map(Some)
 }
 
-fn default_lake_package_cache() -> Result<Utf8PathBuf, String> {
-    let base = if cfg!(target_os = "macos") {
-        home_dir("HOME")?.join("Library/Caches")
-    } else if let Some(cache_home) = std::env::var_os("XDG_CACHE_HOME") {
-        PathBuf::from(cache_home)
+fn default_lake_package_cache() -> Option<Utf8PathBuf> {
+    default_lake_package_cache_from_parts(
+        std::env::var_os("HOME").map(PathBuf::from),
+        std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from),
+        cfg!(target_os = "macos"),
+    )
+}
+
+fn default_lake_package_cache_from_parts(
+    home: Option<PathBuf>,
+    xdg_cache_home: Option<PathBuf>,
+    macos: bool,
+) -> Option<Utf8PathBuf> {
+    let base = if macos {
+        home?.join("Library/Caches")
+    } else if let Some(cache_home) = xdg_cache_home {
+        cache_home
     } else {
-        home_dir("HOME")?.join(".cache")
+        home?.join(".cache")
     };
-    utf8_path_from_path_buf(base.join("tama/lake-packages"), "default cache directory")
+    Utf8PathBuf::from_path_buf(base.join("tama/lake-packages")).ok()
 }
 
 fn seed_lake_package_cache_for_build(root: &Utf8Path) -> Result<(), String> {
@@ -886,12 +898,6 @@ fn lake_manifest_git_revs(root: &Utf8Path) -> Result<BTreeMap<String, String>, S
         package_revs.insert(name.to_string(), rev.to_string());
     }
     Ok(package_revs)
-}
-
-fn home_dir(name: &str) -> Result<PathBuf, String> {
-    std::env::var_os(name)
-        .map(PathBuf::from)
-        .ok_or_else(|| format!("cannot determine Tama cache directory because ${name} is unset"))
 }
 
 fn utf8_path_from_path_buf(path: PathBuf, label: &str) -> Result<Utf8PathBuf, String> {
@@ -1636,6 +1642,32 @@ mod tests {
                 .unwrap()
                 .as_deref(),
             Some(Utf8Path::new("/tmp/tama-cache"))
+        );
+    }
+
+    #[test]
+    fn default_lake_package_cache_is_optional_when_home_is_missing() {
+        assert_eq!(
+            default_lake_package_cache_from_parts(None, None, false),
+            None
+        );
+        assert_eq!(
+            default_lake_package_cache_from_parts(None, None, true),
+            None
+        );
+        assert_eq!(
+            default_lake_package_cache_from_parts(Some(PathBuf::from("/home/alice")), None, false)
+                .as_deref(),
+            Some(Utf8Path::new("/home/alice/.cache/tama/lake-packages"))
+        );
+        assert_eq!(
+            default_lake_package_cache_from_parts(
+                None,
+                Some(PathBuf::from("/tmp/cache-home")),
+                false
+            )
+            .as_deref(),
+            Some(Utf8Path::new("/tmp/cache-home/tama/lake-packages"))
         );
     }
 
