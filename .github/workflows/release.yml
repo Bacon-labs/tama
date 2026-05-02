@@ -419,6 +419,25 @@ jobs:
             exit 1
           fi
           test ! -e "$tmp/home"
+          python3 - "$tmp/manifest.json" <<'PY'
+          import json
+          import sys
+
+          json.dump({
+              "schema": "tama.release-manifest.v1",
+              "stable": "0.1.0",
+              "releases": [{
+                  "version": "0.1.0",
+                  "artifacts": [],
+              }],
+          }, open(sys.argv[1], "w", encoding="utf-8"))
+          PY
+          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
+          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
+            echo "installer accepted an empty release artifact list" >&2
+            exit 1
+          fi
+          test ! -e "$tmp/home"
           python3 - "$tmp/manifest.json" "$tmp/tama.tar.gz" "$tmp/pwned" <<'PY'
           import json
           import shlex
@@ -712,7 +731,10 @@ jobs:
               release_version = require_string(release.get("version"), "release.version")
               if not SAFE_VERSION.fullmatch(release_version) or ".." in release_version:
                   raise SystemExit(f"unsafe release version: {release_version}")
-              for artifact in release.get("artifacts", []):
+              artifacts = release.get("artifacts")
+              if not isinstance(artifacts, list) or not artifacts:
+                  raise SystemExit(f"release {release_version} is missing artifacts")
+              for artifact in artifacts:
                   reject_unknown_keys(artifact, {"platform", "url", "sha256"}, "artifact")
                   platform = require_string(artifact.get("platform"), "artifact.platform")
                   if not SAFE_PLATFORM.fullmatch(platform):

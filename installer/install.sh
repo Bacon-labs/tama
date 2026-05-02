@@ -137,18 +137,19 @@ if not SAFE_VERSION.fullmatch(selected) or ".." in selected:
 for release in releases:
     reject_unknown_keys(release, {"version", "artifacts"}, "release")
     release_version = require_string(release.get("version"), "release.version")
-    if release_version != selected:
-        continue
+    release_artifacts = release.get("artifacts")
+    if not isinstance(release_artifacts, list) or not release_artifacts:
+        raise SystemExit(f"release {release_version} is missing artifacts")
     if not SAFE_VERSION.fullmatch(release_version) or ".." in release_version:
         raise SystemExit(f"unsafe release version: {release_version}")
-    for artifact in release.get("artifacts", []):
+    for artifact in release_artifacts:
         reject_unknown_keys(artifact, {"platform", "url", "sha256"}, "artifact")
         artifact_platform = require_string(artifact.get("platform"), "artifact.platform")
-        if artifact_platform == platform:
-            artifact_url = require_string(artifact.get("url"), "artifact.url")
-            artifact_sha256 = require_string(artifact.get("sha256"), "artifact.sha256")
-            if not SAFE_SHA256.fullmatch(artifact_sha256):
-                raise SystemExit(f"invalid artifact SHA-256 for {platform} {selected}")
+        artifact_url = require_string(artifact.get("url"), "artifact.url")
+        artifact_sha256 = require_string(artifact.get("sha256"), "artifact.sha256")
+        if not SAFE_SHA256.fullmatch(artifact_sha256):
+            raise SystemExit(f"invalid artifact SHA-256 for {artifact_platform} {release_version}")
+        if release_version == selected and artifact_platform == platform:
             emit_env("VERSION", release_version)
             emit_env("URL", artifact_url)
             emit_env("SHA256", artifact_sha256)

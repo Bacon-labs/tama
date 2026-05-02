@@ -287,6 +287,12 @@ fn validate_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
     validate_artifacts(manifest.artifacts.as_deref().unwrap_or(&[]))?;
     for release in &manifest.releases {
         validate_release_version(&release.version)?;
+        if release.artifacts.is_empty() {
+            return Err(format!(
+                "release `{}` is missing artifacts",
+                release.version
+            ));
+        }
         validate_artifacts(&release.artifacts)?;
     }
     let cumulative_shape = manifest.schema.is_some()
@@ -1216,6 +1222,25 @@ mod tests {
         assert!(validate_release_manifest(&manifest)
             .unwrap_err()
             .contains("must not mix"));
+    }
+
+    #[test]
+    fn release_manifest_rejects_empty_release_artifacts() {
+        let manifest = ReleaseManifest {
+            schema: Some(RELEASE_MANIFEST_SCHEMA.to_string()),
+            stable: Some("0.1.0".to_string()),
+            nightly: None,
+            version: None,
+            artifacts: None,
+            releases: vec![Release {
+                version: "0.1.0".to_string(),
+                artifacts: vec![],
+            }],
+        };
+
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("missing artifacts"));
     }
 
     #[test]
