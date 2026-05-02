@@ -62,6 +62,6 @@ curl -L https://tama.tools/install.sh | sh
 
 ## Installer Safety
 
-Installation must reject unsafe manifest fields, bad signatures, bad hashes, absolute archive paths, `..` traversal, and unexpected archive file names before any binary is installed.
+Installation must reject unknown or unsafe manifest fields, bad signatures, bad hashes, absolute archive paths, `..` traversal, and unexpected archive file names before any binary is installed.
 
 `tamaup uninstall` removes the active `tama` binary and active marker, but keeps `tamaup` available so users can reinstall or switch versions later.

@@ -61,6 +61,7 @@ enum SelfCommand {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ReleaseManifest {
     #[serde(default)]
     schema: Option<String>,
@@ -77,12 +78,14 @@ struct ReleaseManifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Release {
     version: String,
     artifacts: Vec<Artifact>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Artifact {
     platform: String,
     url: String,
@@ -1063,6 +1066,52 @@ mod tests {
 
         let err = validate_release_manifest(&manifest).unwrap_err();
         assert!(err.contains("unsupported release manifest schema"));
+    }
+
+    #[test]
+    fn release_manifest_rejects_unknown_fields() {
+        let err = serde_json::from_str::<ReleaseManifest>(
+            r#"{
+  "schema": "tama.release-manifest.v1",
+  "stable": "0.1.0",
+  "extra": true,
+  "releases": []
+}"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
+
+        let err = serde_json::from_str::<ReleaseManifest>(
+            r#"{
+  "schema": "tama.release-manifest.v1",
+  "stable": "0.1.0",
+  "releases": [{
+    "version": "0.1.0",
+    "extra": true,
+    "artifacts": []
+  }]
+}"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
+
+        let err = serde_json::from_str::<ReleaseManifest>(
+            r#"{
+  "schema": "tama.release-manifest.v1",
+  "stable": "0.1.0",
+  "releases": [{
+    "version": "0.1.0",
+    "artifacts": [{
+      "platform": "linux-x86_64",
+      "url": "file:///tmp/tama.tar.gz",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "extra": true
+    }]
+  }]
+}"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
     }
 
     #[test]

@@ -93,8 +93,16 @@ def require_string(value, label):
 def emit_env(name, value):
     print(f"{name}={shlex.quote(value)}")
 
+def reject_unknown_keys(obj, allowed, label):
+    if not isinstance(obj, dict):
+        raise SystemExit(f"invalid release manifest field: {label}")
+    unknown = sorted(set(obj) - set(allowed))
+    if unknown:
+        raise SystemExit(f"unknown release manifest field in {label}: {unknown[0]}")
+
 manifest_path, platform, version = sys.argv[1:4]
 manifest = json.load(open(manifest_path, encoding="utf-8"))
+reject_unknown_keys(manifest, {"schema", "stable", "nightly", "version", "artifacts", "releases"}, "manifest")
 schema = manifest.get("schema")
 if schema is not None and schema != "tama.release-manifest.v1":
     raise SystemExit(f"unsupported release manifest schema: {schema}")
@@ -115,12 +123,14 @@ selected = require_string(selected, "selected version")
 if not SAFE_VERSION.fullmatch(selected) or ".." in selected:
     raise SystemExit(f"unsafe release version: {selected}")
 for release in releases:
+    reject_unknown_keys(release, {"version", "artifacts"}, "release")
     release_version = require_string(release.get("version"), "release.version")
     if release_version != selected:
         continue
     if not SAFE_VERSION.fullmatch(release_version) or ".." in release_version:
         raise SystemExit(f"unsafe release version: {release_version}")
     for artifact in release.get("artifacts", []):
+        reject_unknown_keys(artifact, {"platform", "url", "sha256"}, "artifact")
         artifact_platform = require_string(artifact.get("platform"), "artifact.platform")
         if artifact_platform == platform:
             artifact_url = require_string(artifact.get("url"), "artifact.url")
