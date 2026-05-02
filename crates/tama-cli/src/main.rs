@@ -2184,8 +2184,8 @@ mod tests {
             .unwrap()
             .replace("out = \"artifacts\"", "out = \"build/tama\"")
             .replace(
-                "generated = \"src/generated/verity\"",
-                "generated = \"gen/verity\"",
+                "generated_solidity = \"src/generated/verity\"",
+                "generated_solidity = \"gen/verity\"",
             );
         tama_common::write_string(&root.join("tama.toml"), &config).unwrap();
         let lakefile = tama_common::read_to_string(&root.join("lakefile.toml"))

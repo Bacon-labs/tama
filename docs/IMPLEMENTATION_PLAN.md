@@ -504,16 +504,16 @@ verity = "0.5.0"
 src = "verity/src"
 spec = "verity/spec"
 proof = "verity/proof"
-test = "test/verity"
+mirror_test = "test/verity"
 out = "artifacts"
-generated = "src/generated/verity"
+generated_solidity = "src/generated/verity"
 
 [yul]
 solc = "0.8.33"
 optimizer = true
 optimizer_runs = 200
 evm_version = "cancun"
-metadata_hash = "none"
+metadata_bytecode_hash = "none"
 
 [trust.allow_axioms]
 "Classical.choice" = "Lean standard classical reasoning accepted for this project"

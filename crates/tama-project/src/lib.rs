@@ -285,16 +285,16 @@ verity = "{verity}"
 src = "verity/src"
 spec = "verity/spec"
 proof = "verity/proof"
-test = "test/verity"
+mirror_test = "test/verity"
 out = "artifacts"
-generated = "src/generated/verity"
+generated_solidity = "src/generated/verity"
 
 [yul]
 solc = "{solc}"
 optimizer = true
 optimizer_runs = 200
 evm_version = "cancun"
-metadata_hash = "none"
+metadata_bytecode_hash = "none"
 
 [trust.allow_axioms]
 "Classical.choice" = "Lean standard classical reasoning accepted for this project"
@@ -770,16 +770,16 @@ verity = "{DEFAULT_VERITY_REV}"
 src = "contracts/src"
 spec = "contracts/spec"
 proof = "contracts/proof"
-test = "tests/verity"
+mirror_test = "tests/verity"
 out = "artifacts"
-generated = "src/generated/verity"
+generated_solidity = "src/generated/verity"
 
 [yul]
 solc = "0.8.33"
 optimizer = true
 optimizer_runs = 200
 evm_version = "cancun"
-metadata_hash = "none"
+metadata_bytecode_hash = "none"
 "#
             ),
         )
@@ -846,6 +846,9 @@ metadata_hash = "none"
         assert!(!source.contains(r#"emit "Transfer""#));
         let config = read_to_string(&root.join("tama.toml")).unwrap();
         assert!(config.contains(&format!("verity = \"{DEFAULT_VERITY_REV}\"")));
+        assert!(config.contains("mirror_test = \"test/verity\""));
+        assert!(config.contains("generated_solidity = \"src/generated/verity\""));
+        assert!(config.contains("metadata_bytecode_hash = \"none\""));
         let lake_manifest = read_to_string(&root.join("lake-manifest.json")).unwrap();
         assert!(lake_manifest.contains(&format!(r#""rev": "{DEFAULT_VERITY_REV}""#)));
         assert!(lake_manifest.contains(r#""name": "my_protocol""#));

@@ -675,6 +675,54 @@ solc = "0.8.33"
     }
 
     #[test]
+    fn spec_config_keys_and_legacy_aliases_parse() {
+        for (paths, metadata_key) in [
+            (
+                r#"
+[paths]
+mirror_test = "tests/verity"
+generated_solidity = "contracts/generated"
+"#,
+                "metadata_bytecode_hash",
+            ),
+            (
+                r#"
+[paths]
+test = "tests/verity"
+generated = "contracts/generated"
+"#,
+                "metadata_hash",
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = Utf8PathBuf::from_path_buf(dir.path().join("tama.toml")).unwrap();
+            tama_common::write_string(
+                &path,
+                &format!(
+                    r#"[project]
+name = "my-protocol"
+verity = "0.1.0"
+{paths}
+[yul]
+solc = "0.8.33"
+{metadata_key} = "none"
+"#
+                ),
+            )
+            .unwrap();
+
+            let cfg = parse_tama_config(&path).unwrap();
+
+            assert_eq!(cfg.paths.test, Utf8PathBuf::from("tests/verity"));
+            assert_eq!(
+                cfg.paths.generated,
+                Utf8PathBuf::from("contracts/generated")
+            );
+            assert_eq!(cfg.yul.metadata_hash, "none");
+        }
+    }
+
+    #[test]
     fn foundry_profile_default_paths_are_parsed() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
