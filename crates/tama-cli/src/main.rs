@@ -168,13 +168,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 })
                 .map_err(|err| err.to_string())?;
             if cli.json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(
-                        &serde_json::json!({ "manifests": status.manifests })
-                    )
-                    .map_err(|err| err.to_string())?
-                );
+                println!("{}", build_status_json(&status)?);
             } else {
                 println!("Build completed for {} manifest(s)", status.manifests.len());
             }
@@ -1515,6 +1509,13 @@ fn check_status_json() -> Result<String, String> {
     .map_err(|err| err.to_string())
 }
 
+fn build_status_json(status: &tama_build::BuildStatus) -> Result<String, String> {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "manifests": status.manifests,
+    }))
+    .map_err(|err| err.to_string())
+}
+
 fn project_root(root: Option<Utf8PathBuf>) -> Result<Utf8PathBuf, String> {
     let start = match root {
         Some(root) => root,
@@ -1817,6 +1818,22 @@ mod tests {
         let cli = Cli::try_parse_from(["tama", "--json", "check"]).unwrap();
         assert!(cli.json);
         assert!(matches!(cli.command, Command::Check));
+    }
+
+    #[test]
+    fn build_json_status_shape_is_stable() {
+        let status = tama_build::BuildStatus {
+            manifests: vec![Utf8PathBuf::from("artifacts/manifest/Counter.json")],
+        };
+
+        assert_eq!(
+            build_status_json(&status).unwrap(),
+            r#"{
+  "manifests": [
+    "artifacts/manifest/Counter.json"
+  ]
+}"#
+        );
     }
 
     #[test]
