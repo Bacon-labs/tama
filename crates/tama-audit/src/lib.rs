@@ -63,6 +63,16 @@ struct TrustContext<'a> {
     allow: &'a BTreeMap<String, String>,
 }
 
+struct LoadedManifests {
+    manifests: Vec<ContractManifest>,
+    invalid: Vec<ManifestLoadIssue>,
+}
+
+struct ManifestLoadIssue {
+    path: Utf8PathBuf,
+    message: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditOptions {
     pub check: Option<Check>,
@@ -85,7 +95,7 @@ impl AuditReport {
 
 pub fn run(root: &Utf8Path, opts: AuditOptions) -> Result<AuditReport> {
     let config = tama_config::load_config(root)?;
-    let manifests = load_manifests(root, &config.paths.out.join("manifest"))?;
+    let loaded = load_manifests(root, &config.paths.out.join("manifest"))?;
     let checks = match opts.check {
         Some(check) => vec![check],
         None => vec![
@@ -97,14 +107,36 @@ pub fn run(root: &Utf8Path, opts: AuditOptions) -> Result<AuditReport> {
         ],
     };
     let mut issues = Vec::new();
+    let manifest_load_check = if checks.contains(&Check::Structure) {
+        Check::Structure
+    } else {
+        checks[0]
+    };
+    let manifest_load_code = if manifest_load_check == Check::Structure {
+        "TAMA_STRUCTURE_MANIFEST_INVALID"
+    } else {
+        "TAMA_AUDIT_MANIFEST_INVALID"
+    };
+    issues.extend(loaded.invalid.into_iter().map(|invalid| {
+        issue(
+            manifest_load_check.as_str(),
+            None,
+            manifest_load_code,
+            invalid.message,
+            Some(invalid.path),
+        )
+    }));
+    let manifests = loaded.manifests;
     if manifests.is_empty() && !checks.contains(&Check::Structure) {
-        issues.push(issue(
-            checks[0].as_str(),
-            None,
-            "TAMA_AUDIT_NO_MANIFEST",
-            "no contract manifests found; run `tama build` first",
-            None,
-        ));
+        if issues.is_empty() {
+            issues.push(issue(
+                checks[0].as_str(),
+                None,
+                "TAMA_AUDIT_NO_MANIFEST",
+                "no contract manifests found; run `tama build` first",
+                None,
+            ));
+        }
         return Ok(AuditReport { issues });
     }
     for check in checks {
@@ -130,10 +162,13 @@ pub fn parse_check(raw: &str) -> Option<Check> {
     }
 }
 
-fn load_manifests(root: &Utf8Path, manifest_dir: &Utf8Path) -> Result<Vec<ContractManifest>> {
+fn load_manifests(root: &Utf8Path, manifest_dir: &Utf8Path) -> Result<LoadedManifests> {
     let dir = root.join(manifest_dir);
     if !dir.is_dir() {
-        return Ok(Vec::new());
+        return Ok(LoadedManifests {
+            manifests: Vec::new(),
+            invalid: Vec::new(),
+        });
     }
     let mut paths = Vec::new();
     for entry in fs::read_dir(&dir).map_err(|source| tama_common::io_error(dir.clone(), source))? {
@@ -145,10 +180,21 @@ fn load_manifests(root: &Utf8Path, manifest_dir: &Utf8Path) -> Result<Vec<Contra
         }
     }
     paths.sort();
-    paths
-        .into_iter()
-        .map(|path| ContractManifest::load_unvalidated(&path).map_err(Error::from))
-        .collect()
+    let mut manifests = Vec::new();
+    let mut invalid = Vec::new();
+    for path in paths {
+        match ContractManifest::load_unvalidated(&path) {
+            Ok(manifest) => manifests.push(manifest),
+            Err(err) => {
+                let path = relative_path(root, &path);
+                invalid.push(ManifestLoadIssue {
+                    message: format!("could not load contract manifest `{path}`: {err}"),
+                    path,
+                });
+            }
+        }
+    }
+    Ok(LoadedManifests { manifests, invalid })
 }
 
 fn structure(
@@ -1951,6 +1997,14 @@ fn issue(
 mod tests {
     use super::*;
 
+    fn write_minimal_config(root: &Utf8Path) {
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            "[project]\nname='x'\nverity='v'\n[yul]\nsolc='0.8.33'\n",
+        )
+        .unwrap();
+    }
+
     #[test]
     fn parses_check_name() {
         assert_eq!(parse_check("selectors"), Some(Check::Selectors));
@@ -1977,11 +2031,7 @@ mod tests {
     fn targeted_checks_fail_closed_without_manifests() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        tama_common::write_string(
-            &root.join("tama.toml"),
-            "[project]\nname='x'\nverity='v'\n[yul]\nsolc='0.8.33'\n",
-        )
-        .unwrap();
+        write_minimal_config(&root);
 
         let report = run(
             &root,
@@ -2068,14 +2118,57 @@ mod tests {
                 .unwrap();
         }
 
-        let manifests = load_manifests(&root, Utf8Path::new("artifacts/manifest")).unwrap();
+        let loaded = load_manifests(&root, Utf8Path::new("artifacts/manifest")).unwrap();
 
+        assert!(loaded.invalid.is_empty());
         assert_eq!(
-            manifests
+            loaded
+                .manifests
                 .iter()
                 .map(|manifest| manifest.contract.as_str())
                 .collect::<Vec<_>>(),
             vec!["Alpha", "Zed"]
+        );
+    }
+
+    #[test]
+    fn malformed_manifests_become_canonical_audit_issues() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        write_minimal_config(&root);
+        tama_common::write_string(
+            &root.join("artifacts/manifest/Counter.json"),
+            r#"{"schema":"tama.contract-manifest.v1","contract":"Counter","unexpected":true}"#,
+        )
+        .unwrap();
+
+        let structure_report = run(
+            &root,
+            AuditOptions {
+                check: Some(Check::Structure),
+                deny_warnings: false,
+            },
+        )
+        .unwrap();
+        assert!(structure_report.issues.iter().any(|issue| {
+            issue.check == "structure"
+                && issue.code == "TAMA_STRUCTURE_MANIFEST_INVALID"
+                && issue.path.as_deref() == Some(Utf8Path::new("artifacts/manifest/Counter.json"))
+        }));
+
+        let selector_report = run(
+            &root,
+            AuditOptions {
+                check: Some(Check::Selectors),
+                deny_warnings: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(selector_report.issues.len(), 1);
+        assert_eq!(selector_report.issues[0].check, "selectors");
+        assert_eq!(
+            selector_report.issues[0].code,
+            "TAMA_AUDIT_MANIFEST_INVALID"
         );
     }
 
