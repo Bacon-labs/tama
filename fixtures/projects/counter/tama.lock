@@ -7,13 +7,13 @@ verity_git = "https://github.com/lfglabs-dev/verity.git"
 verity_rev = "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e"
 
 [inputs]
-"TamaProof.lean" = "90613a3624b7bfe3cab9774c83072518cd92aabd417f922f8b83071fd4ad11b1"
-"TamaSpec.lean" = "18e63bac0a11417bf1829079118bf00f4a0b0f663cc50176a27e8e7651d954dc"
-"TamaSrc.lean" = "9af9cbf36ff00d89099ebdd467f28c4a773d2cf71903b3334d5e9a82f4764bdc"
-"foundry.toml" = "5a8e1722802a5a59eed82241176e6813a6268ac2aea86ae8804b9722962b0b9e"
-"lake-manifest.json" = "47ca8a3463104d3b3eb4272744b43bb6e70f07331d334f2c24da8c50ca968a7b"
-"lakefile.toml" = "98c6d464a14a2c97be8e35b64d56395ec4d23542112c8b28882f10cd1b8cc6ba"
-lean-toolchain = "34d34f94186cfe3e1485485d9a46aff11d7dd2b8901e7622124d98413c6a3123"
-"tama.toml" = "dfc57a6ba5135571ad7e5e023957511f2dfb6a97aa690dc8b907e3762349ea8c"
+"TamaProof.lean" = "d1bc6143571618c89667c58a79a9cde2344cd436c8097945988ffe974eafef39"
+"TamaSpec.lean" = "88ac6f4eb19c9be9e3f38f50a2d9de4f1bc78815fa8f426f5e7ecaa805be7378"
+"TamaSrc.lean" = "779a5fca3f0af5dcdf3eb141f2a30a1b5a8ac22612ca034c89b32add224fb279"
+"foundry.toml" = "61f08413416c82d3fbc2e89988fe402fbfea3f877c954d108d109b2dd4bebf54"
+"lake-manifest.json" = "666514c8a671fd674293a187a8334cf488085a43df1d7e37c35005939c2f50c3"
+"lakefile.toml" = "179a43044d6ccef5a9d733ce6f4f9503fea8f3933ba943d2b021324e0224d986"
+lean-toolchain = "8f6680f8389e8adee06cb2bd44372c6d60dce0e8301630b61a99a5642d1bd71b"
+"tama.toml" = "579d84fa29cabfff9e72a1375eafc274fa4ac900b95939274dd16e3133be52bd"
 
 [yul]

@@ -3,31 +3,100 @@ pragma solidity ^0.8.20;
 
 import {CounterDeployer} from "../../src/generated/verity/CounterDeployer.sol";
 import {CounterIface} from "../../src/generated/verity/CounterIface.sol";
+import {StdInvariant} from "forge-std/StdInvariant.sol";
 
-contract CounterTest {
+contract CounterTest is StdInvariant {
+    CounterIface internal invariantCounter;
+    uint256 internal invariantModel;
+
+    function setUp() public {
+        invariantCounter = CounterDeployer.deploy();
+        bytes4[] memory selectors = new bytes4[](2);
+        selectors[0] = this.handlerIncrement.selector;
+        selectors[1] = this.handlerDecrement.selector;
+        targetSelector(FuzzSelector({addr: address(this), selectors: selectors}));
+    }
+
     function testDeploymentStartsAtZero() public {
         CounterIface counter = CounterDeployer.deploy();
         require(counter.getCount() == 0, "initial count");
     }
 
-    function testIncrementUpdatesCount() public {
+    function testFuzzIncrementUpdatesCount(uint8 initialSteps, uint8 extraSteps) public {
         CounterIface counter = CounterDeployer.deploy();
-        counter.increment();
-        require(counter.getCount() == 1, "increment count");
+        for (uint256 i = 0; i < initialSteps; i++) {
+            counter.increment();
+        }
+        for (uint256 i = 0; i < extraSteps; i++) {
+            counter.increment();
+        }
+        require(
+            counter.getCount() == uint256(initialSteps) + uint256(extraSteps),
+            "increment count"
+        );
     }
 
-    function testDecrementUpdatesCount() public {
+    function testFuzzDecrementUpdatesCount(uint8 initialSteps, uint8 decrementSteps) public {
         CounterIface counter = CounterDeployer.deploy();
-        counter.increment();
-        counter.increment();
-        counter.decrement();
-        require(counter.getCount() == 1, "decrement count");
+        for (uint256 i = 0; i < initialSteps; i++) {
+            counter.increment();
+        }
+        for (uint256 i = 0; i < decrementSteps; i++) {
+            counter.decrement();
+        }
+        uint256 expected;
+        unchecked {
+            expected = uint256(initialSteps) - uint256(decrementSteps);
+        }
+        require(counter.getCount() == expected, "decrement count");
     }
 
-    function testGetterMirrorsGeneratedBytecodeState() public {
+    function testFuzzGetterMirrorsGeneratedBytecodeState(uint8 incrementSteps, uint8 decrementSteps) public {
         CounterIface counter = CounterDeployer.deploy();
-        counter.increment();
-        counter.increment();
-        require(counter.getCount() == 2, "getter count");
+        uint256 expected;
+        for (uint256 i = 0; i < incrementSteps; i++) {
+            counter.increment();
+            unchecked {
+                expected++;
+            }
+        }
+        for (uint256 i = 0; i < decrementSteps; i++) {
+            counter.decrement();
+            unchecked {
+                expected--;
+            }
+        }
+        require(counter.getCount() == expected, "getter count");
+    }
+
+    function testFuzzGetterPreservesCount(uint8 incrementSteps, uint8 decrementSteps) public {
+        CounterIface counter = CounterDeployer.deploy();
+        for (uint256 i = 0; i < incrementSteps; i++) {
+            counter.increment();
+        }
+        for (uint256 i = 0; i < decrementSteps; i++) {
+            counter.decrement();
+        }
+        uint256 beforeCount = counter.getCount();
+        counter.getCount();
+        require(counter.getCount() == beforeCount, "getter preserves count");
+    }
+
+    function handlerIncrement() public {
+        invariantCounter.increment();
+        unchecked {
+            invariantModel++;
+        }
+    }
+
+    function handlerDecrement() public {
+        invariantCounter.decrement();
+        unchecked {
+            invariantModel--;
+        }
+    }
+
+    function invariant_countTracksModel() public view {
+        require(invariantCounter.getCount() == invariantModel, "model count");
     }
 }
