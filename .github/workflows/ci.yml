@@ -101,6 +101,13 @@ jobs:
           done
           tama new TipJar
           tama check
+          printf '%s\n' '#check this_is_not_in_scope_for_tama_check' >> verity/proof/TipJarProof.lean
+          tama check
+          printf '%s\n' '#check this_breaks_tama_check' >> verity/spec/TipJarSpec.lean
+          if tama check; then
+            echo "expected tama check to fail after breaking a spec module" >&2
+            exit 1
+          fi
       - name: Counter fixture e2e
         shell: bash
         run: |
