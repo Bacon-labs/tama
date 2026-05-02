@@ -781,7 +781,7 @@ macos-x86_64
 macos-aarch64
 ```
 
-No native Windows support is required for v1.
+No native Windows support is required for v0.1.
 
 Entry point:
 
@@ -814,6 +814,7 @@ Security requirements:
 --no-modify-path
 --no-install-lean
 --no-install-foundry
+--no-install-solc
 --offline
 --version <version>
 ```
