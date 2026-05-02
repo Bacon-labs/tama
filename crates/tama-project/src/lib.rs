@@ -20,6 +20,8 @@ pub enum Error {
     Config(#[from] tama_config::Error),
     #[error("invalid contract name `{0}`")]
     InvalidContractName(String),
+    #[error("configured path must stay inside the project: {0}")]
+    InvalidPath(Utf8PathBuf),
     #[error("project already contains {0}")]
     AlreadyExists(Utf8PathBuf),
 }
@@ -135,21 +137,26 @@ pub fn init(path: &Utf8Path, opts: InitOptions) -> Result<()> {
 
 pub fn scaffold_contract(root: &Utf8Path, name: &str) -> Result<()> {
     validate_contract_name(name)?;
-    let src = root.join(format!("verity/src/{name}.lean"));
+    let paths = tama_config::load_config(root)?.paths;
+    ensure_project_relative(&paths.src)?;
+    ensure_project_relative(&paths.spec)?;
+    ensure_project_relative(&paths.proof)?;
+    ensure_project_relative(&paths.test)?;
+    let src = root.join(paths.src.join(format!("{name}.lean")));
     if src.exists() {
         return Err(Error::AlreadyExists(src));
     }
     write_string(&src, &contract_template(name))?;
     write_string(
-        &root.join(format!("verity/spec/{name}Spec.lean")),
+        &root.join(paths.spec.join(format!("{name}Spec.lean"))),
         &spec_template(name),
     )?;
     write_string(
-        &root.join(format!("verity/proof/{name}Proof.lean")),
+        &root.join(paths.proof.join(format!("{name}Proof.lean"))),
         &proof_template(name),
     )?;
     write_string(
-        &root.join(format!("test/verity/{name}.t.sol")),
+        &root.join(paths.test.join(format!("{name}.t.sol"))),
         &test_template(name),
     )?;
     update_aggregate(root, "TamaSrc.lean", &format!("import src.{name}"))?;
@@ -169,6 +176,14 @@ pub fn validate_contract_name(name: &str) -> Result<()> {
         Ok(())
     } else {
         Err(Error::InvalidContractName(name.to_string()))
+    }
+}
+
+fn ensure_project_relative(path: &Utf8Path) -> Result<()> {
+    if path.is_absolute() || path.components().any(|part| part.as_str() == "..") {
+        Err(Error::InvalidPath(path.to_owned()))
+    } else {
+        Ok(())
     }
 }
 
@@ -695,6 +710,51 @@ mod tests {
         assert!(read_to_string(&root.join("TamaSrc.lean"))
             .unwrap()
             .contains("import src.TipJar"));
+        let lock = tama_config::load_lock(&root).unwrap();
+        assert!(tama_config::lock_drift(&root, &lock).unwrap().is_empty());
+    }
+
+    #[test]
+    fn new_uses_configured_project_paths_without_rewriting_lakefile() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        init(&root, InitOptions::default()).unwrap();
+        let lakefile_before = read_to_string(&root.join("lakefile.toml")).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            r#"[project]
+name = "starter"
+verity = "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e"
+
+[paths]
+src = "contracts/src"
+spec = "contracts/spec"
+proof = "contracts/proof"
+test = "tests/verity"
+out = "artifacts"
+generated = "src/generated/verity"
+
+[yul]
+solc = "0.8.33"
+optimizer = true
+optimizer_runs = 200
+evm_version = "cancun"
+metadata_hash = "none"
+"#,
+        )
+        .unwrap();
+
+        scaffold_contract(&root, "TipJar").unwrap();
+
+        assert!(root.join("contracts/src/TipJar.lean").is_file());
+        assert!(root.join("contracts/spec/TipJarSpec.lean").is_file());
+        assert!(root.join("contracts/proof/TipJarProof.lean").is_file());
+        assert!(root.join("tests/verity/TipJar.t.sol").is_file());
+        assert!(!root.join("verity/src/TipJar.lean").exists());
+        assert_eq!(
+            read_to_string(&root.join("lakefile.toml")).unwrap(),
+            lakefile_before
+        );
         let lock = tama_config::load_lock(&root).unwrap();
         assert!(tama_config::lock_drift(&root, &lock).unwrap().is_empty());
     }
