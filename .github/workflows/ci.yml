@@ -120,7 +120,7 @@ jobs:
           export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
           counter="$PWD/fixtures/projects/counter"
           git -C "$counter" init
-          (cd "$counter" && lake update)
+          tama --root "$counter" update --no-forge
           tama --root "$counter" doctor --fix
           tama --root "$counter" doctor
           tama --root "$counter" check
