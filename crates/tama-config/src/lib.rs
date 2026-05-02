@@ -495,4 +495,64 @@ solc = "0.8.33"
             Err(Error::StaleLock(_))
         ));
     }
+
+    #[test]
+    fn lake_dependency_edits_preserve_unrelated_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("lakefile.toml"),
+            r#"# project comment
+name = "demo"
+
+[[require]]
+name = "verity"
+git = "https://github.com/lfglabs-dev/verity.git"
+rev = "old"
+
+[leanOptions]
+pp.unicode.fun = true
+"#,
+        )
+        .unwrap();
+        let dependency = LakeDependency {
+            name: "mathlib".to_string(),
+            source: LakeDependencySource::Git {
+                url: "https://github.com/leanprover-community/mathlib4.git".to_string(),
+                rev: "v4.22.0".to_string(),
+            },
+        };
+
+        upsert_lake_dependency(&root, &dependency).unwrap();
+        let edited = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+        assert!(edited.contains("# project comment"));
+        assert!(edited.contains("[leanOptions]"));
+        assert!(edited.contains("pp.unicode.fun = true"));
+        assert!(edited.contains("name = \"mathlib\""));
+        assert!(edited.contains("rev = \"v4.22.0\""));
+
+        remove_lake_dependency(&root, "mathlib").unwrap();
+        let removed = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+        assert!(removed.contains("# project comment"));
+        assert!(removed.contains("[leanOptions]"));
+        assert!(!removed.contains("name = \"mathlib\""));
+    }
+
+    #[test]
+    fn lakefile_lean_dependency_edits_fail_with_manual_instruction() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(&root.join("lakefile.lean"), "import Lake\n").unwrap();
+        let dependency = LakeDependency {
+            name: "mathlib".to_string(),
+            source: LakeDependencySource::Git {
+                url: "https://github.com/leanprover-community/mathlib4.git".to_string(),
+                rev: "v4.22.0".to_string(),
+            },
+        };
+
+        let err = upsert_lake_dependency(&root, &dependency).unwrap_err();
+
+        assert!(matches!(err, Error::UnsupportedLakefile(message) if message.contains("manually")));
+    }
 }
