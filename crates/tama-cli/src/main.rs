@@ -537,6 +537,7 @@ fn clean(root: &Utf8PathBuf, deep: bool) -> std::io::Result<()> {
         "artifacts/bytecode",
         "artifacts/solc-json",
         "artifacts/manifest",
+        "artifacts/lean",
         "artifacts/trust-probe",
         "out",
         "cache",
@@ -548,7 +549,7 @@ fn clean(root: &Utf8PathBuf, deep: bool) -> std::io::Result<()> {
         }
     }
     if deep {
-        let path = root.join("artifacts/lean");
+        let path = root.join(".lake");
         if path.exists() {
             std::fs::remove_dir_all(path)?;
         }
@@ -604,5 +605,20 @@ mod tests {
         apply_doctor_fix(&root, Some(&root)).unwrap();
         let current = doctor_report(Some(&root)).unwrap();
         assert_eq!(current.lock_current, Some(true));
+    }
+
+    #[test]
+    fn clean_removes_lake_build_and_deep_removes_lake_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        std::fs::create_dir_all(root.join("artifacts/lean")).unwrap();
+        std::fs::create_dir_all(root.join(".lake/packages")).unwrap();
+        clean(&root, false).unwrap();
+        assert!(!root.join("artifacts/lean").exists());
+        assert!(root.join(".lake/packages").exists());
+
+        std::fs::create_dir_all(root.join("artifacts/lean")).unwrap();
+        clean(&root, true).unwrap();
+        assert!(!root.join(".lake").exists());
     }
 }
