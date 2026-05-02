@@ -16,6 +16,7 @@ const EMBEDDED_PUBLIC_KEY: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QT
 const DEFAULT_LEAN_TOOLCHAIN: &str = "leanprover/lean4:v4.22.0";
 const DEFAULT_LEAN_VERSION: &str = "4.22.0";
 const DEFAULT_SOLC_VERSION: &str = "0.8.33";
+const RELEASE_MANIFEST_SCHEMA: &str = "tama.release-manifest.v1";
 
 #[derive(Debug, Parser)]
 #[command(name = "tamaup", version, about = "Install and update Tama")]
@@ -179,6 +180,7 @@ fn install(
     verify_manifest_signature(&manifest_bytes, &signature_bytes)?;
     let manifest: ReleaseManifest =
         serde_json::from_slice(&manifest_bytes).map_err(|err| err.to_string())?;
+    validate_release_manifest(&manifest)?;
     let platform = platform()?;
     let (selected_version, artifact) = select_artifact(&manifest, &platform, version)?;
     let archive = if artifact.url.starts_with("file://") {
@@ -237,6 +239,15 @@ fn select_artifact(
         .find(|artifact| artifact.platform == platform)
         .ok_or_else(|| format!("no artifact for {platform} version {requested}"))?;
     Ok((manifest_version.to_string(), artifact.clone()))
+}
+
+fn validate_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
+    if let Some(schema) = &manifest.schema {
+        if schema != RELEASE_MANIFEST_SCHEMA {
+            return Err(format!("unsupported release manifest schema `{schema}`"));
+        }
+    }
+    Ok(())
 }
 
 fn use_version(version: &str) -> Result<(), String> {
@@ -752,7 +763,7 @@ mod tests {
     #[test]
     fn release_manifest_selects_stable_and_specific_versions() {
         let manifest = ReleaseManifest {
-            schema: Some("tama.release-manifest.v1".to_string()),
+            schema: Some(RELEASE_MANIFEST_SCHEMA.to_string()),
             stable: Some("0.2.0".to_string()),
             version: None,
             artifacts: vec![],
@@ -783,6 +794,20 @@ mod tests {
         let (version, artifact) = select_artifact(&manifest, "linux-x86_64", "0.1.0").unwrap();
         assert_eq!(version, "0.1.0");
         assert_eq!(artifact.sha256, "old");
+    }
+
+    #[test]
+    fn release_manifest_rejects_unknown_schema() {
+        let manifest = ReleaseManifest {
+            schema: Some("tama.release-manifest.v2".to_string()),
+            stable: Some("0.1.0".to_string()),
+            version: None,
+            artifacts: vec![],
+            releases: vec![],
+        };
+
+        let err = validate_release_manifest(&manifest).unwrap_err();
+        assert!(err.contains("unsupported release manifest schema"));
     }
 
     #[test]
