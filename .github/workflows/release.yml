@@ -407,6 +407,51 @@ jobs:
           fi
           test ! -e "$tmp/pwned"
           test ! -e "$tmp/home"
+          python3 - "$tmp/manifest.json" <<'PY'
+          import json
+          import sys
+
+          json.dump({
+              "schema": "tama.release-manifest.v1",
+              "stable": ".hidden",
+              "releases": [{
+                  "version": ".hidden",
+                  "artifacts": [{
+                      "platform": "linux-x86_64",
+                      "url": "file:///tmp/tama.tar.gz",
+                      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                  }],
+              }],
+          }, open(sys.argv[1], "w", encoding="utf-8"))
+          PY
+          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
+          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version stable; then
+            echo "installer accepted an unsafe release version" >&2
+            exit 1
+          fi
+          python3 - "$tmp/manifest.json" <<'PY'
+          import json
+          import sys
+
+          json.dump({
+              "schema": "tama.release-manifest.v1",
+              "stable": "0.1.0",
+              "releases": [{
+                  "version": "0.1.0",
+                  "artifacts": [{
+                      "platform": "linux-x86_64",
+                      "url": "file:///tmp/tama.tar.gz",
+                      "sha256": "A" * 64,
+                  }],
+              }],
+          }, open(sys.argv[1], "w", encoding="utf-8"))
+          PY
+          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
+          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
+            echo "installer accepted an uppercase artifact hash" >&2
+            exit 1
+          fi
+          test ! -e "$tmp/home"
       - name: Shell installer verifies local artifact
         shell: bash
         run: |
