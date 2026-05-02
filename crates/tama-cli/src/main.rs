@@ -1204,9 +1204,10 @@ fn select_forge_install_optional_flags(help: &str) -> Vec<&'static str> {
     flags
 }
 
-fn offline_init_instructions() -> [&'static str; 5] {
+fn offline_init_instructions() -> [&'static str; 6] {
     [
-        "offline init: skipped `lake update`, `git init` if needed, and pinned `forge install`.",
+        "offline init: wrote pinned `lake-manifest.json` and skipped `lake update`, `git init` if needed, and pinned `forge install`.",
+        "for offline check/build, ensure `.lake/packages` exists or `TAMA_LAKE_PACKAGE_CACHE` contains checkouts matching `lake-manifest.json`.",
         "when network access is available, run:",
         "  lake update",
         "  git init  # if this project is not already inside a Git worktree",
@@ -1433,6 +1434,7 @@ mod tests {
         let instructions = offline_init_instructions().join("\n");
         assert!(instructions.contains("lake update"));
         assert!(instructions.contains("git init"));
+        assert!(instructions.contains("TAMA_LAKE_PACKAGE_CACHE"));
         assert!(instructions.contains("forge install foundry-rs/forge-std@v1.16.1 --shallow"));
         assert!(!instructions.contains("--no-git"));
     }

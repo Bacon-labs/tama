@@ -11,6 +11,7 @@ const DEFAULT_VERITY_GIT: &str = "https://github.com/lfglabs-dev/verity.git";
 const DEFAULT_VERITY_REV: &str = "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e";
 const DEFAULT_LEAN_TOOLCHAIN: &str = "leanprover/lean4:v4.22.0";
 const DEFAULT_SOLC: &str = "0.8.33";
+const STARTER_LAKE_MANIFEST: &str = include_str!("templates/starter-lake-manifest.json");
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -83,6 +84,7 @@ pub fn init(path: &Utf8Path, opts: InitOptions) -> Result<()> {
     write_string(&path.join("tama.toml"), &tama_toml(&opts))?;
     write_string(&path.join("foundry.toml"), FOUNDRY_TOML)?;
     write_string(&path.join("lakefile.toml"), &lakefile_toml(&opts))?;
+    write_string(&path.join("lake-manifest.json"), &lake_manifest_json(&opts))?;
     write_string(
         &path.join("lean-toolchain"),
         &(opts.lean_toolchain.clone() + "\n"),
@@ -270,6 +272,33 @@ srcDir = "verity"
         git = opts.verity_git,
         rev = opts.verity_rev
     )
+}
+
+fn lake_manifest_json(opts: &InitOptions) -> String {
+    let name = opts.name.replace('-', "_");
+    if opts.verity_git == DEFAULT_VERITY_GIT && opts.verity_rev == DEFAULT_VERITY_REV {
+        return STARTER_LAKE_MANIFEST.replace("__TAMA_PROJECT_NAME__", &name);
+    }
+    serde_json::to_string_pretty(&serde_json::json!({
+        "version": "1.1.0",
+        "packagesDir": ".lake/packages",
+        "packages": [{
+            "url": opts.verity_git,
+            "type": "git",
+            "subDir": serde_json::Value::Null,
+            "scope": "",
+            "rev": opts.verity_rev,
+            "name": "verity",
+            "manifestFile": "lake-manifest.json",
+            "inputRev": opts.verity_rev,
+            "inherited": false,
+            "configFile": "lakefile.lean"
+        }],
+        "name": name,
+        "lakeDir": ".lake"
+    }))
+    .expect("starter lake manifest is serializable")
+        + "\n"
 }
 
 fn contract_template(name: &str) -> String {
@@ -690,11 +719,20 @@ mod tests {
         assert!(!source.contains(r#"emit "Transfer""#));
         let config = read_to_string(&root.join("tama.toml")).unwrap();
         assert!(config.contains(&format!("verity = \"{DEFAULT_VERITY_REV}\"")));
+        let lake_manifest = read_to_string(&root.join("lake-manifest.json")).unwrap();
+        assert!(lake_manifest.contains(&format!(r#""rev": "{DEFAULT_VERITY_REV}""#)));
+        assert!(lake_manifest.contains(r#""name": "my_protocol""#));
         let lock = tama_config::load_lock(&root).unwrap();
         assert_eq!(
             lock.resolved.get("verity_rev").map(String::as_str),
             Some(DEFAULT_VERITY_REV)
         );
+        assert_eq!(
+            lock.resolved.get("lake.verity.rev").map(String::as_str),
+            Some(DEFAULT_VERITY_REV)
+        );
+        assert!(lock.inputs.contains_key("lake-manifest.json"));
+        assert!(tama_config::lock_drift(&root, &lock).unwrap().is_empty());
     }
 
     #[test]
