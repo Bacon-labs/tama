@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Cursor, Read, Write};
 #[cfg(unix)]
@@ -311,8 +312,15 @@ fn validate_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
         validate_release_version(version)?;
     }
     validate_artifacts(manifest.artifacts.as_deref().unwrap_or(&[]))?;
+    let mut release_versions = BTreeSet::new();
     for release in &manifest.releases {
         validate_release_version(&release.version)?;
+        if !release_versions.insert(release.version.clone()) {
+            return Err(format!(
+                "duplicate release version `{}` in release manifest",
+                release.version
+            ));
+        }
         if release.artifacts.is_empty() {
             return Err(format!(
                 "release `{}` is missing artifacts",
@@ -337,6 +345,18 @@ fn validate_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
         }
         if manifest.releases.is_empty() {
             return Err("cumulative release manifest must contain releases[]".to_string());
+        }
+        for (channel, version) in [
+            ("stable", manifest.stable.as_deref()),
+            ("nightly", manifest.nightly.as_deref()),
+        ] {
+            if let Some(version) = version {
+                if !release_versions.contains(version) {
+                    return Err(format!(
+                        "release manifest {channel} channel points to missing release `{version}`"
+                    ));
+                }
+            }
         }
         if manifest.version.is_some() || manifest.artifacts.is_some() {
             return Err(
@@ -557,8 +577,15 @@ fn remove_dir_if_exists(path: &Utf8Path) -> Result<(), String> {
 }
 
 fn validate_artifacts(artifacts: &[Artifact]) -> Result<(), String> {
+    let mut platforms = BTreeSet::new();
     for artifact in artifacts {
         validate_artifact_platform(&artifact.platform)?;
+        if !platforms.insert(artifact.platform.clone()) {
+            return Err(format!(
+                "duplicate artifact platform `{}` in release manifest",
+                artifact.platform
+            ));
+        }
         validate_artifact_url(&artifact.url)?;
         validate_sha256(&artifact.sha256)?;
     }
@@ -1164,6 +1191,21 @@ mod tests {
         assert!(help.contains("Remove active tama while keeping tamaup"));
     }
 
+    fn valid_artifact(platform: &str) -> Artifact {
+        Artifact {
+            platform: platform.to_string(),
+            url: format!("file:///tmp/tama-{platform}.tar.gz"),
+            sha256: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        }
+    }
+
+    fn valid_release(version: &str) -> Release {
+        Release {
+            version: version.to_string(),
+            artifacts: vec![valid_artifact("linux-x86_64")],
+        }
+    }
+
     #[test]
     fn release_manifest_selects_stable_and_specific_versions() {
         let manifest = ReleaseManifest {
@@ -1357,6 +1399,44 @@ mod tests {
         assert!(validate_release_manifest(&manifest)
             .unwrap_err()
             .contains("missing artifacts"));
+    }
+
+    #[test]
+    fn release_manifest_rejects_ambiguous_release_entries() {
+        let mut manifest = ReleaseManifest {
+            schema: Some(RELEASE_MANIFEST_SCHEMA.to_string()),
+            stable: Some("0.1.0".to_string()),
+            nightly: None,
+            version: None,
+            artifacts: None,
+            releases: vec![valid_release("0.1.0"), valid_release("0.1.0")],
+        };
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("duplicate release version"));
+
+        manifest.releases = vec![Release {
+            version: "0.1.0".to_string(),
+            artifacts: vec![
+                valid_artifact("linux-x86_64"),
+                valid_artifact("linux-x86_64"),
+            ],
+        }];
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("duplicate artifact platform"));
+
+        manifest.releases = vec![valid_release("0.1.0")];
+        manifest.stable = Some("0.2.0".to_string());
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("stable channel points to missing release"));
+
+        manifest.stable = Some("0.1.0".to_string());
+        manifest.nightly = Some("0.2.0-nightly".to_string());
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("nightly channel points to missing release"));
     }
 
     #[test]

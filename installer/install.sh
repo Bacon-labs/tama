@@ -119,10 +119,12 @@ if is_cumulative:
         raise SystemExit("cumulative release manifest must not mix legacy version/artifacts fields")
     if version in ("stable", "nightly"):
         selected = manifest.get(version)
+        selected_from_channel = True
         if selected is None:
             raise SystemExit(f"release manifest is missing {version} version")
     else:
         selected = version
+        selected_from_channel = False
     releases = manifest["releases"]
 else:
     if "version" not in manifest:
@@ -130,12 +132,15 @@ else:
     if not isinstance(manifest.get("artifacts"), list) or not manifest["artifacts"]:
         raise SystemExit("legacy release manifest is missing artifacts")
     selected = manifest["version"] if version == "stable" else version
+    selected_from_channel = False
     releases = [{"version": manifest["version"], "artifacts": manifest["artifacts"]}]
 if not SAFE_VERSION.fullmatch(version) or ".." in version:
     raise SystemExit(f"unsafe requested release version: {version}")
 selected = require_string(selected, "selected version")
 if not SAFE_VERSION.fullmatch(selected) or ".." in selected:
     raise SystemExit(f"unsafe release version: {selected}")
+release_versions = set()
+selected_artifact = None
 for release in releases:
     reject_unknown_keys(release, {"version", "artifacts"}, "release")
     release_version = require_string(release.get("version"), "release.version")
@@ -144,6 +149,10 @@ for release in releases:
         raise SystemExit(f"release {release_version} is missing artifacts")
     if not SAFE_VERSION.fullmatch(release_version) or ".." in release_version:
         raise SystemExit(f"unsafe release version: {release_version}")
+    if release_version in release_versions:
+        raise SystemExit(f"duplicate release version in release manifest: {release_version}")
+    release_versions.add(release_version)
+    artifact_platforms = set()
     for artifact in release_artifacts:
         reject_unknown_keys(artifact, {"platform", "url", "sha256"}, "artifact")
         artifact_platform = require_string(artifact.get("platform"), "artifact.platform")
@@ -151,6 +160,9 @@ for release in releases:
         artifact_sha256 = require_string(artifact.get("sha256"), "artifact.sha256")
         if not SAFE_PLATFORM.fullmatch(artifact_platform):
             raise SystemExit(f"unsafe artifact platform: {artifact_platform}")
+        if artifact_platform in artifact_platforms:
+            raise SystemExit(f"duplicate artifact platform in release manifest: {artifact_platform}")
+        artifact_platforms.add(artifact_platform)
         if not (artifact_url.startswith("https://") or artifact_url.startswith("file://")):
             raise SystemExit(f"unsupported artifact URL: {artifact_url}")
         if artifact_url.startswith("https://") and not HTTPS_URL.match(artifact_url):
@@ -160,10 +172,14 @@ for release in releases:
         if not SAFE_SHA256.fullmatch(artifact_sha256):
             raise SystemExit(f"invalid artifact SHA-256 for {artifact_platform} {release_version}")
         if release_version == selected and artifact_platform == platform:
-            emit_env("VERSION", release_version)
-            emit_env("URL", artifact_url)
-            emit_env("SHA256", artifact_sha256)
-            raise SystemExit(0)
+            selected_artifact = (release_version, artifact_url, artifact_sha256)
+if selected_from_channel and selected not in release_versions:
+    raise SystemExit(f"release manifest channel points to unknown release: {selected}")
+if selected_artifact is not None:
+    emit_env("VERSION", selected_artifact[0])
+    emit_env("URL", selected_artifact[1])
+    emit_env("SHA256", selected_artifact[2])
+    raise SystemExit(0)
 raise SystemExit(f"no artifact for {platform} {version}")
 PY
 . "$INSTALL_TMPDIR/artifact.env"

@@ -849,17 +849,34 @@ jobs:
               artifacts = release.get("artifacts")
               if not isinstance(artifacts, list) or not artifacts:
                   raise SystemExit(f"release {release_version} is missing artifacts")
+              platforms = set()
               for artifact in artifacts:
                   reject_unknown_keys(artifact, {"platform", "url", "sha256"}, "artifact")
                   platform = require_string(artifact.get("platform"), "artifact.platform")
                   if not SAFE_PLATFORM.fullmatch(platform):
                       raise SystemExit(f"unsafe artifact platform: {platform}")
+                  if platform in platforms:
+                      raise SystemExit(f"duplicate artifact platform in release manifest: {release_version} {platform}")
+                  platforms.add(platform)
                   url = require_string(artifact.get("url"), "artifact.url")
                   if not HTTPS_URL.match(url):
                       raise SystemExit(f"release artifact URL must use https:// with a host for {release_version} {platform}")
                   sha256 = require_string(artifact.get("sha256"), "artifact.sha256")
                   if not SAFE_SHA256.fullmatch(sha256):
                       raise SystemExit(f"invalid artifact SHA-256 for {release_version} {platform}")
+
+          def validate_release_set(releases, stable=None, nightly=None):
+              versions = set()
+              for release in releases:
+                  validate_release(release)
+                  release_version = release["version"]
+                  if release_version in versions:
+                      raise SystemExit(f"duplicate release version in release manifest: {release_version}")
+                  versions.add(release_version)
+              for channel, channel_version in (("stable", stable), ("nightly", nightly)):
+                  if channel_version is not None and channel_version not in versions:
+                      raise SystemExit(f"release manifest {channel} channel points to missing release: {channel_version}")
+              return versions
 
           def releases_from(manifest):
               reject_unknown_keys(manifest, {"schema", "stable", "nightly", "version", "artifacts", "releases"}, "manifest")
@@ -882,29 +899,33 @@ jobs:
                   if not isinstance(manifest.get("releases"), list) or not manifest["releases"]:
                       raise SystemExit("cumulative previous release manifest must contain releases[]")
                   releases = list(manifest["releases"])
-                  for release in releases:
-                      validate_release(release)
-                  return releases
+                  validate_release_set(releases, stable, manifest.get("nightly"))
+                  return releases, manifest.get("nightly")
               if "version" in manifest and "artifacts" in manifest:
                   release = {"version": manifest["version"], "artifacts": manifest["artifacts"]}
                   validate_release(release)
-                  return [release]
-              return []
+                  return [release], None
+              return [], None
 
           if previous_manifest:
               previous = json.loads(pathlib.Path(previous_manifest).read_text(encoding="utf-8"))
-              releases = releases_from(previous)
+              releases, nightly = releases_from(previous)
           else:
               releases = []
+              nightly = None
           validate_release(current)
           releases = [release for release in releases if release.get("version") != version]
           releases.append(current)
           releases.sort(key=lambda release: release["version"])
-          print(json.dumps({
+          validate_release_set(releases, version, nightly)
+          manifest = {
               "schema": "tama.release-manifest.v1",
               "stable": version,
               "releases": releases,
-          }, indent=2))
+          }
+          if nightly is not None:
+              manifest["nightly"] = nightly
+          print(json.dumps(manifest, indent=2))
           PY
       - name: Sign manifest
         env:
