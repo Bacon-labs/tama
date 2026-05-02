@@ -46,7 +46,7 @@ Install the configured version or set `TAMA_SOLC` to a matching binary. A mismat
 lake update
 ```
 
-For repeated or offline work, keep a clean checkout cache in `TAMA_LAKE_PACKAGE_CACHE`. Tama seeds `.lake/packages` only when the cached Git HEAD exactly matches `lake-manifest.json`.
+For repeated or offline work, keep a clean checkout cache in `TAMA_LAKE_PACKAGE_CACHE`. Tama seeds `.lake/packages` only when the cached Git HEAD exactly matches `lake-manifest.json`. With `--offline`, Tama then refuses to invoke Lake if any pinned git package is still missing, dirty, or at another revision under `.lake/packages`.
 
 ## Forge dependencies
 

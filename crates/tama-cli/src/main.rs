@@ -153,7 +153,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Check => {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
-            seed_lake_package_cache_for_build(&root)?;
+            prepare_lake_packages_for_build(&root, cli.offline)?;
             tama_build::Lake::new_json(root, cli.json)
                 .check_src_and_spec()
                 .map_err(|err| err.to_string())?;
@@ -165,7 +165,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Build(args) => {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
-            seed_lake_package_cache_for_build(&root)?;
+            prepare_lake_packages_for_build(&root, cli.offline)?;
             let status = tama_build::Pipeline::new(root)
                 .run(tama_build::BuildOptions {
                     locked: cli.locked,
@@ -1090,11 +1090,49 @@ fn default_lake_package_cache_from_parts(
     Utf8PathBuf::from_path_buf(base.join("tama/lake-packages")).ok()
 }
 
+fn prepare_lake_packages_for_build(root: &Utf8Path, offline: bool) -> Result<(), String> {
+    seed_lake_package_cache_for_build(root)?;
+    if offline {
+        ensure_lake_packages_available_offline(root)?;
+    }
+    Ok(())
+}
+
 fn seed_lake_package_cache_for_build(root: &Utf8Path) -> Result<(), String> {
     let Some(cache) = lake_package_cache()? else {
         return Ok(());
     };
     seed_lake_package_cache_from_manifest(root, &cache)
+}
+
+fn ensure_lake_packages_available_offline(root: &Utf8Path) -> Result<(), String> {
+    let package_revs = lake_manifest_git_revs(root)?;
+    let packages = root.join(".lake/packages");
+    for (name, expected_rev) in package_revs {
+        let checkout = packages.join(&name);
+        if !checkout.is_dir() {
+            return Err(format!(
+                "--offline requires Lake package `{name}` at `{checkout}`; restore it from `{LAKE_PACKAGE_CACHE_ENV}` or run `lake update` while online"
+            ));
+        }
+        if !checkout.join(".git").is_dir() {
+            return Err(format!(
+                "--offline requires Lake package `{name}` at `{checkout}` to be a Git checkout"
+            ));
+        }
+        let actual_rev = git_head_rev(&checkout)?;
+        if actual_rev != expected_rev {
+            return Err(format!(
+                "--offline requires Lake package `{name}` at `{checkout}` to match lake-manifest.json revision `{expected_rev}`, found `{actual_rev}`"
+            ));
+        }
+        if !git_worktree_clean(&checkout)? {
+            return Err(format!(
+                "--offline requires Lake package `{name}` at `{checkout}` to have a clean Git worktree"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn seed_lake_package_cache_from_manifest(root: &Utf8Path, cache: &Utf8Path) -> Result<(), String> {
@@ -1485,7 +1523,7 @@ fn select_forge_install_optional_flags(help: &str) -> Vec<&'static str> {
 fn offline_init_instructions() -> [&'static str; 6] {
     [
         "offline init: wrote pinned `lake-manifest.json` and skipped `lake update`, `git init` if needed, and pinned `forge install`.",
-        "for offline check/build, ensure `.lake/packages` exists or `TAMA_LAKE_PACKAGE_CACHE` contains checkouts matching `lake-manifest.json`.",
+        "for offline check/build, ensure `.lake/packages` or `TAMA_LAKE_PACKAGE_CACHE` contains clean Git checkouts at the exact revisions in `lake-manifest.json`.",
         "when network access is available, run:",
         "  lake update",
         "  git init  # if this project is not already inside a Git worktree",
@@ -2121,6 +2159,74 @@ mod tests {
         assert!(!root.join(".lake/packages/verity").exists());
     }
 
+    #[test]
+    fn offline_build_preflight_seeds_manifest_matching_cache_before_lake() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
+        let verity_rev = init_git_package(&cache.join("verity"), "cached").unwrap();
+        write_lake_manifest(&root, &[("verity", &verity_rev)]);
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, cache.as_str());
+
+        prepare_lake_packages_for_build(&root, true).unwrap();
+
+        assert!(root.join(".lake/packages/verity/package.txt").is_file());
+    }
+
+    #[test]
+    fn offline_build_preflight_rejects_missing_lake_package() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        write_lake_manifest(
+            &root,
+            &[("verity", "0000000000000000000000000000000000000000")],
+        );
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, "off");
+
+        let err = prepare_lake_packages_for_build(&root, true).unwrap_err();
+
+        assert!(err.contains("--offline requires Lake package `verity`"));
+        assert!(err.contains(".lake/packages/verity"));
+        assert!(err.contains("lake update"));
+    }
+
+    #[test]
+    fn offline_build_preflight_rejects_stale_lake_package_revision() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        init_git_package(&root.join(".lake/packages/verity"), "local").unwrap();
+        write_lake_manifest(
+            &root,
+            &[("verity", "0000000000000000000000000000000000000000")],
+        );
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, "off");
+
+        let err = prepare_lake_packages_for_build(&root, true).unwrap_err();
+
+        assert!(err.contains("match lake-manifest.json revision"));
+        assert!(err.contains(".lake/packages/verity"));
+    }
+
+    #[test]
+    fn offline_build_preflight_rejects_dirty_lake_package() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let verity = root.join(".lake/packages/verity");
+        let verity_rev = init_git_package(&verity, "local").unwrap();
+        tama_common::write_string(&verity.join("untracked.lean"), "local change\n").unwrap();
+        write_lake_manifest(&root, &[("verity", &verity_rev)]);
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, "off");
+
+        let err = prepare_lake_packages_for_build(&root, true).unwrap_err();
+
+        assert!(err.contains("clean Git worktree"));
+        assert!(err.contains(".lake/packages/verity"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn lake_package_cache_copy_failures_do_not_leave_partial_entries() {
@@ -2219,6 +2325,26 @@ mod tests {
             Some(&cwd),
         )?;
         git_head_rev(path)
+    }
+
+    fn write_lake_manifest(root: &Utf8Path, package_revs: &[(&str, &str)]) {
+        let packages = package_revs
+            .iter()
+            .map(|(name, rev)| {
+                serde_json::json!({
+                    "type": "git",
+                    "name": name,
+                    "rev": rev,
+                })
+            })
+            .collect::<Vec<_>>();
+        let text = serde_json::to_string_pretty(&serde_json::json!({
+            "version": "1.1.0",
+            "packages": packages,
+        }))
+        .unwrap()
+            + "\n";
+        tama_common::write_string(&root.join("lake-manifest.json"), &text).unwrap();
     }
 
     #[test]
