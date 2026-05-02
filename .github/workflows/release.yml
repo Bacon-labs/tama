@@ -648,6 +648,45 @@ jobs:
             exit 1
           fi
           test ! -e "$tmp/home/versions/0.1.0/bin/tama"
+      - name: Shell installer rejects absolute archive path before install
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tmp="$(mktemp -d)"
+          python3 - "$tmp/tama.tar.gz" <<'PY'
+          import io
+          import tarfile
+          import sys
+
+          with tarfile.open(sys.argv[1], "w:gz") as archive:
+              for name in ("bin/tama", "/evil", "bin/tamaup"):
+                  info = tarfile.TarInfo(name)
+                  data = name.encode()
+                  info.size = len(data)
+                  info.mode = 0o755
+                  archive.addfile(info, fileobj=io.BytesIO(data))
+          PY
+          sha="$(sha256sum "$tmp/tama.tar.gz" | awk '{print $1}')"
+          minisign -G -p "$tmp/minisign.pub" -s "$tmp/minisign.sec" -W
+          pubkey="$(tail -n 1 "$tmp/minisign.pub")"
+          cat > "$tmp/manifest.json" <<JSON
+          {
+            "version": "0.1.0",
+            "artifacts": [
+              {
+                "platform": "linux-x86_64",
+                "url": "file://$tmp/tama.tar.gz",
+                "sha256": "$sha"
+              }
+            ]
+          }
+          JSON
+          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
+          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
+            echo "installer accepted an absolute archive entry" >&2
+            exit 1
+          fi
+          test ! -e "$tmp/home/versions/0.1.0/bin/tama"
 
   build-artifacts:
     name: Build ${{ matrix.platform }}
