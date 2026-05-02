@@ -102,7 +102,7 @@ Removes generated Tama artifacts, the configured Lake build directory, and gener
 
 These commands manage Verity/Tama dependencies, refresh lock state, and diagnose toolchain drift. Lakefile edits must preserve unrelated user content.
 
-`tama install` and `tama remove` refuse `--offline` because they must run `lake update` after editing dependencies. Direct git packages resolved by Lake are recorded in `tama.lock` under `resolved.lake.<package>.*`. `tama update --offline` is allowed only with both `--no-lake` and `--no-forge`, which limits it to local lock/config refreshes.
+`tama install` and `tama remove` refuse `--offline` because they must run `lake update` after editing dependencies. Direct git packages resolved by Lake are recorded in `tama.lock` under `resolved.lake.<package>.*`. `tama update --offline` is allowed only with both `--no-lake` and `--no-forge`, which limits it to local lock/config refreshes. If the Verity dependency would need to change, `tama update --no-lake` refuses before editing `lakefile.toml` because `lake-manifest.json` must be refreshed by Lake at the same time.
 
 `tama update --package <name>` runs `lake update <name>` for one Lake package and refreshes `tama.lock`; it does not run `forge update`. Use Forge directly for Solidity-side dependency updates.
 

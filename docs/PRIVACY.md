@@ -9,7 +9,7 @@ Network access occurs only when the user runs commands that explicitly need exte
 - `tama init` runs `lake update` and a pinned `forge install foundry-rs/forge-std@v1.16.1 --shallow` unless `--offline` is used.
 - `tama install` validates remote Tama packages and runs `lake update`.
 - `tama remove` runs `lake update` after editing dependencies.
-- `tama update` runs `lake update` and `forge update` unless `--no-lake` and `--no-forge` are used.
+- `tama update` runs `lake update` and `forge update` unless `--no-lake` and `--no-forge` are used. Local refreshes that skip Lake refuse Verity dependency drift before editing `lakefile.toml`.
 
 `TAMA_LAKE_PACKAGE_CACHE` is a local cache only. Tama copies package checkouts between that cache and `.lake/packages` to avoid repeated downloads, but the cache is not uploaded by Tama.
 

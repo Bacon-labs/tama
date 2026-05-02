@@ -624,6 +624,13 @@ fn update_project(
             );
         }
     } else {
+        let (_, needs_lake_update) = planned_verity_lake_dependency(root, &config, &lock)?;
+        if needs_lake_update && no_lake {
+            return Err(
+                "`tama update --no-lake` cannot repair Verity dependency drift because it must run `lake update`"
+                    .to_string(),
+            );
+        }
         sync_verity_lake_dependency(root, &config, &mut lock)?;
     }
     if !no_lake {
@@ -1457,7 +1464,7 @@ mod tests {
     }
 
     #[test]
-    fn offline_update_syncs_verity_dependency_without_clobbering_lakefile() {
+    fn no_lake_update_refuses_verity_dependency_drift_before_editing() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
         tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
@@ -1475,19 +1482,13 @@ mod tests {
         lakefile.push_str("\n# user lake option\n[leanOptions]\npp.unicode.fun = true\n");
         tama_common::write_string(&root.join("lakefile.toml"), &lakefile).unwrap();
 
-        update_project(&root, false, true, true, true, None).unwrap();
+        let err = update_project(&root, false, true, true, true, None).unwrap_err();
 
-        let edited = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
-        assert!(edited.contains("rev = \"v0.2.0\""));
-        assert!(edited.contains("# user lake option"));
-        assert!(edited.contains("pp.unicode.fun = true"));
+        assert!(err.contains("--no-lake"));
+        assert!(err.contains("lake update"));
         assert_eq!(
-            tama_config::load_lock(&root)
-                .unwrap()
-                .resolved
-                .get("verity_rev")
-                .map(String::as_str),
-            Some("v0.2.0")
+            tama_common::read_to_string(&root.join("lakefile.toml")).unwrap(),
+            lakefile
         );
     }
 
