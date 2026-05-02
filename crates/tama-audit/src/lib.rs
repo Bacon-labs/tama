@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -370,21 +370,55 @@ fn canonical_solidity_param_types(params: &str) -> String {
 
 fn storage(manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
     for manifest in manifests {
-        let mut fixed = BTreeMap::<String, String>::new();
+        let mut fixed = Vec::<(&tama_manifest::StorageEntry, u32)>::new();
         for entry in &manifest.storage {
-            if entry.encoding != "mapping" {
-                let key = format!("{}:{}", entry.slot, entry.offset);
-                if let Some(prev) = fixed.insert(key, entry.name.clone()) {
-                    issues.push(issue(
-                        "storage-layout",
-                        Some(&manifest.contract),
-                        "TAMA_STORAGE_DUPLICATE",
-                        format!("storage entries `{prev}` and `{}` overlap", entry.name),
-                        None,
-                    ));
-                }
+            if !valid_storage_slot(&entry.slot) {
+                issues.push(issue(
+                    "storage-layout",
+                    Some(&manifest.contract),
+                    "TAMA_STORAGE_SLOT",
+                    format!(
+                        "storage entry `{}` has invalid slot `{}`",
+                        entry.name, entry.slot
+                    ),
+                    None,
+                ));
             }
-            if entry.offset >= 32 || entry.width_bytes == 0 || entry.width_bytes > 32 {
+            if !valid_storage_encoding(&entry.encoding) {
+                issues.push(issue(
+                    "storage-layout",
+                    Some(&manifest.contract),
+                    "TAMA_STORAGE_ENCODING",
+                    format!(
+                        "storage entry `{}` has unsupported encoding `{}`",
+                        entry.name, entry.encoding
+                    ),
+                    None,
+                ));
+            }
+            if entry.encoding != "mapping" {
+                let end = entry.offset.saturating_add(entry.width_bytes);
+                for (prev, prev_end) in &fixed {
+                    if prev.slot == entry.slot && entry.offset < *prev_end && prev.offset < end {
+                        issues.push(issue(
+                            "storage-layout",
+                            Some(&manifest.contract),
+                            "TAMA_STORAGE_DUPLICATE",
+                            format!(
+                                "storage entries `{}` and `{}` overlap",
+                                prev.name, entry.name
+                            ),
+                            None,
+                        ));
+                    }
+                }
+                fixed.push((entry, end));
+            }
+            if entry.offset >= 32
+                || entry.width_bytes == 0
+                || entry.width_bytes > 32
+                || entry.offset.saturating_add(entry.width_bytes) > 32
+            {
                 issues.push(issue(
                     "storage-layout",
                     Some(&manifest.contract),
@@ -395,6 +429,23 @@ fn storage(manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
             }
         }
     }
+}
+
+fn valid_storage_slot(slot: &str) -> bool {
+    let Some(rest) = slot.strip_prefix("0x") else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest.len() <= 64
+        && rest.chars().all(|ch| ch.is_ascii_hexdigit())
+        && !rest.chars().any(|ch| ch.is_ascii_uppercase())
+}
+
+fn valid_storage_encoding(encoding: &str) -> bool {
+    matches!(
+        encoding,
+        "value" | "mapping" | "dynamic_array" | "bytes" | "struct"
+    )
 }
 
 fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
@@ -778,6 +829,47 @@ interface CounterIface {
             .issues
             .iter()
             .any(|issue| issue.code == "TAMA_SELECTOR_INVALID"));
+    }
+
+    #[test]
+    fn storage_reports_slot_encoding_and_overlap_issues() {
+        let mut manifest = counter_manifest();
+        manifest.storage = vec![
+            tama_manifest::StorageEntry {
+                name: "a".to_string(),
+                ty: "uint128".to_string(),
+                slot: "0xZZ".to_string(),
+                offset: 0,
+                width_bytes: 16,
+                encoding: "value".to_string(),
+            },
+            tama_manifest::StorageEntry {
+                name: "b".to_string(),
+                ty: "uint128".to_string(),
+                slot: "0x00".to_string(),
+                offset: 8,
+                width_bytes: 16,
+                encoding: "unsupported".to_string(),
+            },
+            tama_manifest::StorageEntry {
+                name: "c".to_string(),
+                ty: "uint128".to_string(),
+                slot: "0x00".to_string(),
+                offset: 20,
+                width_bytes: 16,
+                encoding: "value".to_string(),
+            },
+        ];
+        let mut issues = Vec::new();
+        storage(&[manifest], &mut issues);
+        let codes = issues
+            .iter()
+            .map(|issue| issue.code.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(codes.contains("TAMA_STORAGE_SLOT"));
+        assert!(codes.contains("TAMA_STORAGE_ENCODING"));
+        assert!(codes.contains("TAMA_STORAGE_DUPLICATE"));
+        assert!(codes.contains("TAMA_STORAGE_WIDTH"));
     }
 
     fn write_project_config(root: &Utf8Path) {
