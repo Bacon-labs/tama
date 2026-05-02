@@ -101,7 +101,12 @@ if schema is not None and schema != "tama.release-manifest.v1":
 if not SAFE_VERSION.fullmatch(version):
     raise SystemExit(f"unsafe requested release version: {version}")
 if manifest.get("releases"):
-    selected = manifest.get("stable") if version == "stable" else version
+    if version in ("stable", "nightly"):
+        selected = manifest.get(version)
+        if selected is None:
+            raise SystemExit(f"release manifest is missing {version} version")
+    else:
+        selected = version
     releases = manifest["releases"]
 else:
     selected = manifest["version"] if version == "stable" else version

@@ -67,6 +67,8 @@ struct ReleaseManifest {
     #[serde(default)]
     stable: Option<String>,
     #[serde(default)]
+    nightly: Option<String>,
+    #[serde(default)]
     version: Option<String>,
     #[serde(default)]
     artifacts: Vec<Artifact>,
@@ -205,14 +207,7 @@ fn select_artifact(
     requested: &str,
 ) -> Result<(String, Artifact), String> {
     if !manifest.releases.is_empty() {
-        let version = if requested == "stable" {
-            manifest
-                .stable
-                .as_deref()
-                .ok_or_else(|| "release manifest is missing stable version".to_string())?
-        } else {
-            requested
-        };
+        let version = channel_or_version(manifest, requested)?;
         let release = manifest
             .releases
             .iter()
@@ -240,6 +235,23 @@ fn select_artifact(
     Ok((manifest_version.to_string(), artifact.clone()))
 }
 
+fn channel_or_version<'a>(
+    manifest: &'a ReleaseManifest,
+    requested: &'a str,
+) -> Result<&'a str, String> {
+    match requested {
+        "stable" => manifest
+            .stable
+            .as_deref()
+            .ok_or_else(|| "release manifest is missing stable version".to_string()),
+        "nightly" => manifest
+            .nightly
+            .as_deref()
+            .ok_or_else(|| "release manifest is missing nightly version".to_string()),
+        _ => Ok(requested),
+    }
+}
+
 fn validate_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
     if let Some(schema) = &manifest.schema {
         if schema != RELEASE_MANIFEST_SCHEMA {
@@ -248,6 +260,9 @@ fn validate_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
     }
     if let Some(stable) = &manifest.stable {
         validate_release_version(stable)?;
+    }
+    if let Some(nightly) = &manifest.nightly {
+        validate_release_version(nightly)?;
     }
     if let Some(version) = &manifest.version {
         validate_release_version(version)?;
@@ -854,6 +869,7 @@ mod tests {
         let manifest = ReleaseManifest {
             schema: Some(RELEASE_MANIFEST_SCHEMA.to_string()),
             stable: Some("0.2.0".to_string()),
+            nightly: Some("0.3.0-nightly".to_string()),
             version: None,
             artifacts: vec![],
             releases: vec![
@@ -873,6 +889,14 @@ mod tests {
                         sha256: "new".to_string(),
                     }],
                 },
+                Release {
+                    version: "0.3.0-nightly".to_string(),
+                    artifacts: vec![Artifact {
+                        platform: "linux-x86_64".to_string(),
+                        url: "file:///tmp/tama-nightly.tar.gz".to_string(),
+                        sha256: "nightly".to_string(),
+                    }],
+                },
             ],
         };
 
@@ -883,6 +907,10 @@ mod tests {
         let (version, artifact) = select_artifact(&manifest, "linux-x86_64", "0.1.0").unwrap();
         assert_eq!(version, "0.1.0");
         assert_eq!(artifact.sha256, "old");
+
+        let (version, artifact) = select_artifact(&manifest, "linux-x86_64", "nightly").unwrap();
+        assert_eq!(version, "0.3.0-nightly");
+        assert_eq!(artifact.sha256, "nightly");
     }
 
     #[test]
@@ -890,6 +918,7 @@ mod tests {
         let manifest = ReleaseManifest {
             schema: Some("tama.release-manifest.v2".to_string()),
             stable: Some("0.1.0".to_string()),
+            nightly: None,
             version: None,
             artifacts: vec![],
             releases: vec![],
@@ -904,6 +933,7 @@ mod tests {
         let mut manifest = ReleaseManifest {
             schema: Some(RELEASE_MANIFEST_SCHEMA.to_string()),
             stable: Some("../evil".to_string()),
+            nightly: None,
             version: None,
             artifacts: vec![],
             releases: vec![],
@@ -938,6 +968,7 @@ mod tests {
         let manifest = ReleaseManifest {
             schema: None,
             stable: None,
+            nightly: None,
             version: Some("0.1.0".to_string()),
             artifacts: vec![Artifact {
                 platform: "linux-x86_64".to_string(),
