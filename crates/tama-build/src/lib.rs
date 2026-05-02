@@ -672,7 +672,7 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
         match entry.kind.as_str() {
             "constructor" => {
                 abi.constructor = Some(Constructor {
-                    inputs: entry.inputs,
+                    inputs: entry.inputs.into_iter().map(Param::from).collect(),
                 });
             }
             "function" => {
@@ -694,8 +694,8 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
                     mutability: entry
                         .state_mutability
                         .unwrap_or_else(|| "nonpayable".to_string()),
-                    inputs: entry.inputs,
-                    outputs: entry.outputs,
+                    inputs: entry.inputs.into_iter().map(Param::from).collect(),
+                    outputs: entry.outputs.into_iter().map(Param::from).collect(),
                 });
             }
             "event" => {
@@ -720,7 +720,7 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
                         .map(|param| tama_manifest::EventField {
                             name: param.name,
                             ty: param.ty,
-                            indexed: false,
+                            indexed: param.indexed,
                         })
                         .collect(),
                 });
@@ -741,7 +741,7 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
                     name,
                     selector: tama_common::error_selector(&signature),
                     signature,
-                    inputs: entry.inputs,
+                    inputs: entry.inputs.into_iter().map(Param::from).collect(),
                 });
             }
             _ => {}
@@ -1196,11 +1196,30 @@ struct AbiEntry {
     kind: String,
     name: Option<String>,
     #[serde(default)]
-    inputs: Vec<Param>,
+    inputs: Vec<AbiParam>,
     #[serde(default)]
-    outputs: Vec<Param>,
+    outputs: Vec<AbiParam>,
     #[serde(rename = "stateMutability")]
     state_mutability: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AbiParam {
+    #[serde(default)]
+    name: String,
+    #[serde(rename = "type")]
+    ty: String,
+    #[serde(default)]
+    indexed: bool,
+}
+
+impl From<AbiParam> for Param {
+    fn from(value: AbiParam) -> Self {
+        Self {
+            name: value.name,
+            ty: value.ty,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1352,6 +1371,39 @@ end proof.CounterProof
             Utf8PathBuf::from("artifacts/yul/Counter.yul")
         );
         assert!(root.join("artifacts/manifest/Counter.json").is_file());
+    }
+
+    #[test]
+    fn abi_parser_preserves_event_indexed_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("Counter.abi.json")).unwrap();
+        tama_common::write_string(
+            &path,
+            r#"[
+  {
+    "type": "event",
+    "name": "Transfer",
+    "inputs": [
+      {"name": "from", "type": "address", "indexed": true},
+      {"name": "to", "type": "address", "indexed": true},
+      {"name": "amount", "type": "uint256", "indexed": false}
+    ],
+    "anonymous": false
+  }
+]
+"#,
+        )
+        .unwrap();
+        let abi = parse_abi(&path).unwrap();
+        assert_eq!(abi.events.len(), 1);
+        assert_eq!(
+            abi.events[0]
+                .fields
+                .iter()
+                .map(|field| field.indexed)
+                .collect::<Vec<_>>(),
+            vec![true, true, false]
+        );
     }
 
     #[test]
