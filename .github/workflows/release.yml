@@ -559,21 +559,30 @@ jobs:
       - name: Install release tools
         run: sudo apt-get update && sudo apt-get install -y minisign
       - name: Build manifest
+        env:
+          TAMA_MINISIGN_PUBLIC_KEY: ${{ secrets.TAMA_MINISIGN_PUBLIC_KEY }}
         shell: bash
         run: |
           set -euxo pipefail
           version="${GITHUB_REF_NAME#v}"
-          python3 - "$version" dist/*.tar.gz > dist/manifest.json <<'PY'
+          test -n "$TAMA_MINISIGN_PUBLIC_KEY"
+          previous_manifest=""
+          if curl -fsSL https://tama.tools/manifest.json -o dist/previous-manifest.json; then
+            curl -fsSL https://tama.tools/manifest.json.minisig -o dist/previous-manifest.json.minisig
+            minisign -V -P "$TAMA_MINISIGN_PUBLIC_KEY" -m dist/previous-manifest.json -x dist/previous-manifest.json.minisig
+            previous_manifest="dist/previous-manifest.json"
+          fi
+          python3 - "$version" "$previous_manifest" dist/*.tar.gz > dist/manifest.json <<'PY'
           import hashlib
           import json
           import pathlib
+          import re
           import sys
-          import urllib.error
-          import urllib.request
 
           version = sys.argv[1]
+          previous_manifest = sys.argv[2]
           artifacts = []
-          for raw in sys.argv[2:]:
+          for raw in sys.argv[3:]:
               path = pathlib.Path(raw)
               name = path.name
               suffix = ".tar.gz"
@@ -592,18 +601,49 @@ jobs:
               "artifacts": sorted(artifacts, key=lambda item: item["platform"]),
           }
 
+          SAFE_VERSION = re.compile(r"^[A-Za-z0-9._+-]+$")
+          SAFE_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+          SAFE_PLATFORM = re.compile(r"^[A-Za-z0-9._+-]+$")
+
+          def require_string(value, label):
+              if not isinstance(value, str) or not value:
+                  raise SystemExit(f"invalid release manifest field: {label}")
+              if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+                  raise SystemExit(f"unsafe control character in release manifest field: {label}")
+              return value
+
+          def validate_release(release):
+              release_version = require_string(release.get("version"), "release.version")
+              if not SAFE_VERSION.fullmatch(release_version):
+                  raise SystemExit(f"unsafe release version: {release_version}")
+              for artifact in release.get("artifacts", []):
+                  platform = require_string(artifact.get("platform"), "artifact.platform")
+                  if not SAFE_PLATFORM.fullmatch(platform):
+                      raise SystemExit(f"unsafe artifact platform: {platform}")
+                  require_string(artifact.get("url"), "artifact.url")
+                  sha256 = require_string(artifact.get("sha256"), "artifact.sha256")
+                  if not SAFE_SHA256.fullmatch(sha256):
+                      raise SystemExit(f"invalid artifact SHA-256 for {release_version} {platform}")
+
           def releases_from(manifest):
+              schema = manifest.get("schema")
+              if schema is not None and schema != "tama.release-manifest.v1":
+                  raise SystemExit(f"unsupported previous release manifest schema: {schema}")
               if "releases" in manifest:
-                  return list(manifest["releases"])
+                  releases = list(manifest["releases"])
+                  for release in releases:
+                      validate_release(release)
+                  return releases
               if "version" in manifest and "artifacts" in manifest:
-                  return [{"version": manifest["version"], "artifacts": manifest["artifacts"]}]
+                  release = {"version": manifest["version"], "artifacts": manifest["artifacts"]}
+                  validate_release(release)
+                  return [release]
               return []
 
-          try:
-              with urllib.request.urlopen("https://tama.tools/manifest.json", timeout=10) as response:
-                  previous = json.load(response)
+          if previous_manifest:
+              previous = json.loads(pathlib.Path(previous_manifest).read_text(encoding="utf-8"))
               releases = releases_from(previous)
-          except (OSError, urllib.error.URLError, json.JSONDecodeError):
+          else:
               releases = []
           releases = [release for release in releases if release.get("version") != version]
           releases.append(current)
