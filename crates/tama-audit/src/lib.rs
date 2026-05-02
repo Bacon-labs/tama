@@ -1048,6 +1048,7 @@ fn trust(
 ) {
     let deny = BTreeSet::from(["sorryAx".to_string()]);
     let allow = &config.trust.allow_axioms;
+    audit_trust_allowlist(root, &deny, allow, issues);
     let probe = root.join(config.paths.out.join("trust-probe").join("axioms.json"));
     let trust_report = root.join(config.paths.out.join("trust-report.json"));
     let assumption_report = root.join(config.paths.out.join("assumption-report.json"));
@@ -1138,6 +1139,34 @@ fn trust(
                     obligation.lean_decl
                 ),
                 Some(probe.strip_prefix(root).unwrap_or(&probe).to_owned()),
+            ));
+        }
+    }
+}
+
+fn audit_trust_allowlist(
+    root: &Utf8Path,
+    deny: &BTreeSet<String>,
+    allow: &BTreeMap<String, String>,
+    issues: &mut Vec<Issue>,
+) {
+    for (axiom, reason) in allow {
+        if reason.trim().is_empty() {
+            issues.push(issue(
+                "trust-boundary",
+                None,
+                "TAMA_TRUST_ALLOWLIST_REASON",
+                format!("trust allowlist entry `{axiom}` requires a non-empty reason"),
+                Some(relative_path(root, &root.join("tama.toml"))),
+            ));
+        }
+        if deny.contains(axiom) {
+            issues.push(issue(
+                "trust-boundary",
+                None,
+                "TAMA_TRUST_ALLOWLIST_DENY",
+                format!("trust allowlist entry `{axiom}` is hard-denied"),
+                Some(relative_path(root, &root.join("tama.toml"))),
             ));
         }
     }
@@ -2076,6 +2105,31 @@ mod tests {
         assert!(!issues
             .iter()
             .any(|issue| issue.code == "TAMA_TRUST_ASSUMPTION"));
+    }
+
+    #[test]
+    fn trust_allowlist_requires_reason_and_rejects_sorryax() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut config = test_config();
+        config
+            .trust
+            .allow_axioms
+            .insert("Classical.choice".to_string(), "  ".to_string());
+        config
+            .trust
+            .allow_axioms
+            .insert("sorryAx".to_string(), "never allowed".to_string());
+
+        let mut issues = Vec::new();
+        trust(&root, &config, &[], &mut issues);
+
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_TRUST_ALLOWLIST_REASON"));
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_TRUST_ALLOWLIST_DENY"));
     }
 
     #[test]
