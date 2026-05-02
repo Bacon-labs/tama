@@ -6,6 +6,7 @@ use clap::{ArgAction, Args, Parser, Subcommand};
 
 const LAKE_PACKAGE_CACHE_ENV: &str = "TAMA_LAKE_PACKAGE_CACHE";
 const FORGE_STD_DEPENDENCY: &str = "foundry-rs/forge-std@v1.16.1";
+const DEFAULT_VERITY_GIT: &str = "https://github.com/lfglabs-dev/verity.git";
 
 #[derive(Debug, Parser)]
 #[command(name = "tama", version, about = "Verity developer toolchain")]
@@ -237,7 +238,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             let root = cli.root.unwrap_or_else(|| Utf8PathBuf::from("."));
             let project = tama_common::find_project_root(&root).ok();
             if fix {
-                apply_doctor_fix(&root, project.as_ref())?;
+                apply_doctor_fix(&root, project.as_ref(), cli.offline)?;
             }
             let report = doctor_report(project.as_ref())?;
             if cli.json {
@@ -280,7 +281,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     println!("note {note}");
                 }
                 if fix {
-                    println!("Applied safe directory repairs");
+                    println!("Applied safe doctor repairs");
                 }
             }
             Ok(if doctor_report_has_failures(&report) {
@@ -508,13 +509,28 @@ fn lean_version_from_toolchain(toolchain: &str) -> Option<String> {
         })
 }
 
-fn apply_doctor_fix(root: &Utf8PathBuf, project: Option<&Utf8PathBuf>) -> Result<(), String> {
+fn apply_doctor_fix(
+    root: &Utf8PathBuf,
+    project: Option<&Utf8PathBuf>,
+    offline: bool,
+) -> Result<(), String> {
     let repair_root = project.unwrap_or(root);
     for dir in ["artifacts", "src/generated/verity"] {
         std::fs::create_dir_all(repair_root.join(dir)).map_err(|err| err.to_string())?;
     }
     if let Some(project_root) = project {
-        refresh_lock(project_root)?;
+        let config = tama_config::load_config(project_root).map_err(|err| err.to_string())?;
+        let mut lock = tama_config::load_lock(project_root).map_err(|err| err.to_string())?;
+        let (_, needs_lake_update) = planned_verity_lake_dependency(project_root, &config, &lock)?;
+        if needs_lake_update && offline {
+            return Err("`tama doctor --fix --offline` cannot repair Verity dependency drift because it must run `lake update`".to_string());
+        }
+        let changed = sync_verity_lake_dependency(project_root, &config, &mut lock)?;
+        if changed {
+            run_lake_update(project_root)?;
+        }
+        tama_config::update_lock_inputs(project_root, &mut lock).map_err(|err| err.to_string())?;
+        tama_config::write_lock(project_root, &lock).map_err(|err| err.to_string())?;
     }
     Ok(())
 }
@@ -573,22 +589,7 @@ fn update_project(
     }
     let config = tama_config::load_config(root).map_err(|err| err.to_string())?;
     let mut lock = tama_config::load_lock(root).map_err(|err| err.to_string())?;
-    let verity_git = lock
-        .resolved
-        .get("verity_git")
-        .cloned()
-        .unwrap_or_else(|| "https://github.com/lfglabs-dev/verity.git".to_string());
-    let verity_rev = verity_rev_from_config(&config.project.verity);
-    let dependency = tama_config::LakeDependency {
-        name: "verity".to_string(),
-        source: tama_config::LakeDependencySource::Git {
-            url: verity_git.clone(),
-            rev: verity_rev.clone(),
-        },
-    };
-    tama_config::upsert_lake_dependency(root, &dependency).map_err(|err| err.to_string())?;
-    lock.resolved.insert("verity_git".to_string(), verity_git);
-    lock.resolved.insert("verity_rev".to_string(), verity_rev);
+    sync_verity_lake_dependency(root, &config, &mut lock)?;
     if !no_lake {
         run_lake_update(root)?;
     }
@@ -597,6 +598,58 @@ fn update_project(
     }
     tama_config::update_lock_inputs(root, &mut lock).map_err(|err| err.to_string())?;
     tama_config::write_lock(root, &lock).map_err(|err| err.to_string())
+}
+
+fn planned_verity_lake_dependency(
+    root: &Utf8Path,
+    config: &tama_config::TamaConfig,
+    lock: &tama_config::TamaLock,
+) -> Result<(tama_config::LakeDependency, bool), String> {
+    let current = match tama_config::lake_dependency(root, "verity") {
+        Ok(dependency) => Some(dependency),
+        Err(tama_config::Error::DependencyNotFound(_)) => None,
+        Err(err) => return Err(err.to_string()),
+    };
+    let url = match current.as_ref().map(|dependency| &dependency.source) {
+        Some(tama_config::LakeDependencySource::Git { url, .. }) => url.clone(),
+        Some(tama_config::LakeDependencySource::Path { .. }) => {
+            return Err(
+                "cannot automatically sync path-based Verity dependency; edit lakefile.toml manually"
+                    .to_string(),
+            );
+        }
+        None => lock
+            .resolved
+            .get("verity_git")
+            .or_else(|| lock.resolved.get("lake.verity.url"))
+            .cloned()
+            .unwrap_or_else(|| DEFAULT_VERITY_GIT.to_string()),
+    };
+    let dependency = tama_config::LakeDependency {
+        name: "verity".to_string(),
+        source: tama_config::LakeDependencySource::Git {
+            url,
+            rev: verity_rev_from_config(&config.project.verity),
+        },
+    };
+    let changed = current.as_ref() != Some(&dependency);
+    Ok((dependency, changed))
+}
+
+fn sync_verity_lake_dependency(
+    root: &Utf8Path,
+    config: &tama_config::TamaConfig,
+    lock: &mut tama_config::TamaLock,
+) -> Result<bool, String> {
+    let (dependency, changed) = planned_verity_lake_dependency(root, config, lock)?;
+    if changed {
+        tama_config::upsert_lake_dependency(root, &dependency).map_err(|err| err.to_string())?;
+    }
+    if let tama_config::LakeDependencySource::Git { url, rev } = &dependency.source {
+        lock.resolved.insert("verity_git".to_string(), url.clone());
+        lock.resolved.insert("verity_rev".to_string(), rev.clone());
+    }
+    Ok(changed)
 }
 
 fn mutate_dependencies(
@@ -1279,6 +1332,41 @@ mod tests {
     }
 
     #[test]
+    fn offline_update_syncs_verity_dependency_without_clobbering_lakefile() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let old_rev = tama_config::load_lock(&root)
+            .unwrap()
+            .resolved
+            .get("verity_rev")
+            .cloned()
+            .unwrap();
+        let config = tama_common::read_to_string(&root.join("tama.toml"))
+            .unwrap()
+            .replace(&format!("verity = \"{old_rev}\""), "verity = \"0.2.0\"");
+        tama_common::write_string(&root.join("tama.toml"), &config).unwrap();
+        let mut lakefile = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+        lakefile.push_str("\n# user lake option\n[leanOptions]\npp.unicode.fun = true\n");
+        tama_common::write_string(&root.join("lakefile.toml"), &lakefile).unwrap();
+
+        update_project(&root, false, true, true, true).unwrap();
+
+        let edited = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+        assert!(edited.contains("rev = \"v0.2.0\""));
+        assert!(edited.contains("# user lake option"));
+        assert!(edited.contains("pp.unicode.fun = true"));
+        assert_eq!(
+            tama_config::load_lock(&root)
+                .unwrap()
+                .resolved
+                .get("verity_rev")
+                .map(String::as_str),
+            Some("v0.2.0")
+        );
+    }
+
+    #[test]
     fn global_locked_guard_rejects_stale_inputs() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
@@ -1309,9 +1397,36 @@ mod tests {
         .unwrap();
         let stale = doctor_report(Some(&root)).unwrap();
         assert_eq!(stale.lock_current, Some(false));
-        apply_doctor_fix(&root, Some(&root)).unwrap();
+        apply_doctor_fix(&root, Some(&root), false).unwrap();
         let current = doctor_report(Some(&root)).unwrap();
         assert_eq!(current.lock_current, Some(true));
+    }
+
+    #[test]
+    fn doctor_fix_refuses_offline_verity_dependency_sync_before_editing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let old_rev = tama_config::load_lock(&root)
+            .unwrap()
+            .resolved
+            .get("verity_rev")
+            .cloned()
+            .unwrap();
+        let config = tama_common::read_to_string(&root.join("tama.toml"))
+            .unwrap()
+            .replace(&format!("verity = \"{old_rev}\""), "verity = \"0.2.0\"");
+        tama_common::write_string(&root.join("tama.toml"), &config).unwrap();
+        let lakefile_before = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+
+        let err = apply_doctor_fix(&root, Some(&root), true).unwrap_err();
+
+        assert!(err.contains("--offline"));
+        assert!(err.contains("lake update"));
+        assert_eq!(
+            tama_common::read_to_string(&root.join("lakefile.toml")).unwrap(),
+            lakefile_before
+        );
     }
 
     #[test]

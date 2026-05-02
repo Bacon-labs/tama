@@ -341,6 +341,23 @@ pub fn parse_lake_dependency(root: &Utf8Path, raw: &str) -> Result<LakeDependenc
     })
 }
 
+pub fn lake_dependency(root: &Utf8Path, name: &str) -> Result<LakeDependency> {
+    let path = lakefile_toml_path(root)?;
+    let text = read_to_string(&path)?;
+    let doc = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|source| Error::StaleLock(format!("failed to parse {path}: {source}")))?;
+    let Some(requires) = doc["require"].as_array_of_tables() else {
+        return Err(Error::DependencyNotFound(name.to_string()));
+    };
+    for table in requires {
+        if table_string(table, "name") == Some(name) {
+            return dependency_from_table(table, name);
+        }
+    }
+    Err(Error::DependencyNotFound(name.to_string()))
+}
+
 pub fn upsert_lake_dependency(root: &Utf8Path, dependency: &LakeDependency) -> Result<()> {
     let path = lakefile_toml_path(root)?;
     preserve_toml_edit(&path, |doc| {
@@ -434,6 +451,28 @@ fn set_dependency_table(table: &mut Table, dependency: &LakeDependency) {
 
 fn table_string<'a>(table: &'a Table, key: &str) -> Option<&'a str> {
     table.get(key).and_then(Item::as_str)
+}
+
+fn dependency_from_table(table: &Table, fallback_name: &str) -> Result<LakeDependency> {
+    let name = table_string(table, "name").unwrap_or(fallback_name);
+    if let Some(url) = table_string(table, "git") {
+        return Ok(LakeDependency {
+            name: name.to_string(),
+            source: LakeDependencySource::Git {
+                url: url.to_string(),
+                rev: table_string(table, "rev").unwrap_or("main").to_string(),
+            },
+        });
+    }
+    if let Some(path) = table_string(table, "path") {
+        return Ok(LakeDependency {
+            name: name.to_string(),
+            source: LakeDependencySource::Path {
+                path: Utf8PathBuf::from(path),
+            },
+        });
+    }
+    Err(Error::InvalidDependencySpec(name.to_string()))
 }
 
 fn looks_like_local_path(raw: &str) -> bool {
@@ -721,6 +760,46 @@ pp.unicode.fun = true
         assert!(removed.contains("# project comment"));
         assert!(removed.contains("[leanOptions]"));
         assert!(!removed.contains("name = \"mathlib\""));
+    }
+
+    #[test]
+    fn lake_dependency_reads_existing_require_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("lakefile.toml"),
+            r#"[[require]]
+name = "verity"
+git = "https://github.com/lfglabs-dev/verity.git"
+rev = "v1"
+
+[[require]]
+name = "localpkg"
+path = "../localpkg"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            lake_dependency(&root, "verity").unwrap(),
+            LakeDependency {
+                name: "verity".to_string(),
+                source: LakeDependencySource::Git {
+                    url: "https://github.com/lfglabs-dev/verity.git".to_string(),
+                    rev: "v1".to_string(),
+                },
+            }
+        );
+        assert_eq!(
+            lake_dependency(&root, "localpkg").unwrap().source,
+            LakeDependencySource::Path {
+                path: "../localpkg".into(),
+            }
+        );
+        assert!(matches!(
+            lake_dependency(&root, "missing").unwrap_err(),
+            Error::DependencyNotFound(name) if name == "missing"
+        ));
     }
 
     #[test]
