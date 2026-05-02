@@ -95,3 +95,5 @@ Removes generated Tama artifacts and generated Solidity. `--deep` also removes t
 ## `tama install`, `tama remove`, `tama update`, `tama doctor`
 
 These commands manage Verity/Tama dependencies, refresh lock state, and diagnose toolchain drift. Lakefile edits must preserve unrelated user content.
+
+`tama install` and `tama remove` refuse `--offline` because they must run `lake update` after editing dependencies. `tama update --offline` is allowed only with both `--no-lake` and `--no-forge`, which limits it to local lock/config refreshes.

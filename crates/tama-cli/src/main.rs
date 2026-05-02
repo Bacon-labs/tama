@@ -284,7 +284,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Remove { package } => {
             let root = project_root(cli.root)?;
-            mutate_dependencies(&root, cli.locked, |root| {
+            mutate_dependencies(&root, cli.locked, cli.offline, |root| {
                 tama_config::remove_lake_dependency(root, &package).map_err(|err| err.to_string())
             })?;
             println!("Removed Tama dependency {package}");
@@ -292,7 +292,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Update { no_forge, no_lake } => {
             let root = project_root(cli.root)?;
-            update_project(&root, cli.locked, no_lake, no_forge)?;
+            update_project(&root, cli.locked, cli.offline, no_lake, no_forge)?;
             println!("Updated Tama project lock state");
             Ok(ExitCode::SUCCESS)
         }
@@ -428,15 +428,13 @@ fn install_package(
 ) -> Result<(), String> {
     let dependency =
         tama_config::parse_lake_dependency(root, package).map_err(|err| err.to_string())?;
+    if offline {
+        return Err("`tama install` cannot run with --offline because it must validate the dependency and run `lake update`".to_string());
+    }
     if let tama_config::LakeDependencySource::Git { url, rev } = &dependency.source {
-        if offline {
-            return Err(format!(
-                "`tama install {package}` needs network access; use a local path or remove --offline"
-            ));
-        }
         validate_remote_tama_package(url, rev)?;
     }
-    mutate_dependencies(root, locked, |root| {
+    mutate_dependencies(root, locked, offline, |root| {
         tama_config::upsert_lake_dependency(root, &dependency).map_err(|err| err.to_string())
     })
 }
@@ -444,9 +442,13 @@ fn install_package(
 fn update_project(
     root: &Utf8PathBuf,
     locked: bool,
+    offline: bool,
     no_lake: bool,
     no_forge: bool,
 ) -> Result<(), String> {
+    if offline && (!no_lake || !no_forge) {
+        return Err("`tama update --offline` requires both --no-lake and --no-forge".to_string());
+    }
     if locked {
         let lock = tama_config::load_lock(root).map_err(|err| err.to_string())?;
         tama_config::enforce_locked(root, &lock).map_err(|err| err.to_string())?;
@@ -482,8 +484,15 @@ fn update_project(
 fn mutate_dependencies(
     root: &Utf8PathBuf,
     locked: bool,
+    offline: bool,
     edit: impl FnOnce(&Utf8PathBuf) -> Result<(), String>,
 ) -> Result<(), String> {
+    if offline {
+        return Err(
+            "dependency changes cannot run with --offline because they must run `lake update`"
+                .to_string(),
+        );
+    }
     if locked {
         let lock = tama_config::load_lock(root).map_err(|err| err.to_string())?;
         tama_config::enforce_locked(root, &lock).map_err(|err| err.to_string())?;
@@ -1001,6 +1010,35 @@ mod tests {
                 .as_deref(),
             Some(Utf8Path::new("/tmp/tama-cache"))
         );
+    }
+
+    #[test]
+    fn offline_dependency_mutations_fail_before_editing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let mut called = false;
+
+        let err = mutate_dependencies(&root, false, true, |_| {
+            called = true;
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert!(err.contains("--offline"));
+        assert!(!called);
+    }
+
+    #[test]
+    fn offline_update_requires_external_tools_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+
+        let err = update_project(&root, false, true, false, true).unwrap_err();
+        assert!(err.contains("--no-lake"));
+
+        update_project(&root, false, true, true, true).unwrap();
     }
 
     #[test]
