@@ -23,20 +23,20 @@ pub enum Error {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContractManifest {
     pub schema: String,
     pub contract: String,
     pub source: SourcePaths,
     pub lean: LeanModules,
     pub abi: Abi,
-    #[serde(default)]
     pub storage: Vec<StorageEntry>,
-    #[serde(default)]
     pub obligations: Vec<Obligation>,
     pub artifacts: ArtifactPaths,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourcePaths {
     pub implementation: Utf8PathBuf,
     pub spec: Utf8PathBuf,
@@ -44,6 +44,7 @@ pub struct SourcePaths {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LeanModules {
     pub implementation_module: String,
     pub spec_module: String,
@@ -51,23 +52,22 @@ pub struct LeanModules {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Abi {
     pub constructor: Option<Constructor>,
-    #[serde(default)]
     pub functions: Vec<Function>,
-    #[serde(default)]
     pub events: Vec<Event>,
-    #[serde(default)]
     pub errors: Vec<ErrorEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Constructor {
-    #[serde(default)]
     pub inputs: Vec<Param>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Function {
     pub name: String,
     pub signature: String,
@@ -81,24 +81,25 @@ pub struct Function {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Event {
     pub name: String,
     pub signature: String,
     pub topic0: String,
-    #[serde(default)]
     pub fields: Vec<EventField>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ErrorEntry {
     pub name: String,
     pub signature: String,
     pub selector: String,
-    #[serde(default)]
     pub inputs: Vec<Param>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Param {
     pub name: String,
     #[serde(rename = "type")]
@@ -106,15 +107,16 @@ pub struct Param {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EventField {
     pub name: String,
     #[serde(rename = "type")]
     pub ty: String,
-    #[serde(default)]
     pub indexed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StorageEntry {
     pub name: String,
     #[serde(rename = "type")]
@@ -126,6 +128,7 @@ pub struct StorageEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Obligation {
     pub id: String,
     pub name: String,
@@ -145,6 +148,7 @@ pub enum ObligationKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Coverage {
     pub disposition: CoverageDisposition,
     pub path: Option<String>,
@@ -160,6 +164,7 @@ pub enum CoverageDisposition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactPaths {
     pub yul: Utf8PathBuf,
     pub creation_bytecode: Utf8PathBuf,
@@ -203,9 +208,25 @@ impl ContractManifest {
         }
         self.validate_contract_name()?;
         self.validate_paths()?;
+        self.validate_lean_modules()?;
+        self.validate_artifacts()?;
+        if let Some(constructor) = &self.abi.constructor {
+            validate_params(&constructor.inputs, "constructor input", "constructor").map_err(
+                |message| Error::Invalid {
+                    contract: self.contract.clone(),
+                    message,
+                },
+            )?;
+        }
         for function in &self.abi.functions {
             if function.name.trim().is_empty() {
                 return self.invalid("function name cannot be empty");
+            }
+            if !is_identifier(&function.name) {
+                return self.invalid(format!(
+                    "function name `{}` must be a Solidity identifier",
+                    function.name
+                ));
             }
             validate_params(&function.inputs, "function input", &function.name).map_err(
                 |message| Error::Invalid {
@@ -232,6 +253,12 @@ impl ContractManifest {
                     function.name
                 ));
             }
+            if !matches!(function.visibility.as_str(), "external" | "public") {
+                return self.invalid(format!(
+                    "function `{}` has unsupported visibility `{}`",
+                    function.name, function.visibility
+                ));
+            }
             if !matches!(
                 function.mutability.as_str(),
                 "nonpayable" | "payable" | "view" | "pure"
@@ -252,6 +279,12 @@ impl ContractManifest {
         for error in &self.abi.errors {
             if error.name.trim().is_empty() {
                 return self.invalid("error name cannot be empty");
+            }
+            if !is_identifier(&error.name) {
+                return self.invalid(format!(
+                    "error name `{}` must be a Solidity identifier",
+                    error.name
+                ));
             }
             validate_params(&error.inputs, "error input", &error.name).map_err(|message| {
                 Error::Invalid {
@@ -277,6 +310,12 @@ impl ContractManifest {
         for event in &self.abi.events {
             if event.name.trim().is_empty() {
                 return self.invalid("event name cannot be empty");
+            }
+            if !is_identifier(&event.name) {
+                return self.invalid(format!(
+                    "event name `{}` must be a Solidity identifier",
+                    event.name
+                ));
             }
             validate_event_fields(&event.fields, &event.name).map_err(|message| {
                 Error::Invalid {
@@ -316,6 +355,21 @@ impl ContractManifest {
                     storage.name, storage.width_bytes
                 ));
             }
+            if storage.offset > 31 {
+                return self.invalid(format!(
+                    "storage `{}` has invalid offset {}",
+                    storage.name, storage.offset
+                ));
+            }
+            if !matches!(
+                storage.encoding.as_str(),
+                "value" | "mapping" | "dynamic_array" | "bytes" | "struct"
+            ) {
+                return self.invalid(format!(
+                    "storage `{}` has unsupported encoding `{}`",
+                    storage.name, storage.encoding
+                ));
+            }
         }
         for obligation in &self.obligations {
             self.validate_obligation(obligation)?;
@@ -345,8 +399,42 @@ impl ContractManifest {
             &self.artifacts.interface,
             &self.artifacts.deployer,
         ] {
+            if path.as_str().trim().is_empty() {
+                return self.invalid("manifest paths cannot be empty");
+            }
             if path.is_absolute() || path.components().any(|part| part.as_str() == "..") {
                 return self.invalid(format!("path `{path}` escapes project root"));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_lean_modules(&self) -> Result<()> {
+        for (label, name) in [
+            (
+                "implementation_module",
+                self.lean.implementation_module.as_str(),
+            ),
+            ("spec_module", self.lean.spec_module.as_str()),
+            ("proof_module", self.lean.proof_module.as_str()),
+        ] {
+            if !is_qualified_lean_name(name) {
+                return self.invalid(format!(
+                    "lean {label} `{name}` must be a fully qualified Lean name"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_artifacts(&self) -> Result<()> {
+        if let Some(hash) = &self.artifacts.bytecode_hash {
+            if hash.len() != 64
+                || !hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return self.invalid("artifact bytecode_hash must be 64 lowercase hex characters");
             }
         }
         Ok(())
@@ -356,7 +444,45 @@ impl ContractManifest {
         if obligation.id.trim().is_empty() {
             return self.invalid("obligation id cannot be empty");
         }
-        if !obligation.lean_decl.contains('.') {
+        if obligation.name.trim().is_empty() {
+            return self.invalid(format!(
+                "obligation `{}` name cannot be empty",
+                obligation.id
+            ));
+        }
+        if !is_identifier(&obligation.name) {
+            return self.invalid(format!(
+                "obligation `{}` name `{}` must be a Lean identifier",
+                obligation.id, obligation.name
+            ));
+        }
+        if obligation.contract != self.contract {
+            return self.invalid(format!(
+                "obligation `{}` contract `{}` must match manifest contract `{}`",
+                obligation.id, obligation.contract, self.contract
+            ));
+        }
+        if let Some(function) = &obligation.function {
+            if function.trim().is_empty() {
+                return self.invalid(format!(
+                    "obligation `{}` function cannot be empty",
+                    obligation.id
+                ));
+            }
+            let known_function = self
+                .abi
+                .functions
+                .iter()
+                .any(|abi| abi.name == function.as_str())
+                || (function == "constructor" && self.abi.constructor.is_some());
+            if !known_function {
+                return self.invalid(format!(
+                    "obligation `{}` references unknown function `{}`",
+                    obligation.id, function
+                ));
+            }
+        }
+        if !is_qualified_lean_name(&obligation.lean_decl) {
             return self.invalid(format!(
                 "obligation `{}` lean_decl must be fully qualified",
                 obligation.id
@@ -441,6 +567,26 @@ fn mirror_symbol_is_property(symbol: &str) -> bool {
     name.starts_with("testFuzz") || name.starts_with("invariant_")
 }
 
+fn is_qualified_lean_name(value: &str) -> bool {
+    let mut segment_count = 0;
+    for segment in value.split('.') {
+        segment_count += 1;
+        if !is_identifier(segment) {
+            return false;
+        }
+    }
+    segment_count >= 2
+}
+
+fn is_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
 fn function_signature(function: &Function) -> String {
     signature_from_types(
         &function.name,
@@ -513,9 +659,9 @@ mod tests {
                 proof: "verity/proof/ERC20LiteProof.lean".into(),
             },
             lean: LeanModules {
-                implementation_module: "verity.src.ERC20Lite".to_string(),
-                spec_module: "verity.spec.ERC20LiteSpec".to_string(),
-                proof_module: "verity.proof.ERC20LiteProof".to_string(),
+                implementation_module: "src.ERC20Lite".to_string(),
+                spec_module: "spec.ERC20LiteSpec".to_string(),
+                proof_module: "proof.ERC20LiteProof".to_string(),
             },
             abi: Abi {
                 constructor: None,
@@ -574,7 +720,7 @@ mod tests {
                 id: "ERC20Lite.transfer_post".to_string(),
                 name: "transfer_post".to_string(),
                 kind: ObligationKind::Postcondition,
-                lean_decl: "verity.proof.ERC20LiteProof.transfer_post".to_string(),
+                lean_decl: "proof.ERC20LiteProof.transfer_post".to_string(),
                 contract: "ERC20Lite".to_string(),
                 function: Some("transfer".to_string()),
                 coverage: Coverage {
@@ -599,6 +745,20 @@ mod tests {
     #[test]
     fn valid_manifest_passes() {
         manifest().validate().unwrap();
+    }
+
+    #[test]
+    fn serde_rejects_unknown_and_missing_schema_fields() {
+        let mut unknown = serde_json::to_value(manifest()).unwrap();
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".to_string(), serde_json::json!(true));
+        assert!(serde_json::from_value::<ContractManifest>(unknown).is_err());
+
+        let mut missing = serde_json::to_value(manifest()).unwrap();
+        missing.as_object_mut().unwrap().remove("obligations");
+        assert!(serde_json::from_value::<ContractManifest>(missing).is_err());
     }
 
     #[test]
@@ -646,11 +806,18 @@ mod tests {
 
     #[test]
     fn function_mutability_must_be_supported() {
-        let mut manifest = manifest();
-        manifest.abi.functions[0].mutability = "delegatecall".to_string();
+        let mut bad_mutability = manifest();
+        bad_mutability.abi.functions[0].mutability = "delegatecall".to_string();
         assert!(matches!(
-            manifest.validate(),
+            bad_mutability.validate(),
             Err(Error::Invalid { message, .. }) if message.contains("unsupported mutability")
+        ));
+
+        let mut bad_visibility = manifest();
+        bad_visibility.abi.functions[0].visibility = "internal".to_string();
+        assert!(matches!(
+            bad_visibility.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("unsupported visibility")
         ));
     }
 
@@ -681,10 +848,34 @@ mod tests {
     }
 
     #[test]
-    fn path_traversal_fails() {
+    fn constructor_params_are_validated() {
         let mut manifest = manifest();
-        manifest.artifacts.yul = "../escape.yul".into();
-        assert!(manifest.validate().is_err());
+        manifest.abi.constructor = Some(Constructor {
+            inputs: vec![Param {
+                name: "owner".to_string(),
+                ty: " ".to_string(),
+            }],
+        });
+
+        assert!(matches!(
+            manifest.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("constructor input")
+                && message.contains("type cannot be empty")
+        ));
+    }
+
+    #[test]
+    fn path_traversal_fails() {
+        let mut escaping_path = manifest();
+        escaping_path.artifacts.yul = "../escape.yul".into();
+        assert!(escaping_path.validate().is_err());
+
+        let mut empty_path = manifest();
+        empty_path.artifacts.yul = "".into();
+        assert!(matches!(
+            empty_path.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("paths cannot be empty")
+        ));
     }
 
     #[test]
@@ -705,6 +896,73 @@ mod tests {
         manifest.obligations[0].coverage.path =
             Some("test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransfer".to_string());
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn lean_names_must_be_qualified_identifiers() {
+        let mut bad_module = manifest();
+        bad_module.lean.proof_module = "proof".to_string();
+        assert!(matches!(
+            bad_module.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("proof_module")
+                && message.contains("fully qualified")
+        ));
+
+        let mut bad_decl = manifest();
+        bad_decl.obligations[0].lean_decl = "proof.ERC20LiteProof.transfer-post".to_string();
+        assert!(matches!(
+            bad_decl.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("lean_decl")
+                && message.contains("fully qualified")
+        ));
+    }
+
+    #[test]
+    fn artifact_and_storage_shapes_must_match_schema() {
+        let mut bad_hash = manifest();
+        bad_hash.artifacts.bytecode_hash = Some("ABCD".to_string());
+        assert!(matches!(
+            bad_hash.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("bytecode_hash")
+        ));
+
+        let mut bad_offset = manifest();
+        bad_offset.storage[0].offset = 32;
+        assert!(matches!(
+            bad_offset.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("invalid offset")
+        ));
+
+        let mut bad_encoding = manifest();
+        bad_encoding.storage[0].encoding = "packed".to_string();
+        assert!(matches!(
+            bad_encoding.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("unsupported encoding")
+        ));
+    }
+
+    #[test]
+    fn obligations_must_reference_manifest_contract_and_known_functions() {
+        let mut empty_name = manifest();
+        empty_name.obligations[0].name.clear();
+        assert!(matches!(
+            empty_name.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("name cannot be empty")
+        ));
+
+        let mut wrong_contract = manifest();
+        wrong_contract.obligations[0].contract = "Other".to_string();
+        assert!(matches!(
+            wrong_contract.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("must match manifest contract")
+        ));
+
+        let mut unknown_function = manifest();
+        unknown_function.obligations[0].function = Some("mint".to_string());
+        assert!(matches!(
+            unknown_function.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("unknown function")
+        ));
     }
 
     #[test]
