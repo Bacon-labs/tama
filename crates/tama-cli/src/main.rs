@@ -704,6 +704,10 @@ fn install_package(
     if offline {
         return Err("`tama install` cannot run with --offline because it must validate the dependency and run `lake update`".to_string());
     }
+    if locked {
+        let lock = tama_config::load_lock(root).map_err(|err| err.to_string())?;
+        tama_config::enforce_locked(root, &lock).map_err(|err| err.to_string())?;
+    }
     let explicit_rev = package_has_explicit_git_rev(package);
     match &mut dependency.source {
         tama_config::LakeDependencySource::Git { url, rev } => {
@@ -724,7 +728,7 @@ fn install_package(
             })?;
         }
     }
-    mutate_dependencies(root, locked, offline, |root| {
+    mutate_dependencies(root, false, offline, |root| {
         tama_config::upsert_lake_dependency(root, &dependency).map_err(|err| err.to_string())
     })
 }
@@ -2196,6 +2200,57 @@ mod tests {
 
         assert!(err.contains("--offline"));
         assert!(!called);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_locked_rejects_stale_inputs_before_remote_validation() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let lakefile_before = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            "[project]\nname = \"starter\"\nverity = \"0.1.0\"\n\n[yul]\nsolc = \"0.8.34\"\n",
+        )
+        .unwrap();
+
+        let bin = Utf8PathBuf::from_path_buf(dir.path().join("bin")).unwrap();
+        let git = bin.join("git");
+        let log = Utf8PathBuf::from_path_buf(dir.path().join("git.log")).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        tama_common::write_string(
+            &git,
+            "#!/bin/sh\n\
+             printf '%s\\n' \"$@\" >> \"$TAMA_TEST_GIT_LOG\"\n\
+             exit 42\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&git).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&git, permissions).unwrap();
+        }
+        let mut path_entries = vec![bin.as_std_path().to_path_buf()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        let _path_guard = EnvVarGuard::set("PATH", std::env::join_paths(path_entries).unwrap());
+        let _git_log_guard = EnvVarGuard::set("TAMA_TEST_GIT_LOG", log.as_str());
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, "off");
+
+        let err =
+            install_package(&root, "https://example.test/org/dep.git", false, true).unwrap_err();
+
+        assert!(err.contains("lockfile is stale"));
+        assert!(err.contains("tama.toml"));
+        assert!(!log.exists());
+        assert_eq!(
+            tama_common::read_to_string(&root.join("lakefile.toml")).unwrap(),
+            lakefile_before
+        );
     }
 
     #[cfg(unix)]
