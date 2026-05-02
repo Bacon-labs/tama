@@ -222,12 +222,25 @@ fn list_versions() -> Result<(), String> {
 
 fn uninstall() -> Result<(), String> {
     let home = tama_home();
-    let active = fs::read_to_string(home.join("active")).map_err(|err| err.to_string())?;
-    let dir = home.join("versions").join(active.trim());
-    if dir.exists() {
-        fs::remove_dir_all(dir).map_err(|err| err.to_string())?;
+    uninstall_at(&home)
+}
+
+fn uninstall_at(home: &Utf8Path) -> Result<(), String> {
+    let active = fs::read_to_string(home.join("active")).unwrap_or_default();
+    let active = active.trim();
+    remove_file_if_exists(&home.join("bin/tama"))?;
+    if !active.is_empty() {
+        remove_file_if_exists(&home.join("versions").join(active).join("bin/tama"))?;
     }
-    Ok(())
+    remove_file_if_exists(&home.join("active"))
+}
+
+fn remove_file_if_exists(path: &Utf8Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!("failed to remove `{path}`: {err}")),
+    }
 }
 
 fn verify_manifest_signature(manifest: &[u8], signature: &[u8]) -> Result<(), String> {
@@ -368,6 +381,25 @@ mod tests {
         assert_eq!(fs::read_to_string(home.join("active")).unwrap(), "0.1.0");
         assert!(home.join("bin/tama").exists());
         assert!(home.join("bin/tamaup").exists());
+    }
+
+    #[test]
+    fn uninstall_removes_tama_but_keeps_tamaup() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let version_bin = home.join("versions/0.1.0/bin");
+        fs::create_dir_all(&version_bin).unwrap();
+        fs::write(version_bin.join("tama"), b"tama").unwrap();
+        fs::write(version_bin.join("tamaup"), b"tamaup").unwrap();
+        use_version_at(&home, "0.1.0").unwrap();
+
+        uninstall_at(&home).unwrap();
+
+        assert!(!home.join("bin/tama").exists());
+        assert!(!version_bin.join("tama").exists());
+        assert!(home.join("bin/tamaup").exists());
+        assert!(version_bin.join("tamaup").exists());
+        assert!(!home.join("active").exists());
     }
 
     #[test]
