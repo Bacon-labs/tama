@@ -258,6 +258,21 @@ mod tests {
 
     #[test]
     fn parses_supported_field() {
+        for field in [
+            "manifest",
+            "selectors",
+            "abi",
+            "storage-layout",
+            "yul",
+            "bytecode",
+            "runtime-bytecode",
+            "theorems",
+            "obligations",
+            "mirrors",
+            "trust",
+        ] {
+            assert!(parse_field(field).is_some(), "{field} should parse");
+        }
         assert_eq!(
             parse_field("runtime-bytecode"),
             Some(Field::RuntimeBytecode)
