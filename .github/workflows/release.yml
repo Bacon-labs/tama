@@ -227,6 +227,18 @@ jobs:
           PY
           expect_audit_failure "$project" coverage
 
+          project="$(copy_case mirror-outside-foundry-test)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" "$project/src/ERC20Lite.t.sol" <<'PY'
+          import json
+          import sys
+          manifest_path, test_path = sys.argv[1:]
+          data = json.load(open(manifest_path, encoding="utf-8"))
+          data["obligations"][0]["coverage"]["path"] = "src/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply"
+          json.dump(data, open(manifest_path, "w", encoding="utf-8"), indent=2)
+          open(test_path, "w", encoding="utf-8").write("contract ERC20LiteTest { function testFuzzTransferPreservesTotalSupply() public {} }\n")
+          PY
+          expect_audit_failure "$project" coverage
+
           project="$(copy_case inserted-sorry)"
           python3 - "$project/artifacts/trust-probe/axioms.json" <<'PY'
           import json

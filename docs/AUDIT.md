@@ -9,6 +9,7 @@ Checks:
 - `storage-layout`: manifest storage declarations, duplicate slots, fixed-slot overlap, valid encodings, and available compiler layout reports.
 - `coverage`: every public invariant and postcondition has mirror or proof-only coverage; proof-only entries require a reason.
 - Mirror coverage must point to a property-shaped Foundry symbol: `testFuzz*` or `invariant_*`.
+- Mirror coverage files must live under Foundry's configured test directory.
 - `trust-boundary`: Lean axiom dependencies, `sorryAx`, unallowlisted axioms, unresolved declarations, and Verity trust-surface reports from `artifacts/trust-report.json` and `artifacts/assumption-report.json`.
 - Trust probes are generated with Lean's `collectAxioms` API and must emit `tama.trust-probe.v1` JSON.
 

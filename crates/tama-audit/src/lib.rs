@@ -676,6 +676,19 @@ fn valid_storage_encoding(encoding: &str) -> bool {
 }
 
 fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
+    let foundry = match tama_config::parse_foundry_config(root) {
+        Ok(foundry) => foundry,
+        Err(err) => {
+            issues.push(issue(
+                "coverage",
+                None,
+                "TAMA_COVERAGE_FOUNDRY_CONFIG",
+                format!("could not read foundry.toml: {err}"),
+                Some("foundry.toml".into()),
+            ));
+            tama_config::FoundryConfig::default()
+        }
+    };
     for manifest in manifests {
         for obligation in &manifest.obligations {
             match obligation.kind {
@@ -707,6 +720,18 @@ fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Is
                             Some(file.into()),
                         ));
                         continue;
+                    }
+                    if !Utf8Path::new(file).starts_with(&foundry.test) {
+                        issues.push(issue(
+                            "coverage",
+                            Some(&manifest.contract),
+                            "TAMA_COVERAGE_TEST_ROOT",
+                            format!(
+                                "mirror file `{file}` is outside Foundry test directory `{}`",
+                                foundry.test
+                            ),
+                            Some(file.into()),
+                        ));
                     }
                     let abs = root.join(file);
                     if !abs.is_file() {
@@ -2106,6 +2131,35 @@ contract CounterTest {
         assert!(issues
             .iter()
             .any(|issue| issue.code == "TAMA_COVERAGE_PATH"));
+    }
+
+    #[test]
+    fn coverage_rejects_mirror_paths_outside_foundry_test_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut manifest = counter_manifest();
+        let mut obligation = public_obligation();
+        obligation.coverage = tama_manifest::Coverage {
+            disposition: CoverageDisposition::Mirror,
+            path: Some("src/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string()),
+            reason: None,
+        };
+        manifest.obligations.push(obligation);
+        tama_common::write_string(
+            &root.join("src/Counter.t.sol"),
+            r#"contract CounterTest {
+    function testFuzzIncrementUpdatesCount(uint8 initialSteps, uint8 extraSteps) public {}
+}
+"#,
+        )
+        .unwrap();
+
+        let mut issues = Vec::new();
+        coverage(&root, &[manifest], &mut issues);
+
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_COVERAGE_TEST_ROOT"));
     }
 
     #[test]
