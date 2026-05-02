@@ -987,7 +987,19 @@ fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Is
                         ));
                         continue;
                     }
-                    let text = tama_common::read_to_string(&abs).unwrap_or_default();
+                    let text = match tama_common::read_to_string(&abs) {
+                        Ok(text) => text,
+                        Err(err) => {
+                            issues.push(issue(
+                                "coverage",
+                                Some(&manifest.contract),
+                                "TAMA_COVERAGE_READ",
+                                format!("could not read mirror file `{file}`: {err}"),
+                                Some(file.into()),
+                            ));
+                            continue;
+                        }
+                    };
                     let name = symbol.rsplit('.').next().unwrap_or(symbol);
                     if !mirror_symbol_is_property(name) {
                         issues.push(issue(
@@ -2375,6 +2387,47 @@ contract CounterTest {
         assert!(!clean_issues
             .iter()
             .any(|issue| issue.code == "TAMA_COVERAGE_MISSING_SYMBOL"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn coverage_reports_unreadable_mirror_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut manifest = counter_manifest();
+        let mut obligation = public_obligation();
+        obligation.coverage = tama_manifest::Coverage {
+            disposition: CoverageDisposition::Mirror,
+            path: Some(
+                "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string(),
+            ),
+            reason: None,
+        };
+        manifest.obligations.push(obligation);
+        let mirror = root.join("test/verity/Counter.t.sol");
+        tama_common::write_string(
+            &mirror,
+            r#"contract CounterTest {
+    function testFuzzIncrementUpdatesCount(uint8 initialSteps, uint8 extraSteps) public {}
+}
+"#,
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&mirror).unwrap().permissions();
+        permissions.set_mode(0o000);
+        std::fs::set_permissions(&mirror, permissions).unwrap();
+
+        let mut issues = Vec::new();
+        coverage(&root, &[manifest], &mut issues);
+
+        let mut restored = std::fs::metadata(&mirror).unwrap().permissions();
+        restored.set_mode(0o600);
+        std::fs::set_permissions(&mirror, restored).unwrap();
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_COVERAGE_READ"));
     }
 
     #[test]
