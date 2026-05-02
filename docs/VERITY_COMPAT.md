@@ -21,12 +21,16 @@ The upstream compiler interface verified for this commit is:
 lake exe verity-compiler --manifest <module-list> -o artifacts/yul
 lake exe verity-compiler --module <Lean.Module.Name> -o artifacts/yul
 lake exe verity-compiler --abi-output artifacts/abi -o artifacts/yul
-lake exe verity-compiler --trust-report artifacts/trust.json -o artifacts/yul
-lake exe verity-compiler --assumption-report artifacts/assumptions.json -o artifacts/yul
-lake exe verity-compiler --layout-report artifacts/layout.json -o artifacts/yul
+lake exe verity-compiler --trust-report artifacts/trust-report.json -o artifacts/yul
+lake exe verity-compiler --assumption-report artifacts/assumption-report.json -o artifacts/yul
+lake exe verity-compiler --layout-report artifacts/layout-report.json -o artifacts/yul
 ```
 
 `--manifest` in upstream Verity means “read a text file containing Lean module names.” It is not a contract artifact manifest and is not equivalent to Tama’s `tama.contract-manifest.v1`.
+
+Tama invokes the combined form during `tama build`, using the configured
+artifact root for `yul/`, `abi/`, `trust-report.json`,
+`assumption-report.json`, and `layout-report.json`.
 
 ## Upstream Scripts
 
