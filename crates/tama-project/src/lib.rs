@@ -166,6 +166,7 @@ pub fn scaffold_contract(root: &Utf8Path, name: &str) -> Result<()> {
             return Err(Error::AlreadyExists(path.clone()));
         }
     }
+    let mut lock = tama_config::load_lock(root)?;
     write_string(&src, &contract_template(name))?;
     write_string(&spec, &spec_template(name))?;
     write_string(&proof, &proof_template(name))?;
@@ -173,7 +174,6 @@ pub fn scaffold_contract(root: &Utf8Path, name: &str) -> Result<()> {
     update_aggregate(root, "TamaSrc.lean", &format!("import src.{name}"))?;
     update_aggregate(root, "TamaSpec.lean", &format!("import spec.{name}Spec"))?;
     update_aggregate(root, "TamaProof.lean", &format!("import proof.{name}Proof"))?;
-    let mut lock = tama_config::load_lock(root)?;
     tama_config::update_lock_inputs(root, &mut lock)?;
     tama_config::write_lock(root, &lock)?;
     Ok(())
@@ -917,6 +917,40 @@ metadata_bytecode_hash = "none"
         assert!(!read_to_string(&root.join("TamaSrc.lean"))
             .unwrap()
             .contains("import src.TipJar"));
+    }
+
+    #[test]
+    fn new_rejects_corrupt_lock_before_writing_scaffold_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        init(&root, InitOptions::default()).unwrap();
+        let src_before = read_to_string(&root.join("TamaSrc.lean")).unwrap();
+        let spec_before = read_to_string(&root.join("TamaSpec.lean")).unwrap();
+        let proof_before = read_to_string(&root.join("TamaProof.lean")).unwrap();
+        write_string(&root.join("tama.lock"), "not = [valid").unwrap();
+
+        let err = scaffold_contract(&root, "TipJar").unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::Config(tama_config::Error::Toml { .. })
+        ));
+        assert!(!root.join("verity/src/TipJar.lean").exists());
+        assert!(!root.join("verity/spec/TipJarSpec.lean").exists());
+        assert!(!root.join("verity/proof/TipJarProof.lean").exists());
+        assert!(!root.join("test/verity/TipJar.t.sol").exists());
+        assert_eq!(
+            read_to_string(&root.join("TamaSrc.lean")).unwrap(),
+            src_before
+        );
+        assert_eq!(
+            read_to_string(&root.join("TamaSpec.lean")).unwrap(),
+            spec_before
+        );
+        assert_eq!(
+            read_to_string(&root.join("TamaProof.lean")).unwrap(),
+            proof_before
+        );
     }
 
     #[test]
