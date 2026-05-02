@@ -55,6 +55,7 @@ curl -L https://tama.tools/install.sh | sh
 ```
 
 - links to quickstart, command reference, audit guide, limitations, release artifacts, `install.sh`, `manifest.json`, and `manifest.json.minisig`;
+- links to the telemetry-free privacy statement;
 - no Windows installation path for v0.1.
 
 ## Installer Safety
