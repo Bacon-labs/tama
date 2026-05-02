@@ -195,6 +195,22 @@ jobs:
           PY
           expect_audit_failure "$project" selectors
 
+          project="$(copy_case corrupted-event-topic)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["abi"].setdefault("events", []).append({
+              "name": "SyntheticEvent",
+              "signature": "SyntheticEvent(address)",
+              "topic0": "0x00",
+              "fields": [{"name": "account", "type": "address", "indexed": False}],
+          })
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" selectors
+
           project="$(copy_case duplicate-storage)"
           python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
           import json
@@ -252,6 +268,17 @@ jobs:
           path = sys.argv[1]
           data = json.load(open(path, encoding="utf-8"))
           data["obligations"][0]["axioms"].append("sorryAx")
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" trust-boundary
+
+          project="$(copy_case inserted-custom-axiom)"
+          python3 - "$project/artifacts/trust-probe/axioms.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["obligations"][0]["axioms"].append("Tama.UnsafeAxiom")
           json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
           PY
           expect_audit_failure "$project" trust-boundary
