@@ -645,6 +645,16 @@ fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Is
                         .split_once(':')
                         .map(|(file, _)| file)
                         .unwrap_or(path_ref);
+                    if path_escapes_project(Utf8Path::new(file)) {
+                        issues.push(issue(
+                            "coverage",
+                            Some(&manifest.contract),
+                            "TAMA_COVERAGE_PATH",
+                            format!("mirror file path escapes project root: {file}"),
+                            Some(file.into()),
+                        ));
+                        continue;
+                    }
                     let abs = root.join(file);
                     if !abs.is_file() {
                         issues.push(issue(
@@ -1876,6 +1886,27 @@ contract CounterTest {
         assert!(!clean_issues
             .iter()
             .any(|issue| issue.code == "TAMA_COVERAGE_MISSING_SYMBOL"));
+    }
+
+    #[test]
+    fn coverage_rejects_escaping_mirror_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut manifest = counter_manifest();
+        let mut obligation = public_obligation();
+        obligation.coverage = tama_manifest::Coverage {
+            disposition: CoverageDisposition::Mirror,
+            path: Some("../Counter.t.sol:CounterTest.testIncrementPost".to_string()),
+            reason: None,
+        };
+        manifest.obligations.push(obligation);
+
+        let mut issues = Vec::new();
+        coverage(&root, &[manifest], &mut issues);
+
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_COVERAGE_PATH"));
     }
 
     #[test]

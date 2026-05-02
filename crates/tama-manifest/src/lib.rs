@@ -291,17 +291,20 @@ impl ContractManifest {
             ObligationKind::Invariant | ObligationKind::Postcondition => {
                 match obligation.coverage.disposition {
                     CoverageDisposition::Mirror => {
-                        if obligation
-                            .coverage
-                            .path
-                            .as_deref()
-                            .unwrap_or("")
-                            .trim()
-                            .is_empty()
-                        {
+                        let path = obligation.coverage.path.as_deref().unwrap_or("").trim();
+                        if path.is_empty() {
                             return self.invalid(format!(
                                 "obligation `{}` mirror coverage requires a path",
                                 obligation.id
+                            ));
+                        }
+                        let file = path.split_once(':').map(|(file, _)| file).unwrap_or(path);
+                        let file = Utf8Path::new(file);
+                        if file.is_absolute() || file.components().any(|part| part.as_str() == "..")
+                        {
+                            return self.invalid(format!(
+                                "obligation `{}` mirror path `{}` escapes project root",
+                                obligation.id, path
                             ));
                         }
                     }
@@ -449,6 +452,14 @@ mod tests {
     fn path_traversal_fails() {
         let mut manifest = manifest();
         manifest.artifacts.yul = "../escape.yul".into();
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn coverage_path_traversal_fails() {
+        let mut manifest = manifest();
+        manifest.obligations[0].coverage.path =
+            Some("../ERC20Lite.t.sol:ERC20LiteTest.testTransferPost".to_string());
         assert!(manifest.validate().is_err());
     }
 
