@@ -2279,6 +2279,9 @@ end proof.CounterProof
         assert!(test.contains("function invariant_countTracksModel"));
         assert!(test.contains("handlerIncrement"));
         assert!(test.contains("handlerDecrement"));
+        assert!(test.contains("contract CounterTest is MinimalStdInvariant"));
+        assert!(test.contains("function targetSelectors()"));
+        assert!(!test.contains("abstract contract InvariantTargets"));
 
         for obligation in &obligations {
             assert_ne!(obligation.coverage.disposition, CoverageDisposition::None);

@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import {CounterDeployer} from "../../src/generated/verity/CounterDeployer.sol";
 import {CounterIface} from "../../src/generated/verity/CounterIface.sol";
 
-abstract contract InvariantTargets {
+abstract contract MinimalStdInvariant {
     struct FuzzSelector {
         address addr;
         bytes4[] selectors;
@@ -21,7 +21,7 @@ abstract contract InvariantTargets {
     }
 }
 
-contract CounterTest is InvariantTargets {
+contract CounterTest is MinimalStdInvariant {
     CounterIface internal invariantCounter;
     uint256 internal invariantModel;
 
