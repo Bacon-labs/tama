@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use tama_common::{read_to_string, write_string};
 use tama_config::{PathsConfig, TamaLock};
 use toml_edit::Item;
@@ -156,6 +156,7 @@ pub fn scaffold_contract(root: &Utf8Path, name: &str) -> Result<()> {
     ensure_project_relative(&paths.spec)?;
     ensure_project_relative(&paths.proof)?;
     ensure_project_relative(&paths.test)?;
+    ensure_project_relative(&paths.generated)?;
     validate_lakefile_covers_paths(root, &paths)?;
     let src = root.join(paths.src.join(format!("{name}.lean")));
     let spec = root.join(paths.spec.join(format!("{name}Spec.lean")));
@@ -169,8 +170,9 @@ pub fn scaffold_contract(root: &Utf8Path, name: &str) -> Result<()> {
     let mut lock = tama_config::load_lock(root)?;
     write_string(&src, &contract_template(name))?;
     write_string(&spec, &spec_template(name))?;
-    write_string(&proof, &proof_template(name))?;
-    write_string(&test, &test_template(name))?;
+    write_string(&proof, &proof_template(name, paths.test.as_str()))?;
+    let generated_import_root = relative_project_path(&paths.test, &paths.generated);
+    write_string(&test, &test_template(name, generated_import_root.as_str()))?;
     update_aggregate(root, "TamaSrc.lean", &format!("import src.{name}"))?;
     update_aggregate(root, "TamaSpec.lean", &format!("import spec.{name}Spec"))?;
     update_aggregate(root, "TamaProof.lean", &format!("import proof.{name}Proof"))?;
@@ -196,6 +198,38 @@ fn ensure_project_relative(path: &Utf8Path) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn relative_project_path(from_dir: &Utf8Path, to: &Utf8Path) -> Utf8PathBuf {
+    let from_components = normal_components(from_dir);
+    let to_components = normal_components(to);
+    let common_len = from_components
+        .iter()
+        .zip(&to_components)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut relative = Utf8PathBuf::new();
+    for _ in common_len..from_components.len() {
+        relative.push("..");
+    }
+    for component in &to_components[common_len..] {
+        relative.push(component);
+    }
+    if relative.as_str().is_empty() {
+        ".".into()
+    } else {
+        relative
+    }
+}
+
+fn normal_components(path: &Utf8Path) -> Vec<String> {
+    path.components()
+        .filter_map(|component| match component {
+            Utf8Component::Normal(part) => Some(part.to_string()),
+            Utf8Component::CurDir => None,
+            Utf8Component::ParentDir | Utf8Component::RootDir | Utf8Component::Prefix(_) => None,
+        })
+        .collect()
 }
 
 fn validate_lakefile_covers_paths(root: &Utf8Path, paths: &PathsConfig) -> Result<()> {
@@ -392,7 +426,7 @@ verity_contract {name} where
   function setValue (newValue : Uint256) : Unit := do
     setStorage value newValue
 
-  function getValue () : Uint256 := do
+  function view getValue () : Uint256 := do
     let currentValue ← getStorage value
     return currentValue
 
@@ -407,36 +441,67 @@ fn spec_template(name: &str) -> String {
 
 namespace spec.{name}Spec
 
-theorem scaffold_spec_marker : True := by
-  trivial
+open Verity
+open Verity.EVM.Uint256
+
+def setValue_spec (newValue : Uint256) (s s' : ContractState) : Prop :=
+  s'.storage 0 = newValue
+
+def getValue_spec (result : Uint256) (s : ContractState) : Prop :=
+  result = s.storage 0
 
 end spec.{name}Spec
 "#
     )
 }
 
-fn proof_template(name: &str) -> String {
+fn proof_template(name: &str, mirror_test_dir: &str) -> String {
     format!(
         r#"import spec.{name}Spec
 
 namespace proof.{name}Proof
 
-theorem scaffold_proof_marker : True := by
-  trivial
+open Verity
+open Verity.EVM.Uint256
+open spec.{name}Spec
+open src.{name}
+
+-- tama: obligation kind=postcondition function=setValue coverage=mirror path={mirror_test_dir}/{name}.t.sol:{name}Test.testFuzzSetValueUpdatesValue
+theorem setValue_meets_spec (newValue : Uint256) (s : ContractState) :
+  let s' := ((setValue newValue).run s).snd
+  setValue_spec newValue s s' := by
+  sorry
+
+-- tama: obligation kind=postcondition function=getValue coverage=mirror path={mirror_test_dir}/{name}.t.sol:{name}Test.testFuzzGetValueMirrorsGeneratedBytecode
+theorem getValue_returns_value (s : ContractState) :
+  let result := ((getValue).run s).fst
+  getValue_spec result s := by
+  sorry
 
 end proof.{name}Proof
 "#
     )
 }
 
-fn test_template(name: &str) -> String {
+fn test_template(name: &str, generated_import_root: &str) -> String {
     format!(
         r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {{{name}Deployer}} from "{generated_import_root}/{name}Deployer.sol";
+import {{{name}Iface}} from "{generated_import_root}/{name}Iface.sol";
+
 contract {name}Test {{
-    function testScaffoldCompiles() public pure {{
-        require(true);
+    function testFuzzSetValueUpdatesValue(uint256 newValue) public {{
+        {name}Iface target = {name}Deployer.deploy();
+        target.setValue(newValue);
+        require(target.getValue() == newValue, "value");
+    }}
+
+    function testFuzzGetValueMirrorsGeneratedBytecode(uint256 newValue) public {{
+        {name}Iface target = {name}Deployer.deploy();
+        target.setValue(newValue);
+        require(target.getValue() == newValue, "getValue");
     }}
 }}
 "#
@@ -897,6 +962,25 @@ metadata_bytecode_hash = "none"
         assert!(read_to_string(&root.join("TamaSrc.lean"))
             .unwrap()
             .contains("import src.TipJar"));
+        let source = read_to_string(&root.join("verity/src/TipJar.lean")).unwrap();
+        assert!(source.contains("function view getValue"));
+        let spec = read_to_string(&root.join("verity/spec/TipJarSpec.lean")).unwrap();
+        assert!(spec.contains("def setValue_spec"));
+        assert!(spec.contains("def getValue_spec"));
+        let proof = read_to_string(&root.join("verity/proof/TipJarProof.lean")).unwrap();
+        assert!(proof.contains("((setValue newValue).run s).snd"));
+        assert!(proof.contains("((getValue).run s).fst"));
+        assert!(proof.contains("coverage=mirror"));
+        assert!(proof.contains("sorry"));
+        let test = read_to_string(&root.join("test/verity/TipJar.t.sol")).unwrap();
+        assert!(test.contains(
+            "import {TipJarDeployer} from \"../../src/generated/verity/TipJarDeployer.sol\";"
+        ));
+        assert!(test.contains("function testFuzzSetValueUpdatesValue(uint256 newValue)"));
+        assert!(
+            test.contains("function testFuzzGetValueMirrorsGeneratedBytecode(uint256 newValue)")
+        );
+        assert!(!test.contains("testScaffoldCompiles"));
         let lock = tama_config::load_lock(&root).unwrap();
         assert!(tama_config::lock_drift(&root, &lock).unwrap().is_empty());
     }
@@ -999,6 +1083,9 @@ metadata_bytecode_hash = "none"
         assert!(root.join("contracts/spec/TipJarSpec.lean").is_file());
         assert!(root.join("contracts/proof/TipJarProof.lean").is_file());
         assert!(root.join("tests/verity/TipJar.t.sol").is_file());
+        let proof = read_to_string(&root.join("contracts/proof/TipJarProof.lean")).unwrap();
+        assert!(proof
+            .contains("path=tests/verity/TipJar.t.sol:TipJarTest.testFuzzSetValueUpdatesValue"));
         assert!(!root.join("verity/src/TipJar.lean").exists());
         assert!(read_to_string(&root.join("TamaSrc.lean"))
             .unwrap()
@@ -1009,6 +1096,24 @@ metadata_bytecode_hash = "none"
         );
         let lock = tama_config::load_lock(&root).unwrap();
         assert!(tama_config::lock_drift(&root, &lock).unwrap().is_empty());
+    }
+
+    #[test]
+    fn scaffold_imports_generated_solidity_relative_to_mirror_dir() {
+        assert_eq!(
+            relative_project_path(
+                Utf8Path::new("test/verity"),
+                Utf8Path::new("src/generated/verity")
+            ),
+            Utf8PathBuf::from("../../src/generated/verity")
+        );
+        assert_eq!(
+            relative_project_path(
+                Utf8Path::new("tests/integration/verity"),
+                Utf8Path::new("contracts/generated")
+            ),
+            Utf8PathBuf::from("../../../contracts/generated")
+        );
     }
 
     #[test]

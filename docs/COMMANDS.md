@@ -51,6 +51,12 @@ Adds `verity/src/<Name>.lean`, `verity/spec/<Name>Spec.lean`, `verity/proof/<Nam
 
 When `[paths]` has been customized, `lakefile.toml` must already map the `src`, `spec`, and `proof` Lake libraries to those roots. Tama refuses before writing files if the configured paths are not covered by the Lakefile.
 
+The scaffold includes concrete spec stubs, public proof obligations marked with
+`sorry`, and fuzz-shaped Foundry mirrors that import the generated deployer and
+interface. `tama check` still passes immediately because proof modules are not
+part of the fast check; `tama audit trust-boundary` rejects the TODO proofs until
+they are discharged.
+
 ## `tama check`
 
 Runs the fast Lean check for implementation and spec aggregate modules only:
