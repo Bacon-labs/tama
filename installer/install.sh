@@ -4,14 +4,13 @@ set -eu
 BASE_URL="${TAMA_BASE_URL:-https://tama.tools}"
 TAMAUP_HOME="${TAMAUP_HOME:-$HOME/.tama}"
 VERSION="stable"
-YES=0
 NO_MODIFY_PATH=0
 OFFLINE=0
 MANIFEST_FILE=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --yes) YES=1 ;;
+    --yes) ;;
     --no-modify-path) NO_MODIFY_PATH=1 ;;
     --offline) OFFLINE=1 ;;
     --version) shift; VERSION="${1:?missing version}" ;;
@@ -106,9 +105,16 @@ reject_unknown_keys(manifest, {"schema", "stable", "nightly", "version", "artifa
 schema = manifest.get("schema")
 if schema is not None and schema != "tama.release-manifest.v1":
     raise SystemExit(f"unsupported release manifest schema: {schema}")
-if not SAFE_VERSION.fullmatch(version) or ".." in version:
-    raise SystemExit(f"unsafe requested release version: {version}")
-if manifest.get("releases"):
+is_cumulative = schema is not None or "stable" in manifest or "nightly" in manifest or "releases" in manifest
+if is_cumulative:
+    if schema != "tama.release-manifest.v1":
+        raise SystemExit("cumulative release manifest must declare schema tama.release-manifest.v1")
+    if "stable" not in manifest:
+        raise SystemExit("cumulative release manifest is missing stable version")
+    if not isinstance(manifest.get("releases"), list) or not manifest["releases"]:
+        raise SystemExit("cumulative release manifest must contain releases[]")
+    if "version" in manifest or "artifacts" in manifest:
+        raise SystemExit("cumulative release manifest must not mix legacy version/artifacts fields")
     if version in ("stable", "nightly"):
         selected = manifest.get(version)
         if selected is None:
@@ -117,8 +123,14 @@ if manifest.get("releases"):
         selected = version
     releases = manifest["releases"]
 else:
+    if "version" not in manifest:
+        raise SystemExit("legacy release manifest is missing version")
+    if not isinstance(manifest.get("artifacts"), list) or not manifest["artifacts"]:
+        raise SystemExit("legacy release manifest is missing artifacts")
     selected = manifest["version"] if version == "stable" else version
     releases = [{"version": manifest["version"], "artifacts": manifest["artifacts"]}]
+if not SAFE_VERSION.fullmatch(version) or ".." in version:
+    raise SystemExit(f"unsafe requested release version: {version}")
 selected = require_string(selected, "selected version")
 if not SAFE_VERSION.fullmatch(selected) or ".." in selected:
     raise SystemExit(f"unsafe release version: {selected}")

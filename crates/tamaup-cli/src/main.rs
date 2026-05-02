@@ -286,6 +286,35 @@ fn validate_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
         validate_release_version(&release.version)?;
         validate_artifacts(&release.artifacts)?;
     }
+    let cumulative_shape =
+        manifest.schema.is_some() || manifest.stable.is_some() || manifest.nightly.is_some();
+    if cumulative_shape {
+        if manifest.schema.as_deref() != Some(RELEASE_MANIFEST_SCHEMA) {
+            return Err(
+                "cumulative release manifest must declare schema `tama.release-manifest.v1`"
+                    .to_string(),
+            );
+        }
+        if manifest.stable.is_none() {
+            return Err("cumulative release manifest is missing stable version".to_string());
+        }
+        if manifest.releases.is_empty() {
+            return Err("cumulative release manifest must contain releases[]".to_string());
+        }
+        if manifest.version.is_some() || !manifest.artifacts.is_empty() {
+            return Err(
+                "cumulative release manifest must not mix legacy version/artifacts fields"
+                    .to_string(),
+            );
+        }
+    } else {
+        if manifest.version.is_none() {
+            return Err("legacy release manifest is missing version".to_string());
+        }
+        if manifest.artifacts.is_empty() {
+            return Err("legacy release manifest is missing artifacts".to_string());
+        }
+    }
     Ok(())
 }
 
@@ -1112,6 +1141,42 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn release_manifest_rejects_ambiguous_shapes() {
+        let mut manifest = ReleaseManifest {
+            schema: Some(RELEASE_MANIFEST_SCHEMA.to_string()),
+            stable: Some("0.1.0".to_string()),
+            nightly: None,
+            version: None,
+            artifacts: vec![],
+            releases: vec![],
+        };
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("releases"));
+
+        manifest.releases = vec![Release {
+            version: "0.1.0".to_string(),
+            artifacts: vec![Artifact {
+                platform: "linux-x86_64".to_string(),
+                url: "file:///tmp/tama.tar.gz".to_string(),
+                sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_string(),
+            }],
+        }];
+        manifest.version = Some("0.1.0".to_string());
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("must not mix"));
+
+        manifest.schema = None;
+        manifest.stable = None;
+        manifest.version = None;
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("legacy release manifest"));
     }
 
     #[test]

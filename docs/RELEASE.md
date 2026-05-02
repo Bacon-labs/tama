@@ -35,6 +35,8 @@ Each archive contains `tama` and `tamaup`. No Windows archive is published for v
 
 The release workflow writes a cumulative `manifest.json` with `schema = "tama.release-manifest.v1"`, a `stable` version, and a `releases[]` list. It computes SHA-256 for every new archive, preserves older release entries only after verifying the previously published manifest signature, signs the new manifest, and publishes the manifest, signature, and archives.
 
+The schema-less legacy `version` plus `artifacts[]` manifest shape is accepted only for local/offline tests. Installers reject cumulative manifests that omit `releases[]` or mix the legacy and cumulative shapes.
+
 `tamaup` verifies the manifest signature in process and verifies archive SHA-256 before extraction. `installer/install.sh` may require an external signature verifier, but it must hard fail if verification is unavailable.
 
 `tamaup install` also checks Lean/Lake, Foundry, and solc. Missing or incompatible tools fail closed unless the user passes the matching `--no-install-*` opt-out, or passes `--yes` to allow bootstrap installation. Bootstrap installation is disabled in `--offline` mode.
