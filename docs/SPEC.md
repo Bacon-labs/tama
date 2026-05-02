@@ -760,7 +760,7 @@ $ tama doctor
 
 - update stale `tama.lock` hashes;
 - update the Verity `require` block in `lakefile.toml` to match `tama.toml`;
-- repair missing generated directories;
+- repair missing generated artifact directories, generated Solidity directory, and the configured Lake build directory;
 - warn about, but not overwrite, user-authored config it cannot safely edit.
 
 ---

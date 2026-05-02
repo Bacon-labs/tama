@@ -1024,7 +1024,7 @@ trust
    - validates solc version/path
    - validates generated dirs
 5. `doctor --fix` performs only safe repairs:
-   - create missing generated dirs
+   - create missing generated artifact dirs, generated Solidity dir, and configured Lake build dir
    - recompute lock when inputs are otherwise valid
    - repair generated aggregate module imports if generated header/marker is intact
    - sync explicit Verity require block if it is Tama-managed

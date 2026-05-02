@@ -122,4 +122,4 @@ These commands manage Verity/Tama dependencies, refresh lock state, and diagnose
 
 `tama update --package <name>` runs `lake update <name>` for one Lake package and refreshes `tama.lock`; it does not run `forge update`. Use Forge directly for Solidity-side dependency updates.
 
-`tama doctor` exits nonzero when required tools are missing or incompatible, Verity resolution disagrees with `tama.toml`, or project lock inputs are stale. `tama doctor --fix` requires a Tama project and applies safe directory, Verity dependency, and lock repairs first, then reports the post-fix status.
+`tama doctor` exits nonzero when required tools are missing or incompatible, Verity resolution disagrees with `tama.toml`, generated artifact directories are missing, or project lock inputs are stale. `tama doctor --fix` requires a Tama project and applies safe directory, Verity dependency, and lock repairs first, then reports the post-fix status.

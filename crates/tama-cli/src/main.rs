@@ -375,6 +375,7 @@ fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::Doctor
                 &config.yul.solc,
                 tama_toolchain::parse_solc_version,
             );
+            report_generated_dirs(&mut report, project_root, &config.paths);
         }
         match tama_config::load_lock(project_root) {
             Ok(lock) => {
@@ -409,6 +410,36 @@ fn doctor_report_has_failures(report: &tama_toolchain::DoctorReport) -> bool {
                 | tama_toolchain::ToolStatus::Incompatible { .. }
         )
     }) || report.lock_current == Some(false)
+}
+
+fn report_generated_dirs(
+    report: &mut tama_toolchain::DoctorReport,
+    root: &Utf8Path,
+    paths: &tama_config::PathsConfig,
+) {
+    let dirs = match generated_dirs(root, paths, "inspect") {
+        Ok(dirs) => dirs,
+        Err(err) => {
+            report.tools.push(tama_toolchain::ToolStatus::Incompatible {
+                name: "project directories".to_string(),
+                found: err,
+                expected: "project-relative generated directories".to_string(),
+            });
+            return;
+        }
+    };
+    let missing = dirs
+        .into_iter()
+        .filter(|dir| !root.join(dir).is_dir())
+        .map(|dir| dir.to_string())
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        report.tools.push(tama_toolchain::ToolStatus::Incompatible {
+            name: "project directories".to_string(),
+            found: format!("missing {}", missing.join(", ")),
+            expected: "generated directories present; run `tama doctor --fix`".to_string(),
+        });
+    }
 }
 
 fn enforce_locked_if_requested(root: &Utf8Path, locked: bool) -> Result<(), String> {
@@ -547,8 +578,7 @@ fn apply_doctor_fix(
     };
     let config = tama_config::load_config(project_root).map_err(|err| err.to_string())?;
     let mut lock = tama_config::load_lock(project_root).map_err(|err| err.to_string())?;
-    for dir in [&config.paths.out, &config.paths.generated] {
-        ensure_project_relative(dir)?;
+    for dir in generated_dirs(project_root, &config.paths, "create")? {
         std::fs::create_dir_all(project_root.join(dir)).map_err(|err| err.to_string())?;
     }
     let (_, needs_lake_update) = planned_verity_lake_dependency(project_root, &config, &lock)?;
@@ -562,6 +592,39 @@ fn apply_doctor_fix(
     tama_config::update_lock_inputs(project_root, &mut lock).map_err(|err| err.to_string())?;
     tama_config::write_lock(project_root, &lock).map_err(|err| err.to_string())?;
     Ok(())
+}
+
+fn generated_dirs(
+    root: &Utf8Path,
+    paths: &tama_config::PathsConfig,
+    action: &str,
+) -> Result<Vec<Utf8PathBuf>, String> {
+    let mut dirs = vec![
+        paths.out.clone(),
+        paths.out.join("yul"),
+        paths.out.join("abi"),
+        paths.out.join("bytecode"),
+        paths.out.join("solc-json"),
+        paths.out.join("manifest"),
+        paths.out.join("lean"),
+        paths.out.join("trust-probe"),
+        paths.generated.clone(),
+    ];
+    match tama_config::parse_lake_build_dir(root) {
+        Ok(Some(dir)) => push_unique_dir(&mut dirs, dir),
+        Ok(None) | Err(tama_config::Error::UnsupportedLakefile(_)) => {}
+        Err(err) => return Err(err.to_string()),
+    }
+    for dir in &dirs {
+        ensure_project_relative(dir, action)?;
+    }
+    Ok(dirs)
+}
+
+fn push_unique_dir(dirs: &mut Vec<Utf8PathBuf>, dir: Utf8PathBuf) {
+    if !dirs.iter().any(|existing| existing == &dir) {
+        dirs.push(dir);
+    }
 }
 
 fn finalize_init(root: &Utf8PathBuf, offline: bool) -> Result<(), String> {
@@ -1332,7 +1395,7 @@ fn is_missing_config_error(err: &tama_config::Error) -> bool {
 }
 
 fn remove_generated_dir(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
-    ensure_project_relative(rel)?;
+    ensure_project_relative(rel, "clean")?;
     let path = root.join(rel);
     if !path.exists() {
         return Ok(());
@@ -1363,7 +1426,7 @@ fn ensure_generated_tree_cleanable(path: &Utf8Path) -> Result<(), String> {
 }
 
 fn remove_project_dir(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
-    ensure_project_relative(rel)?;
+    ensure_project_relative(rel, "clean")?;
     let path = root.join(rel);
     if !path.exists() {
         return Ok(());
@@ -1372,7 +1435,7 @@ fn remove_project_dir(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
 }
 
 fn remove_project_file(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
-    ensure_project_relative(rel)?;
+    ensure_project_relative(rel, "clean")?;
     let path = root.join(rel);
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
@@ -1381,13 +1444,15 @@ fn remove_project_file(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
     }
 }
 
-fn ensure_project_relative(path: &Utf8Path) -> Result<(), String> {
+fn ensure_project_relative(path: &Utf8Path, action: &str) -> Result<(), String> {
     if path.as_str().is_empty()
         || path == Utf8Path::new(".")
         || path.is_absolute()
         || path.components().any(|part| part.as_str() == "..")
     {
-        Err(format!("refusing to clean path outside project: `{path}`"))
+        Err(format!(
+            "refusing to {action} path outside project: `{path}`"
+        ))
     } else {
         Ok(())
     }
@@ -1899,6 +1964,39 @@ mod tests {
     }
 
     #[test]
+    fn doctor_reports_and_repairs_missing_generated_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        std::fs::remove_dir_all(root.join("artifacts/yul")).unwrap();
+        std::fs::remove_dir_all(root.join("artifacts/lean")).unwrap();
+
+        let stale = doctor_report(Some(&root)).unwrap();
+        assert!(stale.tools.iter().any(|status| {
+            matches!(
+                status,
+                tama_toolchain::ToolStatus::Incompatible { name, found, .. }
+                    if name == "project directories"
+                        && found.contains("artifacts/yul")
+                        && found.contains("artifacts/lean")
+            )
+        }));
+
+        apply_doctor_fix(&root, Some(&root), false).unwrap();
+
+        assert!(root.join("artifacts/yul").is_dir());
+        assert!(root.join("artifacts/lean").is_dir());
+        let repaired = doctor_report(Some(&root)).unwrap();
+        assert!(!repaired.tools.iter().any(|status| {
+            matches!(
+                status,
+                tama_toolchain::ToolStatus::Incompatible { name, .. }
+                    if name == "project directories"
+            )
+        }));
+    }
+
+    #[test]
     fn doctor_fix_requires_project_before_writing() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -1923,10 +2021,18 @@ mod tests {
                 "generated = \"gen/verity\"",
             );
         tama_common::write_string(&root.join("tama.toml"), &config).unwrap();
+        let lakefile = tama_common::read_to_string(&root.join("lakefile.toml"))
+            .unwrap()
+            .replace("buildDir = \"artifacts/lean\"", "buildDir = \"build/lake\"");
+        tama_common::write_string(&root.join("lakefile.toml"), &lakefile).unwrap();
 
         apply_doctor_fix(&root, Some(&root), false).unwrap();
 
         assert!(root.join("build/tama").is_dir());
+        assert!(root.join("build/tama/yul").is_dir());
+        assert!(root.join("build/tama/bytecode").is_dir());
+        assert!(root.join("build/tama/trust-probe").is_dir());
+        assert!(root.join("build/lake").is_dir());
         assert!(root.join("gen/verity").is_dir());
     }
 
