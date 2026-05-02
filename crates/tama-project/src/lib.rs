@@ -861,6 +861,16 @@ metadata_bytecode_hash = "none"
             lock.resolved.get("lake.verity.rev").map(String::as_str),
             Some(DEFAULT_VERITY_REV)
         );
+        assert_eq!(
+            lock.yul
+                .get("metadata_bytecode_hash")
+                .and_then(|value| value.as_str()),
+            Some("none")
+        );
+        assert_eq!(
+            lock.yul.get("optimizer").and_then(|value| value.as_bool()),
+            Some(true)
+        );
         assert!(lock.inputs.contains_key("lake-manifest.json"));
         assert!(tama_config::lock_drift(&root, &lock).unwrap().is_empty());
     }

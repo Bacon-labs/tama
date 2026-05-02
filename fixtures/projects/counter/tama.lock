@@ -20,3 +20,7 @@ lean-toolchain = "8f6680f8389e8adee06cb2bd44372c6d60dce0e8301630b61a99a5642d1bd7
 "tama.toml" = "be684dc14cacc78335f75eec247029a461e38d752f68f2c2dd736ac78ce5c405"
 
 [yul]
+evm_version = "cancun"
+metadata_bytecode_hash = "none"
+optimizer = true
+optimizer_runs = 200

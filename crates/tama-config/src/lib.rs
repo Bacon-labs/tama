@@ -306,6 +306,19 @@ pub fn lock_drift(root: &Utf8Path, lock: &TamaLock) -> Result<Vec<String>> {
             drift.push(path.clone());
         }
     }
+    let tama_toml_current = actual
+        .get("tama.toml")
+        .is_some_and(|hash| lock.inputs.get("tama.toml") == Some(hash));
+    if tama_toml_current {
+        let config = load_config(root)?;
+        let yul = yul_lock_entries(&config.yul);
+        if lock.yul != yul {
+            drift.push("yul".to_string());
+        }
+        if lock.resolved.get("solc") != Some(&config.yul.solc) {
+            drift.push("resolved.solc".to_string());
+        }
+    }
     Ok(drift)
 }
 
@@ -320,7 +333,20 @@ pub fn enforce_locked(root: &Utf8Path, lock: &TamaLock) -> Result<()> {
 
 pub fn update_lock_inputs(root: &Utf8Path, lock: &mut TamaLock) -> Result<()> {
     record_lake_manifest_resolutions(root, lock)?;
+    record_yul_config(root, lock)?;
     lock.inputs = tracked_input_hashes(root)?;
+    Ok(())
+}
+
+pub fn record_yul_config(root: &Utf8Path, lock: &mut TamaLock) -> Result<()> {
+    if !root.join("tama.toml").is_file() {
+        lock.yul.clear();
+        return Ok(());
+    }
+    let config = load_config(root)?;
+    lock.resolved
+        .insert("solc".to_string(), config.yul.solc.clone());
+    lock.yul = yul_lock_entries(&config.yul);
     Ok(())
 }
 
@@ -374,6 +400,24 @@ pub fn record_lake_manifest_resolutions(root: &Utf8Path, lock: &mut TamaLock) ->
 
 fn valid_lock_component(name: &str) -> bool {
     is_safe_dependency_name(name)
+}
+
+fn yul_lock_entries(yul: &YulConfig) -> BTreeMap<String, toml::Value> {
+    BTreeMap::from([
+        (
+            "evm_version".to_string(),
+            toml::Value::String(yul.evm_version.clone()),
+        ),
+        (
+            "metadata_bytecode_hash".to_string(),
+            toml::Value::String(yul.metadata_hash.clone()),
+        ),
+        ("optimizer".to_string(), toml::Value::Boolean(yul.optimizer)),
+        (
+            "optimizer_runs".to_string(),
+            toml::Value::Integer(i64::from(yul.optimizer_runs)),
+        ),
+    ])
 }
 
 fn is_safe_dependency_name(name: &str) -> bool {
@@ -836,11 +880,69 @@ test = "profile-test"
     }
 
     fn tracked_input_fixture(path: &str) -> &'static str {
-        if path == "lake-manifest.json" {
-            r#"{"version":"1.1.0","packages":[]}"#
-        } else {
-            "tracked input\n"
+        match path {
+            "tama.toml" => {
+                "[project]\nname='x'\nverity='v'\n[yul]\nsolc='0.8.33'\nmetadata_bytecode_hash='none'\n"
+            }
+            "lake-manifest.json" => r#"{"version":"1.1.0","packages":[]}"#,
+            _ => "tracked input\n",
         }
+    }
+
+    #[test]
+    fn update_lock_inputs_records_yul_config_and_solc_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            r#"[project]
+name = "x"
+verity = "v"
+
+[yul]
+solc = "0.8.34"
+optimizer = false
+optimizer_runs = 1
+evm_version = "paris"
+metadata_bytecode_hash = "ipfs"
+"#,
+        )
+        .unwrap();
+        let mut lock = TamaLock {
+            version: 1,
+            resolved: BTreeMap::new(),
+            inputs: BTreeMap::new(),
+            yul: BTreeMap::new(),
+        };
+
+        update_lock_inputs(&root, &mut lock).unwrap();
+
+        assert_eq!(
+            lock.resolved.get("solc").map(String::as_str),
+            Some("0.8.34")
+        );
+        assert_eq!(
+            lock.yul.get("evm_version"),
+            Some(&toml::Value::String("paris".to_string()))
+        );
+        assert_eq!(
+            lock.yul.get("metadata_bytecode_hash"),
+            Some(&toml::Value::String("ipfs".to_string()))
+        );
+        assert_eq!(
+            lock.yul.get("optimizer"),
+            Some(&toml::Value::Boolean(false))
+        );
+        assert_eq!(
+            lock.yul.get("optimizer_runs"),
+            Some(&toml::Value::Integer(1))
+        );
+        assert!(lock_drift(&root, &lock).unwrap().is_empty());
+
+        lock.yul.clear();
+        let drift = lock_drift(&root, &lock).unwrap();
+
+        assert!(drift.contains(&"yul".to_string()));
     }
 
     #[test]
