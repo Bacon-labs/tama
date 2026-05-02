@@ -38,7 +38,17 @@ The pinned commit contains the Python scripts Tama needs as semantic references:
 - `scripts/extract_property_manifest.py`
 - `scripts/report_property_coverage.py`
 
-Tama ports these checks semantically and compares canonical issue sets against fixtures where the upstream scripts apply.
+These scripts assume Verity's monorepo layout: `Contracts/`, `Compiler/Specs.lean`, `test/Property*.t.sol`, and the compiler's in-tree Yul output paths. Tama projects intentionally use a flat external-project layout and a generated `tama.contract-manifest.v1` as the audit interface.
+
+For v0.1, Tama ports the externally applicable semantics into manifest-centered Rust checks:
+
+- selector and topic derivation, generated interface signatures, and generated Yul dispatch cases;
+- required source/spec/proof/test/generated artifact structure for flat Tama projects;
+- storage entry validity, overlap detection, and compiler layout-report drift;
+- public obligation mirror coverage, with mirror symbols restricted to Foundry fuzz tests and invariants;
+- proof-only coverage reasons for obligations that cannot be mirrored in Solidity.
+
+Direct Python-vs-Rust issue-set comparison applies only to checks that can be represented in both layouts. Monorepo-only checks, such as compiler constant synchronization and package-wide import surfaces, remain upstream Verity CI responsibilities rather than Tama project audits.
 
 ## Supported Verity Subset
 
@@ -58,6 +68,7 @@ Counter remains a secondary compatibility fixture for the simplest storage/funct
 Tama must fail closed before producing misleading artifacts for features outside this subset.
 
 - Upstream direct Tama v1 manifest emission is absent; Tama’s adapter is mandatory.
+- Upstream Python audit scripts are not invoked directly on Tama projects because their path model is Verity-monorepo-specific.
 - Raw `rawLog` event emission is compiler-supported, but upstream trust reports classify it as not fully modeled by the current proof interpreters.
 - Low-level calls, returndata choreography, runtime introspection, proxy/delegatecall upgradeability, and partially modeled linear-memory mechanics are trust-boundary concerns and must be surfaced by `tama audit`.
 - Verity compiler compatibility patches are never applied silently to user projects. Any required patch must be upstreamed, pinned to a Tama-maintained fork, or recorded deterministically in `tama.lock`.

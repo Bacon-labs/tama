@@ -36,7 +36,7 @@ Counter is a compatibility fixture, not the starter template.
 
 - Windows artifacts and installer behavior.
 - Full Solidity feature parity.
-- Arbitrary Verity monorepo scripts.
+- Direct execution of arbitrary Verity monorepo Python scripts on Tama projects.
 - Automatic support for nested mappings unless the pinned Verity compiler and Tama manifest adapter expose the required metadata.
 - Arbitrary Yul semantic storage proofs.
 - User-edited generated files without the exact generated-file header.
