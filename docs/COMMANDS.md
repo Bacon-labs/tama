@@ -39,6 +39,8 @@ Creates a new Tama/Foundry project with the ERC20Lite starter. It writes `tama.t
 
 Adds `verity/src/<Name>.lean`, `verity/spec/<Name>Spec.lean`, `verity/proof/<Name>Proof.lean`, and `test/verity/<Name>.t.sol`, then updates the aggregate modules. It does not rewrite the Lakefile.
 
+When `[paths]` has been customized, `lakefile.toml` must already map the `src`, `spec`, and `proof` Lake libraries to those roots. Tama refuses before writing files if the configured paths are not covered by the Lakefile.
+
 ## `tama check`
 
 Runs the fast Lean check for implementation and spec aggregate modules only:

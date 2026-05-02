@@ -3,7 +3,8 @@ use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use tama_common::{read_to_string, write_string};
-use tama_config::TamaLock;
+use tama_config::{PathsConfig, TamaLock};
+use toml_edit::Item;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -25,6 +26,16 @@ pub enum Error {
     InvalidPath(Utf8PathBuf),
     #[error("project already contains {0}")]
     AlreadyExists(Utf8PathBuf),
+    #[error("unsupported lakefile: {0}")]
+    UnsupportedLakefile(String),
+    #[error(
+        "configured path `{path}` is not covered by Lake library `{library}` in lakefile.toml; expected `{expected}`"
+    )]
+    LakePathMismatch {
+        library: &'static str,
+        path: Utf8PathBuf,
+        expected: Utf8PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +155,7 @@ pub fn scaffold_contract(root: &Utf8Path, name: &str) -> Result<()> {
     ensure_project_relative(&paths.spec)?;
     ensure_project_relative(&paths.proof)?;
     ensure_project_relative(&paths.test)?;
+    validate_lakefile_covers_paths(root, &paths)?;
     let src = root.join(paths.src.join(format!("{name}.lean")));
     let spec = root.join(paths.spec.join(format!("{name}Spec.lean")));
     let proof = root.join(paths.proof.join(format!("{name}Proof.lean")));
@@ -182,6 +194,65 @@ fn ensure_project_relative(path: &Utf8Path) -> Result<()> {
         Err(Error::InvalidPath(path.to_owned()))
     } else {
         Ok(())
+    }
+}
+
+fn validate_lakefile_covers_paths(root: &Utf8Path, paths: &PathsConfig) -> Result<()> {
+    let lakefile = root.join("lakefile.toml");
+    if !lakefile.is_file() {
+        if root.join("lakefile.lean").is_file() {
+            return Ok(());
+        }
+        return Err(Error::UnsupportedLakefile(
+            "missing lakefile.toml".to_string(),
+        ));
+    }
+    let text = read_to_string(&lakefile)?;
+    let doc = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|err| Error::UnsupportedLakefile(format!("failed to parse {lakefile}: {err}")))?;
+    for (library, path) in [
+        ("src", &paths.src),
+        ("spec", &paths.spec),
+        ("proof", &paths.proof),
+    ] {
+        let src_dir = lean_lib_src_dir(&doc, library)?;
+        let expected = expected_module_path(&src_dir, library);
+        if path != &expected {
+            return Err(Error::LakePathMismatch {
+                library,
+                path: path.clone(),
+                expected,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn lean_lib_src_dir(doc: &toml_edit::DocumentMut, library: &'static str) -> Result<Utf8PathBuf> {
+    let Some(libs) = doc.get("lean_lib").and_then(Item::as_array_of_tables) else {
+        return Err(Error::UnsupportedLakefile(format!(
+            "missing [[lean_lib]] entry for `{library}`"
+        )));
+    };
+    for table in libs {
+        if table.get("name").and_then(Item::as_str) == Some(library) {
+            let src_dir = table.get("srcDir").and_then(Item::as_str).unwrap_or(".");
+            let src_dir = Utf8PathBuf::from(src_dir);
+            ensure_project_relative(&src_dir)?;
+            return Ok(src_dir);
+        }
+    }
+    Err(Error::UnsupportedLakefile(format!(
+        "missing [[lean_lib]] entry for `{library}`"
+    )))
+}
+
+fn expected_module_path(src_dir: &Utf8Path, library: &str) -> Utf8PathBuf {
+    if src_dir.as_str() == "." {
+        Utf8PathBuf::from(library)
+    } else {
+        src_dir.join(library)
     }
 }
 
@@ -686,6 +757,60 @@ tama audit
 mod tests {
     use super::*;
 
+    fn write_custom_paths_config(root: &Utf8Path) {
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            &format!(
+                r#"[project]
+name = "starter"
+verity = "{DEFAULT_VERITY_REV}"
+
+[paths]
+src = "contracts/src"
+spec = "contracts/spec"
+proof = "contracts/proof"
+test = "tests/verity"
+out = "artifacts"
+generated = "src/generated/verity"
+
+[yul]
+solc = "0.8.33"
+optimizer = true
+optimizer_runs = 200
+evm_version = "cancun"
+metadata_hash = "none"
+"#
+            ),
+        )
+        .unwrap();
+    }
+
+    fn write_custom_lakefile_roots(root: &Utf8Path) -> String {
+        let lakefile = read_to_string(&root.join("lakefile.toml"))
+            .unwrap()
+            .replace(r#"srcDir = "verity""#, r#"srcDir = "contracts""#);
+        write_string(&root.join("lakefile.toml"), &lakefile).unwrap();
+        lakefile
+    }
+
+    fn move_starter_to_custom_paths(root: &Utf8Path) {
+        for (from, to) in [
+            ("verity/src/ERC20Lite.lean", "contracts/src/ERC20Lite.lean"),
+            (
+                "verity/spec/ERC20LiteSpec.lean",
+                "contracts/spec/ERC20LiteSpec.lean",
+            ),
+            (
+                "verity/proof/ERC20LiteProof.lean",
+                "contracts/proof/ERC20LiteProof.lean",
+            ),
+        ] {
+            let to = root.join(to);
+            std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+            std::fs::rename(root.join(from), to).unwrap();
+        }
+    }
+
     #[test]
     fn init_creates_erc20lite_starter_without_foundry_counter() {
         let dir = tempfile::tempdir().unwrap();
@@ -767,34 +892,44 @@ mod tests {
     }
 
     #[test]
-    fn new_uses_configured_project_paths_without_rewriting_lakefile() {
+    fn new_rejects_configured_paths_not_covered_by_lakefile() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
         init(&root, InitOptions::default()).unwrap();
         let lakefile_before = read_to_string(&root.join("lakefile.toml")).unwrap();
-        tama_common::write_string(
-            &root.join("tama.toml"),
-            r#"[project]
-name = "starter"
-verity = "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e"
+        write_custom_paths_config(&root);
 
-[paths]
-src = "contracts/src"
-spec = "contracts/spec"
-proof = "contracts/proof"
-test = "tests/verity"
-out = "artifacts"
-generated = "src/generated/verity"
+        let err = scaffold_contract(&root, "TipJar").unwrap_err();
 
-[yul]
-solc = "0.8.33"
-optimizer = true
-optimizer_runs = 200
-evm_version = "cancun"
-metadata_hash = "none"
-"#,
-        )
-        .unwrap();
+        assert!(matches!(
+            err,
+            Error::LakePathMismatch {
+                library: "src",
+                path,
+                expected,
+            } if path == "contracts/src" && expected == "verity/src"
+        ));
+        assert!(!root.join("contracts/src/TipJar.lean").exists());
+        assert!(!root.join("contracts/spec/TipJarSpec.lean").exists());
+        assert!(!root.join("contracts/proof/TipJarProof.lean").exists());
+        assert!(!root.join("tests/verity/TipJar.t.sol").exists());
+        assert!(!read_to_string(&root.join("TamaSrc.lean"))
+            .unwrap()
+            .contains("import src.TipJar"));
+        assert_eq!(
+            read_to_string(&root.join("lakefile.toml")).unwrap(),
+            lakefile_before
+        );
+    }
+
+    #[test]
+    fn new_uses_configured_project_paths_when_lakefile_matches_without_rewriting() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        init(&root, InitOptions::default()).unwrap();
+        write_custom_paths_config(&root);
+        move_starter_to_custom_paths(&root);
+        let lakefile_before = write_custom_lakefile_roots(&root);
 
         scaffold_contract(&root, "TipJar").unwrap();
 
@@ -803,6 +938,9 @@ metadata_hash = "none"
         assert!(root.join("contracts/proof/TipJarProof.lean").is_file());
         assert!(root.join("tests/verity/TipJar.t.sol").is_file());
         assert!(!root.join("verity/src/TipJar.lean").exists());
+        assert!(read_to_string(&root.join("TamaSrc.lean"))
+            .unwrap()
+            .contains("import src.TipJar"));
         assert_eq!(
             read_to_string(&root.join("lakefile.toml")).unwrap(),
             lakefile_before

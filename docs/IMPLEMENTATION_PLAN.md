@@ -161,6 +161,7 @@ import proof.ERC20LiteProof
 ```
 
 `tama new Foo` writes the four per-contract files and updates the aggregate modules, not the Lakefile.
+If the configured source/spec/proof paths are no longer covered by the user-owned Lakefile module roots, `tama new` refuses before writing rather than creating files Lake cannot import.
 
 ## Manifest schema requirements
 
