@@ -286,8 +286,10 @@ fn validate_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
         validate_release_version(&release.version)?;
         validate_artifacts(&release.artifacts)?;
     }
-    let cumulative_shape =
-        manifest.schema.is_some() || manifest.stable.is_some() || manifest.nightly.is_some();
+    let cumulative_shape = manifest.schema.is_some()
+        || manifest.stable.is_some()
+        || manifest.nightly.is_some()
+        || !manifest.releases.is_empty();
     if cumulative_shape {
         if manifest.schema.as_deref() != Some(RELEASE_MANIFEST_SCHEMA) {
             return Err(
@@ -1176,7 +1178,17 @@ mod tests {
         manifest.version = None;
         assert!(validate_release_manifest(&manifest)
             .unwrap_err()
-            .contains("legacy release manifest"));
+            .contains("must declare schema"));
+
+        manifest.version = Some("0.1.0".to_string());
+        manifest.artifacts = vec![Artifact {
+            platform: "linux-x86_64".to_string(),
+            url: "file:///tmp/tama.tar.gz".to_string(),
+            sha256: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        }];
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("must declare schema"));
     }
 
     #[test]
