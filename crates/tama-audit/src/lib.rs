@@ -284,7 +284,7 @@ fn structure(
                 ));
                 continue;
             }
-            if !root.join(path).exists() {
+            if !root.join(path).is_file() {
                 issues.push(issue(
                     "structure",
                     Some(&manifest.contract),
@@ -2365,6 +2365,25 @@ mod tests {
         assert!(missing_issues
             .iter()
             .any(|issue| issue.code == "TAMA_STRUCTURE_BYTECODE_HASH"));
+    }
+
+    #[test]
+    fn structure_rejects_required_file_paths_that_are_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        let mut manifest = counter_manifest();
+        write_complete_structure_fixture(&root, &config, &mut manifest);
+        std::fs::remove_file(root.join(&manifest.artifacts.creation_bytecode)).unwrap();
+        std::fs::create_dir(root.join(&manifest.artifacts.creation_bytecode)).unwrap();
+
+        let mut issues = Vec::new();
+        structure(&root, &config, &[manifest], &mut issues);
+
+        assert!(issues.iter().any(|issue| {
+            issue.code == "TAMA_STRUCTURE_MISSING_FILE"
+                && issue.path.as_deref() == Some(Utf8Path::new("artifacts/bytecode/Counter.bin"))
+        }));
     }
 
     #[test]
