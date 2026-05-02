@@ -88,6 +88,8 @@ pub struct YulConfig {
     pub optimizer: bool,
     #[serde(default = "default_optimizer_runs")]
     pub optimizer_runs: u32,
+    #[serde(default = "default_true")]
+    pub yul_optimizer: bool,
     #[serde(default = "default_evm")]
     pub evm_version: String,
     #[serde(default = "default_metadata_hash", alias = "metadata_bytecode_hash")]
@@ -484,6 +486,10 @@ fn yul_lock_entries(yul: &YulConfig) -> BTreeMap<String, toml::Value> {
             "optimizer_runs".to_string(),
             toml::Value::Integer(i64::from(yul.optimizer_runs)),
         ),
+        (
+            "yul_optimizer".to_string(),
+            toml::Value::Boolean(yul.yul_optimizer),
+        ),
     ])
 }
 
@@ -794,6 +800,7 @@ solc = "0.8.33"
         let cfg = parse_tama_config(&path).unwrap();
         assert_eq!(cfg.paths.src, Utf8PathBuf::from("verity/src"));
         assert_eq!(cfg.yul.optimizer_runs, 200);
+        assert!(cfg.yul.yul_optimizer);
         assert!(cfg.trust.allow_axioms.contains_key("Classical.choice"));
     }
 
@@ -982,6 +989,7 @@ verity = "v"
 solc = "0.8.34"
 optimizer = false
 optimizer_runs = 1
+yul_optimizer = false
 evm_version = "paris"
 metadata_bytecode_hash = "ipfs"
 "#,
@@ -1015,6 +1023,10 @@ metadata_bytecode_hash = "ipfs"
         assert_eq!(
             lock.yul.get("optimizer_runs"),
             Some(&toml::Value::Integer(1))
+        );
+        assert_eq!(
+            lock.yul.get("yul_optimizer"),
+            Some(&toml::Value::Boolean(false))
         );
         assert!(lock_drift(&root, &lock).unwrap().is_empty());
 

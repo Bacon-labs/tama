@@ -442,25 +442,7 @@ pub fn compile_yul_standard_json(
     let contract = manifest.contract.clone();
     let yul_path = root.join(&manifest.artifacts.yul);
     let yul = tama_common::read_to_string(&yul_path)?;
-    let input = json!({
-        "language": "Yul",
-        "sources": {
-            format!("{contract}.yul"): { "content": yul }
-        },
-        "settings": {
-            "optimizer": {
-                "enabled": config.yul.optimizer,
-                "runs": config.yul.optimizer_runs
-            },
-            "evmVersion": config.yul.evm_version,
-            "metadata": {
-                "bytecodeHash": config.yul.metadata_hash
-            },
-            "outputSelection": {
-                "*": { "*": ["evm.bytecode.object", "evm.deployedBytecode.object"] }
-            }
-        }
-    });
+    let input = solc_standard_json_input(&contract, &yul, config);
     let input_path = root.join(&manifest.artifacts.solc_input);
     tama_common::write_string(
         &input_path,
@@ -532,6 +514,31 @@ pub fn compile_yul_standard_json(
         ),
     )?;
     Ok(())
+}
+
+fn solc_standard_json_input(contract: &str, yul: &str, config: &TamaConfig) -> Value {
+    json!({
+        "language": "Yul",
+        "sources": {
+            format!("{contract}.yul"): { "content": yul }
+        },
+        "settings": {
+            "optimizer": {
+                "enabled": config.yul.optimizer,
+                "runs": config.yul.optimizer_runs,
+                "details": {
+                    "yul": config.yul.yul_optimizer
+                }
+            },
+            "evmVersion": config.yul.evm_version,
+            "metadata": {
+                "bytecodeHash": config.yul.metadata_hash
+            },
+            "outputSelection": {
+                "*": { "*": ["evm.bytecode.object", "evm.deployedBytecode.object"] }
+            }
+        }
+    })
 }
 
 fn ensure_solc_success(
@@ -2426,6 +2433,20 @@ TAMA_AXIOMS_END proof.CounterProof.increment_post
         assert!(sol.contains(r#"abi.encodePacked(hex"6000", abi.encode(owner, arg1))"#));
     }
 
+    #[test]
+    fn solc_standard_json_includes_yul_optimizer_setting() {
+        let mut config = test_config();
+        config.yul.optimizer = false;
+        config.yul.optimizer_runs = 1;
+        config.yul.yul_optimizer = false;
+
+        let input = solc_standard_json_input("Counter", "object \"Counter\" {}", &config);
+
+        assert_eq!(input["settings"]["optimizer"]["enabled"], false);
+        assert_eq!(input["settings"]["optimizer"]["runs"], 1);
+        assert_eq!(input["settings"]["optimizer"]["details"]["yul"], false);
+    }
+
     fn test_config() -> TamaConfig {
         TamaConfig {
             project: tama_config::ProjectConfig {
@@ -2437,6 +2458,7 @@ TAMA_AXIOMS_END proof.CounterProof.increment_post
                 solc: "0.8.33".to_string(),
                 optimizer: true,
                 optimizer_runs: 200,
+                yul_optimizer: true,
                 evm_version: "cancun".to_string(),
                 metadata_hash: "none".to_string(),
             },

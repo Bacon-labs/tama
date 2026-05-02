@@ -3320,6 +3320,7 @@ solc = "0.8.33"
                 solc: "0.8.33".to_string(),
                 optimizer: true,
                 optimizer_runs: 200,
+                yul_optimizer: true,
                 evm_version: "cancun".to_string(),
                 metadata_hash: "none".to_string(),
             },

@@ -293,6 +293,7 @@ generated_solidity = "src/generated/verity"
 solc = "{solc}"
 optimizer = true
 optimizer_runs = 200
+yul_optimizer = true
 evm_version = "cancun"
 metadata_bytecode_hash = "none"
 
@@ -778,6 +779,7 @@ generated_solidity = "src/generated/verity"
 solc = "0.8.33"
 optimizer = true
 optimizer_runs = 200
+yul_optimizer = true
 evm_version = "cancun"
 metadata_bytecode_hash = "none"
 "#
@@ -849,6 +851,7 @@ metadata_bytecode_hash = "none"
         assert!(config.contains("mirror_test = \"test/verity\""));
         assert!(config.contains("generated_solidity = \"src/generated/verity\""));
         assert!(config.contains("metadata_bytecode_hash = \"none\""));
+        assert!(config.contains("yul_optimizer = true"));
         let lake_manifest = read_to_string(&root.join("lake-manifest.json")).unwrap();
         assert!(lake_manifest.contains(&format!(r#""rev": "{DEFAULT_VERITY_REV}""#)));
         assert!(lake_manifest.contains(r#""name": "my_protocol""#));
@@ -873,6 +876,12 @@ metadata_bytecode_hash = "none"
         );
         assert_eq!(
             lock.yul.get("optimizer").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            lock.yul
+                .get("yul_optimizer")
+                .and_then(|value| value.as_bool()),
             Some(true)
         );
         assert!(lock.inputs.contains_key("lake-manifest.json"));
@@ -979,6 +988,7 @@ metadata_bytecode_hash = "none"
             solc: "0.8.33".to_string(),
             optimizer: true,
             optimizer_runs: 200,
+            yul_optimizer: true,
             evm_version: "cancun".to_string(),
             metadata_hash: "none".to_string(),
         };
