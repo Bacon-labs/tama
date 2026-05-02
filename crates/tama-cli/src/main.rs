@@ -540,13 +540,17 @@ fn install_package(
     offline: bool,
     locked: bool,
 ) -> Result<(), String> {
-    let dependency =
+    let mut dependency =
         tama_config::parse_lake_dependency(root, package).map_err(|err| err.to_string())?;
     if offline {
         return Err("`tama install` cannot run with --offline because it must validate the dependency and run `lake update`".to_string());
     }
-    if let tama_config::LakeDependencySource::Git { url, rev } = &dependency.source {
-        validate_remote_tama_package(url, rev)?;
+    let explicit_rev = package_has_explicit_git_rev(package);
+    if let tama_config::LakeDependencySource::Git { url, rev } = &mut dependency.source {
+        let resolved_rev = validate_remote_tama_package(url, rev, explicit_rev)?;
+        if !explicit_rev {
+            *rev = resolved_rev;
+        }
     }
     mutate_dependencies(root, locked, offline, |root| {
         tama_config::upsert_lake_dependency(root, &dependency).map_err(|err| err.to_string())
@@ -622,7 +626,11 @@ fn refresh_lock(root: &Utf8PathBuf) -> Result<(), String> {
     tama_config::write_lock(root, &lock).map_err(|err| err.to_string())
 }
 
-fn validate_remote_tama_package(url: &str, rev: &str) -> Result<(), String> {
+fn validate_remote_tama_package(
+    url: &str,
+    rev: &str,
+    explicit_rev: bool,
+) -> Result<String, String> {
     let temp = tempfile::tempdir().map_err(|err| err.to_string())?;
     let checkout = Utf8PathBuf::from_path_buf(temp.path().join("package"))
         .map_err(|path| path.display().to_string())?;
@@ -631,7 +639,7 @@ fn validate_remote_tama_package(url: &str, rev: &str) -> Result<(), String> {
         &["clone", "--depth", "1", url, checkout.as_str()],
         None,
     )?;
-    if rev != "main" {
+    if explicit_rev {
         run_process(
             "git",
             &["fetch", "--depth", "1", "origin", rev],
@@ -639,13 +647,45 @@ fn validate_remote_tama_package(url: &str, rev: &str) -> Result<(), String> {
         )?;
         run_process("git", &["checkout", "FETCH_HEAD"], Some(&checkout))?;
     }
-    if checkout.join("tama.toml").is_file() {
-        Ok(())
-    } else {
-        Err(format!(
+    if !checkout.join("tama.toml").is_file() {
+        return Err(format!(
             "remote dependency `{url}` at `{rev}` does not contain tama.toml"
-        ))
+        ));
     }
+    git_head_rev(&checkout)
+}
+
+fn package_has_explicit_git_rev(raw: &str) -> bool {
+    let raw = raw.trim();
+    matches!(
+        raw.rsplit_once('@'),
+        Some((repo, rev)) if package_split_is_explicit_rev(raw, repo, rev)
+    )
+}
+
+fn package_split_is_explicit_rev(raw: &str, repo: &str, rev: &str) -> bool {
+    if repo.is_empty() || rev.is_empty() {
+        return false;
+    }
+    if raw.starts_with("git@") {
+        return repo.starts_with("git@") && repo.contains(':');
+    }
+    true
+}
+
+fn git_head_rev(checkout: &Utf8Path) -> Result<String, String> {
+    let output = ProcessCommand::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(checkout)
+        .output()
+        .map_err(|err| format!("failed to inspect cloned dependency revision: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`git rev-parse HEAD` failed with status {}",
+            output.status
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn run_lake_update(root: &Utf8PathBuf) -> Result<(), String> {
@@ -1086,6 +1126,54 @@ mod tests {
             select_forge_install_optional_flags("Options:\n      --shallow\n"),
             vec!["--shallow"]
         );
+    }
+
+    #[test]
+    fn package_revision_detection_ignores_scp_urls() {
+        assert!(!package_has_explicit_git_rev("lfglabs-dev/verity-erc20"));
+        assert!(package_has_explicit_git_rev(
+            "lfglabs-dev/verity-erc20@v0.2.0"
+        ));
+        assert!(!package_has_explicit_git_rev(
+            "git@github.com:lfglabs-dev/verity.git"
+        ));
+        assert!(package_has_explicit_git_rev(
+            "git@github.com:lfglabs-dev/verity.git@v0.2.0"
+        ));
+    }
+
+    #[test]
+    fn default_branch_validation_returns_head_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Utf8PathBuf::from_path_buf(dir.path().join("package.git")).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        run_process("git", &["init"], Some(&repo)).unwrap();
+        run_process("git", &["branch", "-M", "trunk"], Some(&repo)).unwrap();
+        tama_common::write_string(
+            &repo.join("tama.toml"),
+            "[project]\nname='dep'\nverity='v'\n[yul]\nsolc='0.8.33'\n",
+        )
+        .unwrap();
+        run_process("git", &["add", "tama.toml"], Some(&repo)).unwrap();
+        run_process(
+            "git",
+            &[
+                "-c",
+                "user.name=Tama Test",
+                "-c",
+                "user.email=tama@example.test",
+                "commit",
+                "-m",
+                "init",
+            ],
+            Some(&repo),
+        )
+        .unwrap();
+
+        let expected = git_head_rev(&repo).unwrap();
+        let resolved = validate_remote_tama_package(repo.as_str(), "main", false).unwrap();
+
+        assert_eq!(resolved, expected);
     }
 
     #[test]

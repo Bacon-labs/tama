@@ -446,11 +446,19 @@ fn looks_like_local_path(raw: &str) -> bool {
 
 fn split_repo_rev(raw: &str) -> (&str, Option<&str>) {
     match raw.rsplit_once('@') {
-        Some((repo, rev)) if !repo.is_empty() && !rev.is_empty() && !repo.starts_with("git@") => {
-            (repo, Some(rev))
-        }
+        Some((repo, rev)) if split_at_is_explicit_rev(raw, repo, rev) => (repo, Some(rev)),
         _ => (raw, None),
     }
+}
+
+fn split_at_is_explicit_rev(raw: &str, repo: &str, rev: &str) -> bool {
+    if repo.is_empty() || rev.is_empty() {
+        return false;
+    }
+    if raw.starts_with("git@") {
+        return repo.starts_with("git@") && repo.contains(':');
+    }
+    true
 }
 
 fn dependency_name_from_path(path: &Utf8Path) -> Result<String> {
@@ -713,6 +721,34 @@ pp.unicode.fun = true
         assert!(removed.contains("# project comment"));
         assert!(removed.contains("[leanOptions]"));
         assert!(!removed.contains("name = \"mathlib\""));
+    }
+
+    #[test]
+    fn git_scp_urls_are_not_split_at_user_host_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let dependency =
+            parse_lake_dependency(&root, "git@github.com:lfglabs-dev/verity.git").unwrap();
+        assert_eq!(dependency.name, "verity");
+        assert_eq!(
+            dependency.source,
+            LakeDependencySource::Git {
+                url: "git@github.com:lfglabs-dev/verity.git".to_string(),
+                rev: "main".to_string(),
+            }
+        );
+
+        let dependency =
+            parse_lake_dependency(&root, "git@github.com:lfglabs-dev/verity.git@v1").unwrap();
+        assert_eq!(dependency.name, "verity");
+        assert_eq!(
+            dependency.source,
+            LakeDependencySource::Git {
+                url: "git@github.com:lfglabs-dev/verity.git".to_string(),
+                rev: "v1".to_string(),
+            }
+        );
     }
 
     #[test]
