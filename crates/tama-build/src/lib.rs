@@ -132,12 +132,13 @@ impl Pipeline {
         let mut manifests = adapt_verity_outputs(&self.root, &config, opts.contract.as_deref())?;
         for manifest in &mut manifests {
             manifest.validate()?;
-            if !opts.no_solc {
-                compile_yul_standard_json(&self.root, &config, manifest)?;
+            if opts.no_solc {
+                continue;
             }
+            compile_yul_standard_json(&self.root, &config, manifest)?;
             generate_bridge(&self.root, manifest)?;
         }
-        if !opts.no_forge {
+        if should_run_forge(&opts) {
             run("forge", &["build"], &self.root)?;
         }
         if !opts.locked {
@@ -157,6 +158,10 @@ impl Pipeline {
                 .collect(),
         })
     }
+}
+
+fn should_run_forge(opts: &BuildOptions) -> bool {
+    !opts.no_forge && !opts.no_solc
 }
 
 pub fn adapt_verity_outputs(
@@ -810,5 +815,15 @@ mod tests {
         };
         assert!(interface_sol(&manifest)
             .contains("function getCount() external view returns (uint256);"));
+    }
+
+    #[test]
+    fn no_solc_implies_no_forge() {
+        assert!(!should_run_forge(&BuildOptions {
+            no_solc: true,
+            no_forge: false,
+            ..Default::default()
+        }));
+        assert!(should_run_forge(&BuildOptions::default()));
     }
 }
