@@ -1262,10 +1262,14 @@ fn copy_matching_package_dirs(
             continue;
         }
         let target = destination.join(&name);
-        if path_exists(&target)? {
+        if !should_seed_manifest_package(&target, expected_rev)? {
             continue;
         }
-        copy_dir_recursively_into_new(&source, &target)?;
+        if path_exists(&target)? {
+            replace_dir_recursively(&source, &target)?;
+        } else {
+            copy_dir_recursively_into_new(&source, &target)?;
+        }
     }
     Ok(())
 }
@@ -1332,6 +1336,22 @@ fn should_replace_cached_package(source: &Utf8Path, target: &Utf8Path) -> Result
     let source_rev = git_head_rev(source).ok();
     let target_rev = git_head_rev(target).ok();
     Ok(source_rev.is_none() || source_rev != target_rev)
+}
+
+fn should_seed_manifest_package(target: &Utf8Path, expected_rev: &str) -> Result<bool, String> {
+    if !path_exists(target)? {
+        return Ok(true);
+    }
+    if !target.join(".git").is_dir() {
+        return Ok(false);
+    }
+    if !git_worktree_clean(target).unwrap_or(false) {
+        return Ok(false);
+    }
+    let Ok(target_rev) = git_head_rev(target) else {
+        return Ok(false);
+    };
+    Ok(target_rev != expected_rev)
 }
 
 fn copy_dir_recursively_into_new(source: &Utf8Path, target: &Utf8Path) -> Result<(), String> {
@@ -2240,6 +2260,51 @@ mod tests {
         prepare_lake_packages_for_build(&root, true).unwrap();
 
         assert!(root.join(".lake/packages/verity/package.txt").is_file());
+    }
+
+    #[test]
+    fn offline_build_preflight_replaces_clean_stale_package_from_cache() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
+        let expected_rev = init_git_package(&cache.join("verity"), "cached").unwrap();
+        let target = root.join(".lake/packages/verity");
+        let stale_rev = init_git_package(&target, "stale").unwrap();
+        assert_ne!(stale_rev, expected_rev);
+        write_lake_manifest(&root, &[("verity", &expected_rev)]);
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, cache.as_str());
+
+        prepare_lake_packages_for_build(&root, true).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target.join("package.txt")).unwrap(),
+            "cached"
+        );
+        assert_eq!(git_head_rev(&target).unwrap(), expected_rev);
+    }
+
+    #[test]
+    fn offline_build_preflight_preserves_dirty_stale_package_even_when_cache_matches() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
+        let expected_rev = init_git_package(&cache.join("verity"), "cached").unwrap();
+        let target = root.join(".lake/packages/verity");
+        init_git_package(&target, "stale").unwrap();
+        tama_common::write_string(&target.join("untracked.lean"), "local change\n").unwrap();
+        write_lake_manifest(&root, &[("verity", &expected_rev)]);
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, cache.as_str());
+
+        let err = prepare_lake_packages_for_build(&root, true).unwrap_err();
+
+        assert!(err.contains("match lake-manifest.json revision"));
+        assert_eq!(
+            std::fs::read_to_string(target.join("package.txt")).unwrap(),
+            "stale"
+        );
+        assert!(target.join("untracked.lean").is_file());
     }
 
     #[test]
