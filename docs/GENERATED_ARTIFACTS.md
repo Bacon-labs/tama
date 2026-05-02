@@ -26,4 +26,4 @@ Tama overwrites generated files only when this exact first line is present. A ha
 
 The manifest schema is `tama.contract-manifest.v1`. It is the shared interface for build, audit, inspect, bridge generation, and Foundry mirror wiring.
 
-`bytecode_hash` is the SHA-256 of the creation bytecode file contents. `tama audit structure` rejects missing or mismatched bytecode hashes so partial builds cannot masquerade as release-ready artifacts.
+`bytecode_hash` is the SHA-256 of the creation bytecode file contents. `tama audit structure` rejects missing or mismatched bytecode hashes and deployers that embed different creation bytecode, so partial or stale builds cannot masquerade as release-ready artifacts.

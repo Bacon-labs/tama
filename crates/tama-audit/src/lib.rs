@@ -295,6 +295,7 @@ fn structure(
             }
         }
         check_bytecode_hash(root, manifest, issues);
+        check_deployer_bytecode(root, manifest, issues);
         let test_path = config
             .paths
             .test
@@ -330,6 +331,51 @@ fn structure(
                 ));
             }
         }
+    }
+}
+
+fn check_deployer_bytecode(root: &Utf8Path, manifest: &ContractManifest, issues: &mut Vec<Issue>) {
+    if path_escapes_project(&manifest.artifacts.creation_bytecode)
+        || path_escapes_project(&manifest.artifacts.deployer)
+    {
+        return;
+    }
+    let bytecode_path = root.join(&manifest.artifacts.creation_bytecode);
+    let deployer_path = root.join(&manifest.artifacts.deployer);
+    let Ok(bytecode) = tama_common::read_to_string(&bytecode_path) else {
+        return;
+    };
+    let Ok(deployer) = tama_common::read_to_string(&deployer_path) else {
+        return;
+    };
+    let expected = normalize_bytecode(&bytecode);
+    if expected.is_empty() {
+        return;
+    }
+    match deployer_creation_bytecode(&deployer) {
+        Some(actual) if actual == expected => {}
+        Some(actual) => issues.push(issue(
+            "structure",
+            Some(&manifest.contract),
+            "TAMA_STRUCTURE_DEPLOYER_BYTECODE",
+            format!(
+                "generated deployer embeds bytecode `{}` but {} contains `{}`",
+                summarize_hex(&actual),
+                manifest.artifacts.creation_bytecode,
+                summarize_hex(&expected)
+            ),
+            Some(manifest.artifacts.deployer.clone()),
+        )),
+        None => issues.push(issue(
+            "structure",
+            Some(&manifest.contract),
+            "TAMA_STRUCTURE_DEPLOYER_BYTECODE",
+            format!(
+                "generated deployer does not embed creation bytecode from {}",
+                manifest.artifacts.creation_bytecode
+            ),
+            Some(manifest.artifacts.deployer.clone()),
+        )),
     }
 }
 
@@ -376,6 +422,29 @@ fn check_bytecode_hash(root: &Utf8Path, manifest: &ContractManifest, issues: &mu
             ),
             Some(manifest.artifacts.creation_bytecode.clone()),
         )),
+    }
+}
+
+fn deployer_creation_bytecode(deployer: &str) -> Option<String> {
+    let re = Regex::new(r#"hex"([0-9a-fA-F]+)""#).expect("valid regex");
+    re.captures(deployer)
+        .and_then(|captures| captures.get(1))
+        .map(|bytecode| bytecode.as_str().to_ascii_lowercase())
+}
+
+fn normalize_bytecode(bytecode: &str) -> String {
+    bytecode
+        .trim()
+        .trim_start_matches("0x")
+        .to_ascii_lowercase()
+}
+
+fn summarize_hex(value: &str) -> String {
+    const LIMIT: usize = 24;
+    if value.len() <= LIMIT {
+        value.to_string()
+    } else {
+        format!("{}...", &value[..LIMIT])
     }
 }
 
@@ -2248,6 +2317,26 @@ mod tests {
             .iter()
             .any(|issue| issue.code == "TAMA_STRUCTURE_BYTECODE_HASH"));
 
+        manifest.artifacts.bytecode_hash = Some(
+            tama_common::sha256_file(&root.join(&manifest.artifacts.creation_bytecode)).unwrap(),
+        );
+        tama_common::write_generated(
+            &root.join(&manifest.artifacts.deployer),
+            r#"library CounterDeployer {
+    function deploy() internal {
+        bytes memory code = hex"6001";
+        code;
+    }
+}
+"#,
+        )
+        .unwrap();
+        let mut deployer_issues = Vec::new();
+        structure(&root, &config, &[manifest.clone()], &mut deployer_issues);
+        assert!(deployer_issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_STRUCTURE_DEPLOYER_BYTECODE"));
+
         manifest.artifacts.bytecode_hash = None;
         let mut missing_issues = Vec::new();
         structure(&root, &config, &[manifest], &mut missing_issues);
@@ -3276,7 +3365,17 @@ solc = "0.8.33"
         tama_common::write_string(&root.join(&manifest.artifacts.solc_input), "{}\n").unwrap();
         tama_common::write_string(&root.join(&manifest.artifacts.solc_output), "{}\n").unwrap();
         tama_common::write_generated(&root.join(&manifest.artifacts.interface), "").unwrap();
-        tama_common::write_generated(&root.join(&manifest.artifacts.deployer), "").unwrap();
+        tama_common::write_generated(
+            &root.join(&manifest.artifacts.deployer),
+            r#"library CounterDeployer {
+    function deploy() internal {
+        bytes memory code = hex"6000";
+        code;
+    }
+}
+"#,
+        )
+        .unwrap();
         tama_common::write_string(&root.join("TamaSrc.lean"), "import src.Counter\n").unwrap();
         tama_common::write_string(
             &root.join("TamaSpec.lean"),
