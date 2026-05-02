@@ -99,6 +99,7 @@ struct PendingArchiveEntry {
 struct BootstrapOptions {
     yes: bool,
     offline: bool,
+    no_modify_path: bool,
     no_install_lean: bool,
     no_install_foundry: bool,
     no_install_solc: bool,
@@ -133,6 +134,7 @@ fn run(cli: Cli) -> Result<(), String> {
     let bootstrap = BootstrapOptions {
         yes: cli.yes,
         offline: cli.offline,
+        no_modify_path: cli.no_modify_path,
         no_install_lean: cli.no_install_lean,
         no_install_foundry: cli.no_install_foundry,
         no_install_solc: cli.no_install_solc,
@@ -504,7 +506,7 @@ fn bootstrap_toolchain(opts: BootstrapOptions) -> Result<(), String> {
     let actions = bootstrap_actions(opts, detect_toolchain_presence())?;
     for action in actions {
         match action {
-            BootstrapAction::Lean => install_lean_toolchain()?,
+            BootstrapAction::Lean => install_lean_toolchain(opts.no_modify_path)?,
             BootstrapAction::Foundry => install_foundry()?,
             BootstrapAction::Solc => install_solc()?,
         }
@@ -567,6 +569,12 @@ fn bootstrap_actions(
     }
     if !presence.forge && !opts.no_install_foundry {
         require_bootstrap_allowed(opts, "Foundry")?;
+        if opts.no_modify_path {
+            return Err(
+                "Foundry bootstrap may modify shell PATH; install Foundry manually or pass --no-install-foundry when using --no-modify-path"
+                    .to_string(),
+            );
+        }
         actions.push(BootstrapAction::Foundry);
     }
     if !presence.solc && !opts.no_install_solc {
@@ -590,19 +598,23 @@ fn require_bootstrap_allowed(opts: BootstrapOptions, tool: &str) -> Result<(), S
     Ok(())
 }
 
-fn install_lean_toolchain() -> Result<(), String> {
+fn install_lean_toolchain(no_modify_path: bool) -> Result<(), String> {
     let script = download("https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh")?;
-    run_shell_script(
-        "elan-init.sh",
-        &script,
-        &["-y", "--default-toolchain", "none"],
-    )?;
+    run_shell_script("elan-init.sh", &script, &elan_init_args(no_modify_path))?;
     let elan = home_tool(".elan/bin/elan").unwrap_or_else(|| Utf8PathBuf::from("elan"));
     run_command_path(
         &elan,
         &["toolchain", "install", DEFAULT_LEAN_TOOLCHAIN],
         "elan toolchain install",
     )
+}
+
+fn elan_init_args(no_modify_path: bool) -> Vec<&'static str> {
+    let mut args = vec!["-y", "--default-toolchain", "none"];
+    if no_modify_path {
+        args.push("--no-modify-path");
+    }
+    args
 }
 
 fn install_foundry() -> Result<(), String> {
@@ -815,6 +827,7 @@ mod tests {
             BootstrapOptions {
                 yes: false,
                 offline: false,
+                no_modify_path: false,
                 no_install_lean: false,
                 no_install_foundry: false,
                 no_install_solc: false,
@@ -828,6 +841,7 @@ mod tests {
             BootstrapOptions {
                 yes: true,
                 offline: true,
+                no_modify_path: false,
                 no_install_lean: false,
                 no_install_foundry: false,
                 no_install_solc: false,
@@ -841,6 +855,7 @@ mod tests {
             BootstrapOptions {
                 yes: true,
                 offline: false,
+                no_modify_path: false,
                 no_install_lean: true,
                 no_install_foundry: false,
                 no_install_solc: true,
@@ -864,6 +879,7 @@ mod tests {
             BootstrapOptions {
                 yes: false,
                 offline: false,
+                no_modify_path: false,
                 no_install_lean: false,
                 no_install_foundry: false,
                 no_install_solc: false,
@@ -877,6 +893,7 @@ mod tests {
             BootstrapOptions {
                 yes: true,
                 offline: false,
+                no_modify_path: false,
                 no_install_lean: false,
                 no_install_foundry: false,
                 no_install_solc: false,
@@ -885,6 +902,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(actions, vec![BootstrapAction::Solc]);
+    }
+
+    #[test]
+    fn bootstrap_honors_no_modify_path() {
+        assert_eq!(
+            elan_init_args(true),
+            vec!["-y", "--default-toolchain", "none", "--no-modify-path"]
+        );
+        assert_eq!(
+            elan_init_args(false),
+            vec!["-y", "--default-toolchain", "none"]
+        );
+
+        let err = bootstrap_actions(
+            BootstrapOptions {
+                yes: true,
+                offline: false,
+                no_modify_path: true,
+                no_install_lean: true,
+                no_install_foundry: false,
+                no_install_solc: true,
+            },
+            ToolchainPresence {
+                lean: true,
+                lake: true,
+                forge: false,
+                solc: true,
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.contains("--no-modify-path"));
+        assert!(err.contains("Foundry"));
     }
 
     #[test]
@@ -1072,6 +1122,7 @@ mod tests {
             BootstrapOptions {
                 yes: true,
                 offline: true,
+                no_modify_path: false,
                 no_install_lean: false,
                 no_install_foundry: false,
                 no_install_solc: false,
