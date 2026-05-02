@@ -81,6 +81,7 @@ import sys
 
 SAFE_VERSION = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?$")
 SAFE_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+SAFE_PLATFORM = re.compile(r"^[A-Za-z0-9._+-]+$")
 
 def require_string(value, label):
     if not isinstance(value, str) or value == "":
@@ -147,6 +148,10 @@ for release in releases:
         artifact_platform = require_string(artifact.get("platform"), "artifact.platform")
         artifact_url = require_string(artifact.get("url"), "artifact.url")
         artifact_sha256 = require_string(artifact.get("sha256"), "artifact.sha256")
+        if not SAFE_PLATFORM.fullmatch(artifact_platform):
+            raise SystemExit(f"unsafe artifact platform: {artifact_platform}")
+        if not (artifact_url.startswith("https://") or artifact_url.startswith("file://")):
+            raise SystemExit(f"unsupported artifact URL: {artifact_url}")
         if not SAFE_SHA256.fullmatch(artifact_sha256):
             raise SystemExit(f"invalid artifact SHA-256 for {artifact_platform} {release_version}")
         if release_version == selected and artifact_platform == platform:

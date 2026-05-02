@@ -558,9 +558,28 @@ fn remove_dir_if_exists(path: &Utf8Path) -> Result<(), String> {
 
 fn validate_artifacts(artifacts: &[Artifact]) -> Result<(), String> {
     for artifact in artifacts {
-        validate_manifest_string(&artifact.platform, "artifact platform")?;
-        validate_manifest_string(&artifact.url, "artifact URL")?;
+        validate_artifact_platform(&artifact.platform)?;
+        validate_artifact_url(&artifact.url)?;
         validate_sha256(&artifact.sha256)?;
+    }
+    Ok(())
+}
+
+fn validate_artifact_platform(platform: &str) -> Result<(), String> {
+    validate_manifest_string(platform, "artifact platform")?;
+    if !platform
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '+' | '-'))
+    {
+        return Err(format!("unsafe artifact platform `{platform}`"));
+    }
+    Ok(())
+}
+
+fn validate_artifact_url(url: &str) -> Result<(), String> {
+    validate_manifest_string(url, "artifact URL")?;
+    if !(url.starts_with("https://") || url.starts_with("file://")) {
+        return Err(format!("unsupported artifact URL `{url}`"));
     }
     Ok(())
 }
@@ -1349,6 +1368,19 @@ mod tests {
         assert!(validate_release_manifest(&manifest)
             .unwrap_err()
             .contains("invalid artifact SHA-256"));
+
+        manifest.releases[0].artifacts[0].sha256 =
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        manifest.releases[0].artifacts[0].url = "http://example.invalid/tama.tar.gz".to_string();
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("unsupported artifact URL"));
+
+        manifest.releases[0].artifacts[0].url = "https://example.invalid/tama.tar.gz".to_string();
+        manifest.releases[0].artifacts[0].platform = "linux/x86_64".to_string();
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("unsafe artifact platform"));
     }
 
     #[test]

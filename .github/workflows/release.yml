@@ -853,7 +853,9 @@ jobs:
                   platform = require_string(artifact.get("platform"), "artifact.platform")
                   if not SAFE_PLATFORM.fullmatch(platform):
                       raise SystemExit(f"unsafe artifact platform: {platform}")
-                  require_string(artifact.get("url"), "artifact.url")
+                  url = require_string(artifact.get("url"), "artifact.url")
+                  if not url.startswith("https://"):
+                      raise SystemExit(f"release artifact URL must use https:// for {release_version} {platform}")
                   sha256 = require_string(artifact.get("sha256"), "artifact.sha256")
                   if not SAFE_SHA256.fullmatch(sha256):
                       raise SystemExit(f"invalid artifact SHA-256 for {release_version} {platform}")
