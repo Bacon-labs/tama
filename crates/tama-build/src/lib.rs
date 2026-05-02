@@ -930,7 +930,7 @@ impl ObligationMeta {
 
 fn parse_obligation_metadata(line: &str, meta: &mut ObligationMeta) -> bool {
     let mut parsed = false;
-    if let Some(raw) = line.strip_prefix("-- tama:") {
+    if let Some(raw) = line.trim_start().strip_prefix("-- tama:") {
         parsed = true;
         apply_tama_metadata(raw, meta);
     }
@@ -943,24 +943,35 @@ fn parse_obligation_metadata(line: &str, meta: &mut ObligationMeta) -> bool {
 
 fn apply_tama_metadata(raw: &str, meta: &mut ObligationMeta) {
     let values = parse_key_values(raw);
-    if raw.contains("obligation") {
+    if values.contains_key("obligation") {
         meta.tagged = true;
     }
-    if raw.contains("helper") || values.get("kind").is_some_and(|kind| kind == "helper") {
-        meta.tagged = true;
-        meta.kind = Some(ObligationKind::Helper);
-    } else if raw.contains("invariant")
-        || values.get("kind").is_some_and(|kind| kind == "invariant")
-    {
-        meta.tagged = true;
-        meta.kind = Some(ObligationKind::Invariant);
-    } else if raw.contains("postcondition")
-        || values
-            .get("kind")
-            .is_some_and(|kind| kind == "postcondition")
-    {
-        meta.tagged = true;
-        meta.kind = Some(ObligationKind::Postcondition);
+    match values.get("kind").map(String::as_str) {
+        Some("helper") => {
+            meta.tagged = true;
+            meta.kind = Some(ObligationKind::Helper);
+        }
+        Some("invariant") => {
+            meta.tagged = true;
+            meta.kind = Some(ObligationKind::Invariant);
+        }
+        Some("postcondition") => {
+            meta.tagged = true;
+            meta.kind = Some(ObligationKind::Postcondition);
+        }
+        _ if values.contains_key("helper") => {
+            meta.tagged = true;
+            meta.kind = Some(ObligationKind::Helper);
+        }
+        _ if values.contains_key("invariant") => {
+            meta.tagged = true;
+            meta.kind = Some(ObligationKind::Invariant);
+        }
+        _ if values.contains_key("postcondition") => {
+            meta.tagged = true;
+            meta.kind = Some(ObligationKind::Postcondition);
+        }
+        _ => {}
     }
     if let Some(function) = values.get("function").filter(|value| !value.is_empty()) {
         meta.function = Some(function.clone());
@@ -1548,6 +1559,10 @@ namespace proof.CounterProof
 theorem increment_post : True := by
   trivial
 
+  -- tama: obligation kind=postcondition function=transfer coverage=mirror path=test/verity/Counter.t.sol:CounterTest.invariant_transferModel
+theorem postcondition_with_invariant_mirror : True := by
+  trivial
+
 @[tama.helper]
 lemma arithmetic_helper : True := by
   trivial
@@ -1562,7 +1577,7 @@ end proof.CounterProof
         .unwrap();
         let obligations = extract_obligations(&root, &config, "Counter", "proof.CounterProof")
             .expect("obligations");
-        assert_eq!(obligations.len(), 3);
+        assert_eq!(obligations.len(), 4);
         assert_eq!(obligations[0].id, "Counter.increment_post");
         assert_eq!(obligations[0].kind, ObligationKind::Postcondition);
         assert_eq!(obligations[0].function.as_deref(), Some("increment"));
@@ -1574,18 +1589,24 @@ end proof.CounterProof
             obligations[0].coverage.path.as_deref(),
             Some("test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount")
         );
-        assert_eq!(obligations[1].kind, ObligationKind::Helper);
+        assert_eq!(obligations[1].kind, ObligationKind::Postcondition);
+        assert_eq!(obligations[1].function.as_deref(), Some("transfer"));
         assert_eq!(
-            obligations[1].lean_decl,
+            obligations[1].coverage.path.as_deref(),
+            Some("test/verity/Counter.t.sol:CounterTest.invariant_transferModel")
+        );
+        assert_eq!(obligations[2].kind, ObligationKind::Helper);
+        assert_eq!(
+            obligations[2].lean_decl,
             "proof.CounterProof.arithmetic_helper"
         );
-        assert_eq!(obligations[2].kind, ObligationKind::Invariant);
+        assert_eq!(obligations[3].kind, ObligationKind::Invariant);
         assert_eq!(
-            obligations[2].coverage.disposition,
+            obligations[3].coverage.disposition,
             CoverageDisposition::ProofOnly
         );
         assert_eq!(
-            obligations[2].coverage.reason.as_deref(),
+            obligations[3].coverage.reason.as_deref(),
             Some("Symbolic state only.")
         );
     }
