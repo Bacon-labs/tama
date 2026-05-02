@@ -72,7 +72,7 @@ lake build TamaSrc TamaSpec
 
 Proof modules, Verity codegen, solc, and Foundry are not run.
 
-`tama check` does not run `lake update`; with global `--offline`, it seeds any manifest-matching package checkouts already present in `TAMA_LAKE_PACKAGE_CACHE`, then fails before invoking Lake if any git package pinned in `lake-manifest.json` is missing, dirty, or at another revision under `.lake/packages`.
+`tama check` does not run `lake update`. It seeds any manifest-matching package checkouts already present in `TAMA_LAKE_PACKAGE_CACHE` before invoking Lake, and after a successful check it refreshes that cache from clean Git checkouts under `.lake/packages`. With global `--offline`, it fails before invoking Lake if any git package pinned in `lake-manifest.json` is missing, dirty, or at another revision under `.lake/packages`.
 
 With `--json`, Lake output is forwarded to stderr and stdout contains only:
 
@@ -99,7 +99,7 @@ Useful flags:
 
 `--no-solc` and `--no-forge` are local development escape hatches and are not release gates. `--no-solc` removes stale downstream solc JSON, bytecode, and generated bridge files for the selected contracts while leaving fresh Yul and manifests.
 
-`tama build` does not run `lake update`; with global `--offline`, it seeds manifest-matching cached Lake package checkouts, fails before invoking Lake if any pinned git package is missing, dirty, or at another revision under `.lake/packages`, and passes `--offline` to `forge build`.
+`tama build` does not run `lake update`. It seeds manifest-matching cached Lake package checkouts before invoking Lake, and after a successful build it refreshes `TAMA_LAKE_PACKAGE_CACHE` from clean Git checkouts under `.lake/packages`. With global `--offline`, it fails before invoking Lake if any pinned git package is missing, dirty, or at another revision under `.lake/packages`, and passes `--offline` to `forge build`.
 
 With `--json`, external tool output is forwarded to stderr and stdout contains only the generated manifest paths:
 

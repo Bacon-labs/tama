@@ -433,7 +433,9 @@ TAMA_LAKE_PACKAGE_CACHE
                     Before `tama check` or `tama build`, Tama may also seed
                     missing packages from this cache when the cached checkout's
                     Git HEAD exactly matches the revision in `lake-manifest.json`
-                    and the checkout has a clean Git worktree.
+                    and the checkout has a clean Git worktree. After successful
+                    checks and builds, Tama may refresh this cache from clean Git
+                    checkouts under `.lake/packages`.
                     With `--offline`, Tama then verifies every git package
                     pinned in `lake-manifest.json` exists under `.lake/packages`
                     at the exact clean revision before invoking Lake.

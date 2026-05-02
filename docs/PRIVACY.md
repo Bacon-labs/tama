@@ -11,7 +11,7 @@ Network access occurs only when the user runs commands that explicitly need exte
 - `tama remove` runs `lake update` after editing dependencies.
 - `tama update` runs `lake update` and `forge update` unless `--no-lake` and `--no-forge` are used. Local refreshes that skip Lake refuse Verity dependency drift before editing `lakefile.toml`.
 
-`TAMA_LAKE_PACKAGE_CACHE` is a local cache only. Tama copies package checkouts between that cache and `.lake/packages` to avoid repeated downloads, but the cache is not uploaded by Tama. For `tama check` and `tama build`, cached packages are seeded only when their Git HEAD matches the revision pinned in `lake-manifest.json` and the checkout has a clean Git worktree.
+`TAMA_LAKE_PACKAGE_CACHE` is a local cache only. Tama copies package checkouts between that cache and `.lake/packages` to avoid repeated downloads, but the cache is not uploaded by Tama. For `tama check` and `tama build`, cached packages are seeded only when their Git HEAD matches the revision pinned in `lake-manifest.json` and the checkout has a clean Git worktree. After successful checks and builds, Tama refreshes the cache from clean Git checkouts under `.lake/packages` for later runs.
 
 `tama check` and `tama build` do not run `lake update`; with global `--offline`, they seed manifest-matching cached Lake packages and then refuse to invoke Lake if any git package pinned in `lake-manifest.json` is missing, dirty, or at another revision under `.lake/packages`. `tama build --offline` also passes `--offline` to `forge build`.
 

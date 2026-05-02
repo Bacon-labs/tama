@@ -154,9 +154,10 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
             prepare_lake_packages_for_build(&root, cli.offline)?;
-            tama_build::Lake::new_json(root, cli.json)
+            tama_build::Lake::new_json(root.clone(), cli.json)
                 .check_src_and_spec()
                 .map_err(|err| err.to_string())?;
+            refresh_lake_package_cache_after_success(&root);
             if cli.json {
                 println!("{}", check_status_json()?);
             }
@@ -166,7 +167,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
             prepare_lake_packages_for_build(&root, cli.offline)?;
-            let status = tama_build::Pipeline::new(root)
+            let status = tama_build::Pipeline::new(root.clone())
                 .run(tama_build::BuildOptions {
                     locked: cli.locked,
                     offline: cli.offline,
@@ -177,6 +178,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     verbose: cli.verbose,
                 })
                 .map_err(|err| err.to_string())?;
+            refresh_lake_package_cache_after_success(&root);
             if cli.json {
                 println!("{}", build_status_json(&status)?);
             } else {
@@ -1096,6 +1098,19 @@ fn prepare_lake_packages_for_build(root: &Utf8Path, offline: bool) -> Result<(),
         ensure_lake_packages_available_offline(root)?;
     }
     Ok(())
+}
+
+fn refresh_lake_package_cache_after_success(root: &Utf8Path) {
+    if let Err(err) = try_refresh_lake_package_cache_after_success(root) {
+        eprintln!("warning: failed to refresh Lake package cache: {err}");
+    }
+}
+
+fn try_refresh_lake_package_cache_after_success(root: &Utf8Path) -> Result<(), String> {
+    let Some(cache) = lake_package_cache()? else {
+        return Ok(());
+    };
+    sync_lake_package_cache(root, &cache)
 }
 
 fn seed_lake_package_cache_for_build(root: &Utf8Path) -> Result<(), String> {
@@ -2100,6 +2115,24 @@ mod tests {
         sync_lake_package_cache(&root, &cache).unwrap();
 
         assert!(!cache.join("verity").exists());
+    }
+
+    #[test]
+    fn successful_build_refreshes_cache_from_existing_lake_packages() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, cache.as_str());
+
+        init_git_package(&root.join(".lake/packages/verity"), "resolved").unwrap();
+
+        try_refresh_lake_package_cache_after_success(&root).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(cache.join("verity/package.txt")).unwrap(),
+            "resolved"
+        );
     }
 
     #[test]
