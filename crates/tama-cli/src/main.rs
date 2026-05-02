@@ -315,6 +315,20 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
 fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::DoctorReport, String> {
     let mut report = tama_toolchain::detect_required_tools();
     if let Some(project_root) = project {
+        let config = match tama_config::load_config(project_root) {
+            Ok(config) => Some(config),
+            Err(err) => {
+                report
+                    .notes
+                    .push(format!("tama.toml could not be read: {err}"));
+                report.tools.push(tama_toolchain::ToolStatus::Incompatible {
+                    name: "tama.toml".to_string(),
+                    found: "invalid or missing".to_string(),
+                    expected: "valid Tama project config".to_string(),
+                });
+                None
+            }
+        };
         if let Ok(toolchain) = tama_config::read_lean_toolchain(project_root) {
             if let Some(expected) = lean_version_from_toolchain(&toolchain) {
                 mark_version_mismatch(
@@ -325,7 +339,7 @@ fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::Doctor
                 );
             }
         }
-        if let Ok(config) = tama_config::load_config(project_root) {
+        if let Some(config) = &config {
             mark_version_mismatch(
                 &mut report,
                 "solc",
@@ -338,6 +352,9 @@ fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::Doctor
                 let drift =
                     tama_config::lock_drift(project_root, &lock).map_err(|err| err.to_string())?;
                 report.lock_current = Some(drift.is_empty());
+                if let Some(config) = &config {
+                    check_verity_resolution(&mut report, config, &lock);
+                }
                 if !drift.is_empty() {
                     report
                         .notes
@@ -371,6 +388,74 @@ fn enforce_locked_if_requested(root: &Utf8Path, locked: bool) -> Result<(), Stri
     }
     let lock = tama_config::load_lock(root).map_err(|err| err.to_string())?;
     tama_config::enforce_locked(root, &lock).map_err(|err| err.to_string())
+}
+
+fn check_verity_resolution(
+    report: &mut tama_toolchain::DoctorReport,
+    config: &tama_config::TamaConfig,
+    lock: &tama_config::TamaLock,
+) {
+    let requested = verity_rev_from_config(&config.project.verity);
+    let mut mismatches = Vec::new();
+    match lock.resolved.get("verity_rev") {
+        Some(found) if found == &requested => {}
+        Some(found) => mismatches.push(format!("lock verity_rev={found}")),
+        None => mismatches.push("lock verity_rev=<missing>".to_string()),
+    }
+    if let Some(input_rev) = lock.resolved.get("lake.verity.input_rev") {
+        if input_rev != &requested {
+            mismatches.push(format!("lake verity inputRev={input_rev}"));
+        }
+    }
+    if is_full_git_sha(&requested) {
+        match lock.resolved.get("lake.verity.rev") {
+            Some(found) if found == &requested => {}
+            Some(found) => mismatches.push(format!("lake verity rev={found}")),
+            None => mismatches.push("lake verity rev=<missing>".to_string()),
+        }
+    }
+    if let (Some(locked_git), Some(lake_git)) = (
+        lock.resolved.get("verity_git"),
+        lock.resolved.get("lake.verity.url"),
+    ) {
+        if locked_git != lake_git {
+            mismatches.push(format!("lake verity url={lake_git}"));
+        }
+    }
+
+    if mismatches.is_empty() {
+        let resolved = lock
+            .resolved
+            .get("lake.verity.rev")
+            .or_else(|| lock.resolved.get("verity_rev"))
+            .cloned()
+            .unwrap_or_else(|| requested.clone());
+        report
+            .tools
+            .push(tama_toolchain::ToolStatus::Ok(tama_toolchain::Tool {
+                name: "verity".to_string(),
+                path: lock
+                    .resolved
+                    .get("verity_git")
+                    .cloned()
+                    .unwrap_or_else(|| "lake-manifest.json".to_string())
+                    .into(),
+                version: Some(format!("requested {requested}, resolved {resolved}")),
+            }));
+    } else {
+        report.tools.push(tama_toolchain::ToolStatus::Incompatible {
+            name: "verity".to_string(),
+            found: mismatches.join("; "),
+            expected: format!("project.verity resolves to {requested}"),
+        });
+        report
+            .notes
+            .push("run `tama update` to sync the Verity dependency state".to_string());
+    }
+}
+
+fn is_full_git_sha(raw: &str) -> bool {
+    raw.len() == 40 && raw.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 fn mark_version_mismatch(
@@ -1239,6 +1324,110 @@ solc = "0.8.33"
             &report.tools[0],
             tama_toolchain::ToolStatus::Incompatible { found, expected, .. }
                 if found == "0.8.32" && expected == "0.8.33"
+        ));
+    }
+
+    #[test]
+    fn doctor_marks_verity_resolution_mismatch() {
+        let config = tama_config::TamaConfig {
+            project: tama_config::ProjectConfig {
+                name: "x".to_string(),
+                verity: "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e".to_string(),
+            },
+            paths: Default::default(),
+            yul: tama_config::YulConfig {
+                solc: "0.8.33".to_string(),
+                optimizer: true,
+                optimizer_runs: 200,
+                evm_version: "cancun".to_string(),
+                metadata_hash: "none".to_string(),
+            },
+            trust: Default::default(),
+        };
+        let mut report = tama_toolchain::DoctorReport::default();
+        let lock = tama_config::TamaLock {
+            version: 1,
+            resolved: std::collections::BTreeMap::from([
+                (
+                    "verity_git".to_string(),
+                    "https://github.com/lfglabs-dev/verity.git".to_string(),
+                ),
+                ("verity_rev".to_string(), "v0.1.0".to_string()),
+                ("lake.verity.input_rev".to_string(), "v0.1.0".to_string()),
+                (
+                    "lake.verity.rev".to_string(),
+                    "1111111111111111111111111111111111111111".to_string(),
+                ),
+            ]),
+            inputs: Default::default(),
+            yul: Default::default(),
+        };
+
+        check_verity_resolution(&mut report, &config, &lock);
+
+        assert!(doctor_report_has_failures(&report));
+        assert!(matches!(
+            &report.tools[0],
+            tama_toolchain::ToolStatus::Incompatible { name, found, expected }
+                if name == "verity"
+                    && found.contains("verity_rev=v0.1.0")
+                    && expected.contains("9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e")
+        ));
+    }
+
+    #[test]
+    fn doctor_accepts_matching_verity_resolution() {
+        let config = tama_config::TamaConfig {
+            project: tama_config::ProjectConfig {
+                name: "x".to_string(),
+                verity: "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e".to_string(),
+            },
+            paths: Default::default(),
+            yul: tama_config::YulConfig {
+                solc: "0.8.33".to_string(),
+                optimizer: true,
+                optimizer_runs: 200,
+                evm_version: "cancun".to_string(),
+                metadata_hash: "none".to_string(),
+            },
+            trust: Default::default(),
+        };
+        let mut report = tama_toolchain::DoctorReport::default();
+        let lock = tama_config::TamaLock {
+            version: 1,
+            resolved: std::collections::BTreeMap::from([
+                (
+                    "verity_git".to_string(),
+                    "https://github.com/lfglabs-dev/verity.git".to_string(),
+                ),
+                (
+                    "verity_rev".to_string(),
+                    "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e".to_string(),
+                ),
+                (
+                    "lake.verity.input_rev".to_string(),
+                    "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e".to_string(),
+                ),
+                (
+                    "lake.verity.rev".to_string(),
+                    "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e".to_string(),
+                ),
+            ]),
+            inputs: Default::default(),
+            yul: Default::default(),
+        };
+
+        check_verity_resolution(&mut report, &config, &lock);
+
+        assert!(!doctor_report_has_failures(&report));
+        assert!(matches!(
+            &report.tools[0],
+            tama_toolchain::ToolStatus::Ok(tool)
+                if tool.name == "verity"
+                    && tool
+                        .version
+                        .as_deref()
+                        .is_some_and(|version| version.contains("resolved 9b0114"))
         ));
     }
 
