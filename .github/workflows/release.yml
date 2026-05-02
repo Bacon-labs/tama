@@ -645,6 +645,7 @@ jobs:
               releases = releases_from(previous)
           else:
               releases = []
+          validate_release(current)
           releases = [release for release in releases if release.get("version") != version]
           releases.append(current)
           releases.sort(key=lambda release: release["version"])
