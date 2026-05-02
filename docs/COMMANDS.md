@@ -104,4 +104,6 @@ These commands manage Verity/Tama dependencies, refresh lock state, and diagnose
 
 `tama install` and `tama remove` refuse `--offline` because they must run `lake update` after editing dependencies. Direct git packages resolved by Lake are recorded in `tama.lock` under `resolved.lake.<package>.*`. `tama update --offline` is allowed only with both `--no-lake` and `--no-forge`, which limits it to local lock/config refreshes.
 
+`tama update --package <name>` runs `lake update <name>` for one Lake package and refreshes `tama.lock`; it does not run `forge update`. Use Forge directly for Solidity-side dependency updates.
+
 `tama doctor` exits nonzero when required tools are missing or incompatible, Verity resolution disagrees with `tama.toml`, or project lock inputs are stale. `tama doctor --fix` applies safe directory, Verity dependency, and lock repairs first, then reports the post-fix status.

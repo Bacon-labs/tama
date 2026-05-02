@@ -59,6 +59,8 @@ enum Command {
         no_forge: bool,
         #[arg(long)]
         no_lake: bool,
+        #[arg(long)]
+        package: Option<String>,
     },
 }
 
@@ -307,9 +309,20 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             println!("Removed Tama dependency {package}");
             Ok(ExitCode::SUCCESS)
         }
-        Command::Update { no_forge, no_lake } => {
+        Command::Update {
+            no_forge,
+            no_lake,
+            package,
+        } => {
             let root = project_root(cli.root)?;
-            update_project(&root, cli.locked, cli.offline, no_lake, no_forge)?;
+            update_project(
+                &root,
+                cli.locked,
+                cli.offline,
+                no_lake,
+                no_forge,
+                package.as_deref(),
+            )?;
             println!("Updated Tama project lock state");
             Ok(ExitCode::SUCCESS)
         }
@@ -530,7 +543,7 @@ fn apply_doctor_fix(
         }
         let changed = sync_verity_lake_dependency(project_root, &config, &mut lock)?;
         if changed {
-            run_lake_update(project_root)?;
+            run_lake_update(project_root, None)?;
         }
         tama_config::update_lock_inputs(project_root, &mut lock).map_err(|err| err.to_string())?;
         tama_config::write_lock(project_root, &lock).map_err(|err| err.to_string())?;
@@ -545,7 +558,7 @@ fn finalize_init(root: &Utf8PathBuf, offline: bool) -> Result<(), String> {
         }
         return Ok(());
     }
-    run_lake_update(root)?;
+    run_lake_update(root, None)?;
     ensure_git_worktree(root)?;
     let mut forge_args = vec!["install", FORGE_STD_DEPENDENCY];
     forge_args.extend(forge_install_optional_flags()?);
@@ -582,9 +595,13 @@ fn update_project(
     offline: bool,
     no_lake: bool,
     no_forge: bool,
+    package: Option<&str>,
 ) -> Result<(), String> {
     if offline && (!no_lake || !no_forge) {
         return Err("`tama update --offline` requires both --no-lake and --no-forge".to_string());
+    }
+    if package.is_some() && no_lake {
+        return Err("`tama update --package` requires Lake update; remove --no-lake".to_string());
     }
     if locked {
         let lock = tama_config::load_lock(root).map_err(|err| err.to_string())?;
@@ -592,11 +609,21 @@ fn update_project(
     }
     let config = tama_config::load_config(root).map_err(|err| err.to_string())?;
     let mut lock = tama_config::load_lock(root).map_err(|err| err.to_string())?;
-    sync_verity_lake_dependency(root, &config, &mut lock)?;
-    if !no_lake {
-        run_lake_update(root)?;
+    if matches!(package, Some(name) if name != "verity") {
+        let (_, needs_lake_update) = planned_verity_lake_dependency(root, &config, &lock)?;
+        if needs_lake_update {
+            return Err(
+                "`tama update --package` cannot refresh another package while the Verity dependency is drifting; run `tama update` or `tama update --package verity` first"
+                    .to_string(),
+            );
+        }
+    } else {
+        sync_verity_lake_dependency(root, &config, &mut lock)?;
     }
-    if !no_forge {
+    if !no_lake {
+        run_lake_update(root, package)?;
+    }
+    if package.is_none() && !no_forge {
         run_tool(root, "forge", &["update"])?;
     }
     tama_config::update_lock_inputs(root, &mut lock).map_err(|err| err.to_string())?;
@@ -672,7 +699,7 @@ fn mutate_dependencies(
         tama_config::enforce_locked(root, &lock).map_err(|err| err.to_string())?;
     }
     edit(root)?;
-    run_lake_update(root)?;
+    run_lake_update(root, None)?;
     refresh_lock(root)
 }
 
@@ -744,13 +771,22 @@ fn git_head_rev(checkout: &Utf8Path) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn run_lake_update(root: &Utf8PathBuf) -> Result<(), String> {
+fn run_lake_update(root: &Utf8PathBuf, package: Option<&str>) -> Result<(), String> {
+    let args = lake_update_args(package);
     let Some(cache) = lake_package_cache()? else {
-        return run_tool(root, "lake", &["update"]);
+        return run_process("lake", &args, Some(root));
     };
     seed_lake_package_cache(root, &cache)?;
-    run_tool(root, "lake", &["update"])?;
+    run_process("lake", &args, Some(root))?;
     sync_lake_package_cache(root, &cache)
+}
+
+fn lake_update_args(package: Option<&str>) -> Vec<&str> {
+    let mut args = vec!["update"];
+    if let Some(package) = package {
+        args.push(package);
+    }
+    args
 }
 
 fn lake_package_cache() -> Result<Option<Utf8PathBuf>, String> {
@@ -1259,6 +1295,26 @@ mod tests {
     }
 
     #[test]
+    fn update_package_args_target_one_lake_package() {
+        assert_eq!(lake_update_args(None), vec!["update"]);
+        assert_eq!(lake_update_args(Some("mathlib")), vec!["update", "mathlib"]);
+
+        let cli = Cli::try_parse_from(["tama", "update", "--package", "mathlib"]).unwrap();
+        match cli.command {
+            Command::Update {
+                package,
+                no_lake,
+                no_forge,
+            } => {
+                assert_eq!(package.as_deref(), Some("mathlib"));
+                assert!(!no_lake);
+                assert!(!no_forge);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
     fn default_branch_validation_returns_head_commit() {
         let dir = tempfile::tempdir().unwrap();
         let repo = Utf8PathBuf::from_path_buf(dir.path().join("package.git")).unwrap();
@@ -1372,7 +1428,7 @@ mod tests {
         let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
         tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
 
-        let err = update_project(&root, false, true, false, true).unwrap_err();
+        let err = update_project(&root, false, true, false, true, None).unwrap_err();
         assert!(err.contains("--no-lake"));
 
         let before = tama_config::load_lock(&root)
@@ -1381,7 +1437,7 @@ mod tests {
             .get("verity_rev")
             .cloned()
             .unwrap();
-        update_project(&root, false, true, true, true).unwrap();
+        update_project(&root, false, true, true, true, None).unwrap();
         let after = tama_config::load_lock(&root)
             .unwrap()
             .resolved
@@ -1413,7 +1469,7 @@ mod tests {
         lakefile.push_str("\n# user lake option\n[leanOptions]\npp.unicode.fun = true\n");
         tama_common::write_string(&root.join("lakefile.toml"), &lakefile).unwrap();
 
-        update_project(&root, false, true, true, true).unwrap();
+        update_project(&root, false, true, true, true, None).unwrap();
 
         let edited = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
         assert!(edited.contains("rev = \"v0.2.0\""));
@@ -1426,6 +1482,35 @@ mod tests {
                 .get("verity_rev")
                 .map(String::as_str),
             Some("v0.2.0")
+        );
+    }
+
+    #[test]
+    fn targeted_package_update_refuses_unrelated_verity_drift_before_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let old_rev = tama_config::load_lock(&root)
+            .unwrap()
+            .resolved
+            .get("verity_rev")
+            .cloned()
+            .unwrap();
+        let config = tama_common::read_to_string(&root.join("tama.toml"))
+            .unwrap()
+            .replace(&format!("verity = \"{old_rev}\""), "verity = \"0.2.0\"");
+        tama_common::write_string(&root.join("tama.toml"), &config).unwrap();
+
+        let err = update_project(&root, false, false, false, false, Some("mathlib")).unwrap_err();
+
+        assert!(err.contains("Verity dependency is drifting"));
+        assert_eq!(
+            tama_config::load_lock(&root)
+                .unwrap()
+                .resolved
+                .get("verity_rev")
+                .map(String::as_str),
+            Some(old_rev.as_str())
         );
     }
 
