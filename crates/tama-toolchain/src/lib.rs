@@ -273,6 +273,38 @@ mod tests {
         assert_eq!(version, Version::new(4, 22, 0));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn passthrough_preserves_args_and_exit_status() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let script = root.join("fake-forge");
+        tama_common::write_string(
+            &script,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > args.txt\nexit 7\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions).unwrap();
+
+        let args = vec![
+            "test".to_string(),
+            "--match-test".to_string(),
+            "CounterTest".to_string(),
+            "-vvv".to_string(),
+        ];
+        let status = run_passthrough(script.as_str(), &args, &root).unwrap();
+
+        assert_eq!(status.code(), Some(7));
+        assert_eq!(
+            std::fs::read_to_string(root.join("args.txt")).unwrap(),
+            "test\n--match-test\nCounterTest\n-vvv\n"
+        );
+    }
+
     #[test]
     fn parse_failure_is_typed() {
         assert!(matches!(
