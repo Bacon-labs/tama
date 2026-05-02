@@ -200,7 +200,7 @@ fn install_with_hooks(
     verify_signature: impl FnOnce(&[u8], &[u8]) -> Result<(), String>,
 ) -> Result<(), String> {
     let (manifest_bytes, signature_bytes) = if let Some(path) = manifest_file {
-        let sig = path.with_extension("json.minisig");
+        let sig = manifest_signature_path(&path);
         (
             fs::read(&path).map_err(|err| err.to_string())?,
             fs::read(&sig).map_err(|err| err.to_string())?,
@@ -235,6 +235,10 @@ fn install_with_hooks(
     use_version_at(&home, &selected_version)?;
     println!("Installed Tama {selected_version}");
     Ok(())
+}
+
+fn manifest_signature_path(path: &Utf8Path) -> Utf8PathBuf {
+    Utf8PathBuf::from(format!("{path}.minisig"))
 }
 
 fn select_artifact(
@@ -1482,6 +1486,45 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, "bad test signature");
+        assert!(!bootstrap_called);
+        assert!(!home.exists());
+    }
+
+    #[test]
+    fn manifest_file_uses_literal_minisig_suffix() {
+        let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let home = root.join("home");
+        let _home_guard = EnvVarGuard::set("TAMAUP_HOME", home.as_std_path().as_os_str());
+        let manifest_path = root.join("release-manifest");
+        fs::write(&manifest_path, b"{}").unwrap();
+        fs::write(root.join("release-manifest.minisig"), b"fake-signature").unwrap();
+        let mut bootstrap_called = false;
+
+        let err = install_with_hooks(
+            "stable",
+            Some(manifest_path),
+            BootstrapOptions {
+                yes: true,
+                offline: true,
+                no_modify_path: true,
+                no_install_lean: true,
+                no_install_foundry: true,
+                no_install_solc: true,
+            },
+            |_| {
+                bootstrap_called = true;
+                Ok(())
+            },
+            |_, signature_bytes| {
+                assert_eq!(signature_bytes, b"fake-signature");
+                Err("signature gate reached".to_string())
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, "signature gate reached");
         assert!(!bootstrap_called);
         assert!(!home.exists());
     }
