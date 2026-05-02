@@ -163,7 +163,15 @@ fn install(
     manifest_file: Option<Utf8PathBuf>,
     bootstrap: BootstrapOptions,
 ) -> Result<(), String> {
-    bootstrap_toolchain(bootstrap)?;
+    install_with_bootstrap(version, manifest_file, bootstrap, bootstrap_toolchain)
+}
+
+fn install_with_bootstrap(
+    version: &str,
+    manifest_file: Option<Utf8PathBuf>,
+    bootstrap: BootstrapOptions,
+    bootstrap_toolchain: impl FnOnce(BootstrapOptions) -> Result<(), String>,
+) -> Result<(), String> {
     let (manifest_bytes, signature_bytes) = if let Some(path) = manifest_file {
         let sig = path.with_extension("json.minisig");
         (
@@ -194,6 +202,7 @@ fn install(
         download(&artifact.url)?
     };
     verify_sha256(&archive, &artifact.sha256)?;
+    bootstrap_toolchain(bootstrap)?;
     let home = tama_home();
     install_archive_at(&home, &selected_version, &archive)?;
     use_version_at(&home, &selected_version)?;
@@ -1047,6 +1056,35 @@ mod tests {
             Command::Install { version, .. } => assert_eq!(version.as_deref(), Some("0.1.0")),
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn install_verifies_manifest_before_bootstrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).unwrap();
+        fs::write(&manifest, br#"{"version":"0.1.0","artifacts":[]}"#).unwrap();
+        fs::write(manifest.with_extension("json.minisig"), b"not a signature").unwrap();
+        let mut bootstrap_called = false;
+
+        let err = install_with_bootstrap(
+            "stable",
+            Some(manifest),
+            BootstrapOptions {
+                yes: true,
+                offline: true,
+                no_install_lean: false,
+                no_install_foundry: false,
+                no_install_solc: false,
+            },
+            |_| {
+                bootstrap_called = true;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(!bootstrap_called);
+        assert!(!err.is_empty());
     }
 
     #[test]
