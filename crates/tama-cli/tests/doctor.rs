@@ -23,6 +23,11 @@ fn doctor_with_root_uses_project_lean_toolchain_for_version_probes() {
         "[project]\nname = \"x\"\nverity = \"v\"\n\n[yul]\nsolc = \"0.8.33\"\n",
     )
     .unwrap();
+    std::fs::write(
+        root.join("lakefile.toml"),
+        "name = \"x\"\nbuildDir = \"artifacts/lean\"\n",
+    )
+    .unwrap();
     std::fs::write(root.join("lean-toolchain"), "leanprover/lean4:v4.22.0\n").unwrap();
     write_executable(
         &bin.join("lean"),

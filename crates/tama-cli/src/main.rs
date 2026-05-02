@@ -337,6 +337,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
 
 fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::DoctorReport, String> {
     let mut report = tama_toolchain::detect_required_tools_at(project.map(|root| root.as_path()));
+    report.tools.insert(0, tama_status());
     if let Some(project_root) = project {
         let config = match tama_config::load_config(project_root) {
             Ok(config) => Some(config),
@@ -375,6 +376,7 @@ fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::Doctor
                 &config.yul.solc,
                 tama_toolchain::parse_solc_version,
             );
+            report_lake_build_dir(&mut report, project_root);
             report_generated_dirs(&mut report, project_root, &config.paths);
         }
         match tama_config::load_lock(project_root) {
@@ -402,6 +404,18 @@ fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::Doctor
     Ok(report)
 }
 
+fn tama_status() -> tama_toolchain::ToolStatus {
+    let path = std::env::current_exe()
+        .ok()
+        .and_then(|path| Utf8PathBuf::from_path_buf(path).ok())
+        .unwrap_or_else(|| Utf8PathBuf::from("tama"));
+    tama_toolchain::ToolStatus::Ok(tama_toolchain::Tool {
+        name: "tama".to_string(),
+        path,
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+    })
+}
+
 fn doctor_report_has_failures(report: &tama_toolchain::DoctorReport) -> bool {
     report.tools.iter().any(|tool| {
         matches!(
@@ -410,6 +424,35 @@ fn doctor_report_has_failures(report: &tama_toolchain::DoctorReport) -> bool {
                 | tama_toolchain::ToolStatus::Incompatible { .. }
         )
     }) || report.lock_current == Some(false)
+}
+
+fn report_lake_build_dir(report: &mut tama_toolchain::DoctorReport, root: &Utf8Path) {
+    match tama_config::parse_lake_build_dir(root) {
+        Ok(Some(dir)) => report
+            .tools
+            .push(tama_toolchain::ToolStatus::Ok(tama_toolchain::Tool {
+                name: "lake buildDir".to_string(),
+                path: "lakefile.toml".into(),
+                version: Some(dir.to_string()),
+            })),
+        Ok(None) => report.tools.push(tama_toolchain::ToolStatus::Incompatible {
+            name: "lake buildDir".to_string(),
+            found: "<default>".to_string(),
+            expected: "configured under artifacts/lean".to_string(),
+        }),
+        Err(tama_config::Error::UnsupportedLakefile(message))
+            if message.contains("lakefile.lean") =>
+        {
+            report
+                .notes
+                .push(format!("lake buildDir could not be checked: {message}"));
+        }
+        Err(err) => report.tools.push(tama_toolchain::ToolStatus::Incompatible {
+            name: "lake buildDir".to_string(),
+            found: err.to_string(),
+            expected: "configured in lakefile.toml".to_string(),
+        }),
+    }
 }
 
 fn report_generated_dirs(
@@ -2414,6 +2457,38 @@ buildDir = ""
             tama_toolchain::ToolStatus::Incompatible { found, expected, .. }
                 if found == "4.29.1" && expected == "4.22.0"
         ));
+    }
+
+    #[test]
+    fn doctor_reports_tama_version_and_lake_build_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("lakefile.toml"),
+            "name = \"x\"\nbuildDir = \"artifacts/lean\"\n",
+        )
+        .unwrap();
+        let mut report = tama_toolchain::DoctorReport {
+            tools: vec![tama_status()],
+            lock_current: None,
+            notes: vec![],
+        };
+
+        report_lake_build_dir(&mut report, &root);
+
+        assert!(report.tools.iter().any(|status| matches!(
+            status,
+            tama_toolchain::ToolStatus::Ok(tool)
+                if tool.name == "tama"
+                    && tool.version.as_deref() == Some(env!("CARGO_PKG_VERSION"))
+        )));
+        assert!(report.tools.iter().any(|status| matches!(
+            status,
+            tama_toolchain::ToolStatus::Ok(tool)
+                if tool.name == "lake buildDir"
+                    && tool.version.as_deref() == Some("artifacts/lean")
+        )));
+        assert!(!doctor_report_has_failures(&report));
     }
 
     #[test]
