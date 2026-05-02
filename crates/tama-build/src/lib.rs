@@ -861,6 +861,11 @@ impl EvmyulConformanceGuard {
         let path = root.join("EthereumTests");
         let marker = path.join(".tama-evmyul-placeholder");
         if path.exists() {
+            if !path.is_dir() {
+                return Err(Error::Adapter(format!(
+                    "`{path}` exists but is not a directory; Verity's evmyul FFI target requires an EthereumTests directory"
+                )));
+            }
             return Ok(Self {
                 path,
                 marker,
@@ -868,10 +873,13 @@ impl EvmyulConformanceGuard {
             });
         }
         fs::create_dir_all(&path).map_err(|source| tama_common::io_error(path.clone(), source))?;
-        tama_common::write_string(
+        if let Err(err) = tama_common::write_string(
             &marker,
             "Temporary Tama marker used while building Verity's evmyul FFI target.\n",
-        )?;
+        ) {
+            let _ = fs::remove_dir(&path);
+            return Err(err.into());
+        }
         Ok(Self {
             path,
             marker,
@@ -1895,6 +1903,41 @@ mod tests {
         ];
 
         run_owned("sh", &args, &root, true).unwrap();
+    }
+
+    #[test]
+    fn evmyul_guard_creates_and_removes_placeholder_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let path = root.join("EthereumTests");
+        let marker = path.join(".tama-evmyul-placeholder");
+
+        {
+            let _guard = EvmyulConformanceGuard::prepare(&root).unwrap();
+            assert!(path.is_dir());
+            assert!(marker.is_file());
+        }
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn evmyul_guard_rejects_file_placeholder_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let path = root.join("EthereumTests");
+        tama_common::write_string(&path, "not a directory\n").unwrap();
+
+        let err = match EvmyulConformanceGuard::prepare(&root) {
+            Ok(_) => panic!("expected EthereumTests file to be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            Error::Adapter(message) if message.contains("not a directory")
+        ));
+        assert!(path.is_file());
     }
 
     #[test]
