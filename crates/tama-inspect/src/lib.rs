@@ -301,6 +301,81 @@ solc = "0.8.33"
     }
 
     #[test]
+    fn inspect_json_mode_is_machine_readable_for_every_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            r#"[project]
+name = "custom"
+verity = "0.1.0"
+
+[yul]
+solc = "0.8.33"
+"#,
+        )
+        .unwrap();
+        let mut manifest = counter_manifest("artifacts");
+        manifest.abi.functions.push(tama_manifest::Function {
+            name: "increment".to_string(),
+            signature: "increment()".to_string(),
+            selector: tama_common::function_selector("increment()"),
+            visibility: "external".to_string(),
+            mutability: "nonpayable".to_string(),
+            inputs: vec![],
+            outputs: vec![],
+        });
+        manifest.obligations.push(tama_manifest::Obligation {
+            id: "Counter.increment_post".to_string(),
+            name: "increment_post".to_string(),
+            kind: tama_manifest::ObligationKind::Postcondition,
+            lean_decl: "proof.CounterProof.increment_post".to_string(),
+            contract: "Counter".to_string(),
+            function: Some("increment".to_string()),
+            coverage: tama_manifest::Coverage {
+                disposition: tama_manifest::CoverageDisposition::Mirror,
+                path: Some(
+                    "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount"
+                        .to_string(),
+                ),
+                reason: None,
+            },
+        });
+        manifest
+            .write_pretty(&root.join("artifacts/manifest/Counter.json"))
+            .unwrap();
+        tama_common::write_string(&root.join("artifacts/yul/Counter.yul"), "{ }\n").unwrap();
+        tama_common::write_string(&root.join("artifacts/bytecode/Counter.bin"), "6000\n").unwrap();
+        tama_common::write_string(
+            &root.join("artifacts/bytecode/Counter.runtime.bin"),
+            "6001\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("artifacts/trust-probe/axioms.json"),
+            r#"{"schema":"tama.trust-probe.v1","method":"lean.collectAxioms","obligations":[]}"#,
+        )
+        .unwrap();
+
+        for field in [
+            Field::Manifest,
+            Field::Selectors,
+            Field::Abi,
+            Field::StorageLayout,
+            Field::Yul,
+            Field::Bytecode,
+            Field::RuntimeBytecode,
+            Field::Theorems,
+            Field::Obligations,
+            Field::Mirrors,
+            Field::Trust,
+        ] {
+            let out = inspect(&root, "Counter", field, true).unwrap();
+            serde_json::from_str::<Value>(&out).unwrap();
+        }
+    }
+
+    #[test]
     fn inspect_trust_rejects_invalid_json_artifacts() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
