@@ -249,6 +249,11 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Doctor { fix } => {
             let root = cli.root.unwrap_or_else(|| Utf8PathBuf::from("."));
             let project = tama_common::find_project_root(&root).ok();
+            if cli.locked {
+                if let Some(project_root) = project.as_ref() {
+                    enforce_locked_if_requested(project_root, true)?;
+                }
+            }
             if fix {
                 apply_doctor_fix(&root, project.as_ref(), cli.offline)?;
             }
@@ -2577,6 +2582,39 @@ mod tests {
         apply_doctor_fix(&root, Some(&root), false).unwrap();
         let current = doctor_report(Some(&root)).unwrap();
         assert_eq!(current.lock_current, Some(true));
+    }
+
+    #[test]
+    fn doctor_locked_refuses_stale_inputs_before_fixing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let lock_before = tama_common::read_to_string(&root.join("tama.lock")).unwrap();
+        tama_common::write_string(
+            &root.join("TamaSrc.lean"),
+            "import src.ERC20Lite\n-- changed\n",
+        )
+        .unwrap();
+
+        let err = run(Cli {
+            root: Some(root.clone()),
+            locked: true,
+            offline: false,
+            json: false,
+            verbose: 0,
+            no_color: false,
+            command: Command::Doctor { fix: true },
+        })
+        .unwrap_err();
+
+        assert!(err.contains("lockfile is stale"));
+        assert!(err.contains("TamaSrc.lean"));
+        assert_eq!(
+            tama_common::read_to_string(&root.join("tama.lock")).unwrap(),
+            lock_before
+        );
+        let lock = tama_config::load_lock(&root).unwrap();
+        assert!(!tama_config::lock_drift(&root, &lock).unwrap().is_empty());
     }
 
     #[test]
