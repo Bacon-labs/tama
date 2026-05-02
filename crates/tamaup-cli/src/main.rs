@@ -1,8 +1,8 @@
 use std::fs;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{symlink, PermissionsExt};
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode, Stdio};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::{Parser, Subcommand};
@@ -13,21 +13,23 @@ use sha2::{Digest, Sha256};
 
 const DEFAULT_BASE_URL: &str = "https://tama.tools";
 const EMBEDDED_PUBLIC_KEY: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+const DEFAULT_LEAN_TOOLCHAIN: &str = "leanprover/lean4:v4.22.0";
+const DEFAULT_SOLC_VERSION: &str = "0.8.33";
 
 #[derive(Debug, Parser)]
 #[command(name = "tamaup", version, about = "Install and update Tama")]
 struct Cli {
-    #[arg(long)]
+    #[arg(long, global = true)]
     yes: bool,
-    #[arg(long)]
+    #[arg(long, global = true)]
     offline: bool,
-    #[arg(long)]
+    #[arg(long, global = true)]
     no_modify_path: bool,
-    #[arg(long)]
+    #[arg(long, global = true)]
     no_install_lean: bool,
-    #[arg(long)]
+    #[arg(long, global = true)]
     no_install_foundry: bool,
-    #[arg(long)]
+    #[arg(long, global = true)]
     no_install_solc: bool,
     #[command(subcommand)]
     command: Option<Command>,
@@ -75,6 +77,30 @@ struct PendingArchiveEntry {
     content: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BootstrapOptions {
+    yes: bool,
+    offline: bool,
+    no_install_lean: bool,
+    no_install_foundry: bool,
+    no_install_solc: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ToolchainPresence {
+    lean: bool,
+    lake: bool,
+    forge: bool,
+    solc: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BootstrapAction {
+    Lean,
+    Foundry,
+    Solc,
+}
+
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -86,6 +112,13 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), String> {
+    let bootstrap = BootstrapOptions {
+        yes: cli.yes,
+        offline: cli.offline,
+        no_install_lean: cli.no_install_lean,
+        no_install_foundry: cli.no_install_foundry,
+        no_install_solc: cli.no_install_solc,
+    };
     match cli.command.unwrap_or(Command::Install {
         version: None,
         manifest_file: None,
@@ -96,18 +129,23 @@ fn run(cli: Cli) -> Result<(), String> {
         } => install(
             version.as_deref().unwrap_or("stable"),
             manifest_file,
-            cli.offline,
+            bootstrap,
         ),
         Command::Use { version } => use_version(&version),
         Command::List => list_versions(),
         Command::Self_ {
             command: SelfCommand::Update,
-        } => install("stable", None, cli.offline),
+        } => install("stable", None, bootstrap),
         Command::Uninstall => uninstall(),
     }
 }
 
-fn install(version: &str, manifest_file: Option<Utf8PathBuf>, offline: bool) -> Result<(), String> {
+fn install(
+    version: &str,
+    manifest_file: Option<Utf8PathBuf>,
+    bootstrap: BootstrapOptions,
+) -> Result<(), String> {
+    bootstrap_toolchain(bootstrap)?;
     let (manifest_bytes, signature_bytes) = if let Some(path) = manifest_file {
         let sig = path.with_extension("json.minisig");
         (
@@ -115,7 +153,7 @@ fn install(version: &str, manifest_file: Option<Utf8PathBuf>, offline: bool) -> 
             fs::read(&sig).map_err(|err| err.to_string())?,
         )
     } else {
-        if offline {
+        if bootstrap.offline {
             return Err("offline install requires --manifest-file".to_string());
         }
         (
@@ -137,7 +175,7 @@ fn install(version: &str, manifest_file: Option<Utf8PathBuf>, offline: bool) -> 
     let archive = if artifact.url.starts_with("file://") {
         fs::read(artifact.url.trim_start_matches("file://")).map_err(|err| err.to_string())?
     } else {
-        if offline {
+        if bootstrap.offline {
             return Err("offline install cannot download artifact".to_string());
         }
         download(&artifact.url)?
@@ -262,6 +300,173 @@ fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), String> {
     }
 }
 
+fn bootstrap_toolchain(opts: BootstrapOptions) -> Result<(), String> {
+    let actions = bootstrap_actions(opts, detect_toolchain_presence())?;
+    for action in actions {
+        match action {
+            BootstrapAction::Lean => install_lean_toolchain()?,
+            BootstrapAction::Foundry => install_foundry()?,
+            BootstrapAction::Solc => install_solc()?,
+        }
+    }
+    Ok(())
+}
+
+fn detect_toolchain_presence() -> ToolchainPresence {
+    ToolchainPresence {
+        lean: command_exists("lean"),
+        lake: command_exists("lake"),
+        forge: command_exists("forge"),
+        solc: command_exists("solc"),
+    }
+}
+
+fn command_exists(name: &str) -> bool {
+    ProcessCommand::new(name)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn bootstrap_actions(
+    opts: BootstrapOptions,
+    presence: ToolchainPresence,
+) -> Result<Vec<BootstrapAction>, String> {
+    let mut actions = Vec::new();
+    if (!presence.lean || !presence.lake) && !opts.no_install_lean {
+        require_bootstrap_allowed(opts, "Lean/Lake")?;
+        actions.push(BootstrapAction::Lean);
+    }
+    if !presence.forge && !opts.no_install_foundry {
+        require_bootstrap_allowed(opts, "Foundry")?;
+        actions.push(BootstrapAction::Foundry);
+    }
+    if !presence.solc && !opts.no_install_solc {
+        require_bootstrap_allowed(opts, "solc")?;
+        actions.push(BootstrapAction::Solc);
+    }
+    Ok(actions)
+}
+
+fn require_bootstrap_allowed(opts: BootstrapOptions, tool: &str) -> Result<(), String> {
+    if opts.offline {
+        return Err(format!(
+            "{tool} is missing and cannot be installed while --offline is set"
+        ));
+    }
+    if !opts.yes {
+        return Err(format!(
+            "{tool} is missing; rerun with --yes to install it or pass the matching --no-install-* flag to skip bootstrap"
+        ));
+    }
+    Ok(())
+}
+
+fn install_lean_toolchain() -> Result<(), String> {
+    let script = download("https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh")?;
+    run_shell_script(
+        "elan-init.sh",
+        &script,
+        &["-y", "--default-toolchain", "none"],
+    )?;
+    let elan = home_tool(".elan/bin/elan").unwrap_or_else(|| Utf8PathBuf::from("elan"));
+    run_command_path(
+        &elan,
+        &["toolchain", "install", DEFAULT_LEAN_TOOLCHAIN],
+        "elan toolchain install",
+    )
+}
+
+fn install_foundry() -> Result<(), String> {
+    let script = download("https://foundry.paradigm.xyz")?;
+    run_shell_script("foundryup bootstrap", &script, &[])?;
+    let foundryup =
+        home_tool(".foundry/bin/foundryup").unwrap_or_else(|| Utf8PathBuf::from("foundryup"));
+    run_command_path(&foundryup, &[], "foundryup")
+}
+
+fn install_solc() -> Result<(), String> {
+    run_command(
+        "python3",
+        &["-m", "pip", "install", "--user", "solc-select"],
+        "python3 -m pip install solc-select",
+    )?;
+    run_command(
+        "solc-select",
+        &["install", DEFAULT_SOLC_VERSION],
+        "solc-select install",
+    )?;
+    run_command(
+        "solc-select",
+        &["use", DEFAULT_SOLC_VERSION],
+        "solc-select use",
+    )
+}
+
+fn home_tool(rel: &str) -> Option<Utf8PathBuf> {
+    std::env::var("HOME")
+        .ok()
+        .map(|home| Utf8PathBuf::from(home).join(rel))
+}
+
+fn run_shell_script(name: &str, script: &[u8], args: &[&str]) -> Result<(), String> {
+    let mut child = ProcessCommand::new("sh")
+        .arg("-s")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|err| format!("failed to run {name}: {err}"))?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| format!("failed to open stdin for {name}"))?
+        .write_all(script)
+        .map_err(|err| format!("failed to write {name}: {err}"))?;
+    let status = child
+        .wait()
+        .map_err(|err| format!("failed to wait for {name}: {err}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{name} failed with status {status}"))
+    }
+}
+
+fn run_command(program: &str, args: &[&str], display: &str) -> Result<(), String> {
+    let status = ProcessCommand::new(program)
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|err| format!("failed to run {display}: {err}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{display} failed with status {status}"))
+    }
+}
+
+fn run_command_path(path: &Utf8Path, args: &[&str], display: &str) -> Result<(), String> {
+    let status = ProcessCommand::new(path.as_std_path())
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|err| format!("failed to run {display}: {err}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{display} failed with status {status}"))
+    }
+}
+
 fn extract_archive(bytes: &[u8], dest: &Utf8Path) -> Result<(), String> {
     let decoder = GzDecoder::new(Cursor::new(bytes));
     let mut archive = tar::Archive::new(decoder);
@@ -367,6 +572,82 @@ mod tests {
     fn platform_is_not_windows() {
         let platform = platform().unwrap();
         assert!(!platform.contains("windows"));
+    }
+
+    #[test]
+    fn bootstrap_requires_consent_or_opt_out_for_missing_tools() {
+        let presence = ToolchainPresence {
+            lean: false,
+            lake: false,
+            forge: false,
+            solc: false,
+        };
+        let err = bootstrap_actions(
+            BootstrapOptions {
+                yes: false,
+                offline: false,
+                no_install_lean: false,
+                no_install_foundry: false,
+                no_install_solc: false,
+            },
+            presence,
+        )
+        .unwrap_err();
+        assert!(err.contains("--yes"));
+
+        let err = bootstrap_actions(
+            BootstrapOptions {
+                yes: true,
+                offline: true,
+                no_install_lean: false,
+                no_install_foundry: false,
+                no_install_solc: false,
+            },
+            presence,
+        )
+        .unwrap_err();
+        assert!(err.contains("--offline"));
+
+        let actions = bootstrap_actions(
+            BootstrapOptions {
+                yes: true,
+                offline: false,
+                no_install_lean: true,
+                no_install_foundry: false,
+                no_install_solc: true,
+            },
+            presence,
+        )
+        .unwrap();
+        assert_eq!(actions, vec![BootstrapAction::Foundry]);
+    }
+
+    #[test]
+    fn install_accepts_global_bootstrap_flags_after_subcommand() {
+        let cli = Cli::try_parse_from([
+            "tamaup",
+            "install",
+            "--yes",
+            "--offline",
+            "--manifest-file",
+            "manifest.json",
+        ])
+        .unwrap();
+        assert!(cli.yes);
+        assert!(cli.offline);
+        match cli.command.unwrap() {
+            Command::Install { manifest_file, .. } => {
+                assert_eq!(manifest_file.unwrap(), Utf8PathBuf::from("manifest.json"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from(["tamaup", "install", "0.1.0", "--no-install-solc"]).unwrap();
+        assert!(cli.no_install_solc);
+        match cli.command.unwrap() {
+            Command::Install { version, .. } => assert_eq!(version.as_deref(), Some("0.1.0")),
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[test]
