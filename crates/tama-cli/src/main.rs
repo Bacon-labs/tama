@@ -822,10 +822,10 @@ fn clean(root: &Utf8PathBuf, deep: bool) -> Result<(), String> {
         paths.out.join("trust-probe"),
         foundry.out,
         Utf8PathBuf::from("cache"),
-        paths.generated,
     ] {
         remove_project_dir(root, &rel)?;
     }
+    remove_generated_dir(root, &paths.generated)?;
     for rel in [
         paths.out.join("verity-modules.txt"),
         paths.out.join("trust-report.json"),
@@ -836,6 +836,37 @@ fn clean(root: &Utf8PathBuf, deep: bool) -> Result<(), String> {
     }
     if deep {
         remove_project_dir(root, Utf8Path::new(".lake"))?;
+    }
+    Ok(())
+}
+
+fn remove_generated_dir(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
+    ensure_project_relative(rel)?;
+    let path = root.join(rel);
+    if !path.exists() {
+        return Ok(());
+    }
+    ensure_generated_tree_cleanable(&path)?;
+    std::fs::remove_dir_all(&path).map_err(|err| format!("failed to remove `{path}`: {err}"))
+}
+
+fn ensure_generated_tree_cleanable(path: &Utf8Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(path).map_err(|err| format!("failed to read `{path}`: {err}"))? {
+        let entry = entry.map_err(|err| format!("failed to read `{path}` entry: {err}"))?;
+        let child = Utf8PathBuf::from_path_buf(entry.path())
+            .map_err(|path| format!("generated path `{}` is not UTF-8", path.display()))?;
+        let metadata = std::fs::symlink_metadata(&child)
+            .map_err(|err| format!("failed to inspect `{child}`: {err}"))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!("refusing to clean generated symlink `{child}`"));
+        }
+        if metadata.is_dir() {
+            ensure_generated_tree_cleanable(&child)?;
+        } else if metadata.is_file()
+            && !tama_common::has_generated_header(&child).map_err(|err| err.to_string())?
+        {
+            return Err(tama_common::Error::GeneratedFileModified(child).to_string());
+        }
     }
     Ok(())
 }
@@ -1026,7 +1057,7 @@ solc = "0.8.33"
         tama_common::write_string(&root.join("build/tama/yul/Token.yul"), "").unwrap();
         tama_common::write_string(&root.join("build/tama/abi/Token.abi.json"), "").unwrap();
         tama_common::write_string(&root.join("build/tama/trust-report.json"), "{}").unwrap();
-        tama_common::write_string(&root.join("gen/verity/TokenIface.sol"), "").unwrap();
+        tama_common::write_generated(&root.join("gen/verity/TokenIface.sol"), "").unwrap();
         tama_common::write_string(&root.join("artifacts/yul/Token.yul"), "").unwrap();
 
         clean(&root, false).unwrap();
@@ -1036,6 +1067,26 @@ solc = "0.8.33"
         assert!(!root.join("build/tama/trust-report.json").exists());
         assert!(!root.join("gen/verity").exists());
         assert!(root.join("artifacts/yul/Token.yul").exists());
+    }
+
+    #[test]
+    fn clean_refuses_hand_edited_generated_solidity() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            "[project]\nname='x'\nverity='v'\n[yul]\nsolc='0.8.33'\n",
+        )
+        .unwrap();
+        tama_common::write_generated(&root.join("src/generated/verity/TokenIface.sol"), "")
+            .unwrap();
+        tama_common::write_string(&root.join("src/generated/verity/Manual.sol"), "// user\n")
+            .unwrap();
+
+        let err = clean(&root, false).unwrap_err();
+
+        assert!(err.contains("hand-edited generated file"));
+        assert!(root.join("src/generated/verity").exists());
     }
 
     #[test]
