@@ -51,6 +51,15 @@ Proof modules, Verity codegen, solc, and Foundry are not run.
 
 `tama check` does not run `lake update`; with global `--offline`, it uses the project's existing local Lake state plus any manifest-matching package checkouts already present in `TAMA_LAKE_PACKAGE_CACHE`.
 
+With `--json`, Lake output is forwarded to stderr and stdout contains only:
+
+```json
+{
+  "status": "ok",
+  "targets": ["TamaSrc", "TamaSpec"]
+}
+```
+
 ## `tama build`
 
 Runs proof elaboration, real Verity codegen, Tama manifest adaptation, `solc --standard-json`, Solidity bridge generation, `forge build`, and lockfile update.

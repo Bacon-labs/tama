@@ -144,9 +144,12 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
             seed_lake_package_cache_for_build(&root)?;
-            tama_build::Lake::new(root)
+            tama_build::Lake::new_json(root, cli.json)
                 .check_src_and_spec()
                 .map_err(|err| err.to_string())?;
+            if cli.json {
+                println!("{}", check_status_json()?);
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Build(args) => {
@@ -1233,6 +1236,14 @@ fn init_next_steps(path: &Utf8Path) -> Vec<String> {
     steps
 }
 
+fn check_status_json() -> Result<String, String> {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "status": "ok",
+        "targets": ["TamaSrc", "TamaSpec"]
+    }))
+    .map_err(|err| err.to_string())
+}
+
 fn project_root(root: Option<Utf8PathBuf>) -> Result<Utf8PathBuf, String> {
     let start = match root {
         Some(root) => root,
@@ -1456,6 +1467,17 @@ mod tests {
         assert!(!init_next_steps(Utf8Path::new("."))
             .iter()
             .any(|line| line == "  cd ."));
+    }
+
+    #[test]
+    fn check_json_status_is_machine_readable() {
+        let value: serde_json::Value = serde_json::from_str(&check_status_json().unwrap()).unwrap();
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["targets"], serde_json::json!(["TamaSrc", "TamaSpec"]));
+
+        let cli = Cli::try_parse_from(["tama", "--json", "check"]).unwrap();
+        assert!(cli.json);
+        assert!(matches!(cli.command, Command::Check));
     }
 
     #[test]
