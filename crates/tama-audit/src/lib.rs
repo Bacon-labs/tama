@@ -81,7 +81,7 @@ pub fn run(root: &Utf8Path, opts: AuditOptions) -> Result<AuditReport> {
     for check in checks {
         match check {
             Check::Structure => structure(root, &config, &manifests, &mut issues),
-            Check::Selectors => selectors(&manifests, &mut issues),
+            Check::Selectors => selectors(root, &manifests, &mut issues),
             Check::StorageLayout => storage(&manifests, &mut issues),
             Check::Coverage => coverage(root, &manifests, &mut issues),
             Check::TrustBoundary => trust(root, &config, &manifests, &mut issues),
@@ -257,7 +257,7 @@ fn check_aggregate_import(
     }
 }
 
-fn selectors(manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
+fn selectors(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
     for manifest in manifests {
         if let Err(err) = manifest.validate() {
             issues.push(issue(
@@ -268,7 +268,104 @@ fn selectors(manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
                 None,
             ));
         }
+        check_interface_abi(root, manifest, issues);
     }
+}
+
+fn check_interface_abi(root: &Utf8Path, manifest: &ContractManifest, issues: &mut Vec<Issue>) {
+    let interface = root.join(&manifest.artifacts.interface);
+    let Ok(text) = tama_common::read_to_string(&interface) else {
+        issues.push(issue(
+            "selectors",
+            Some(&manifest.contract),
+            "TAMA_SELECTOR_INTERFACE_MISSING",
+            format!(
+                "generated interface is missing: {}",
+                manifest.artifacts.interface
+            ),
+            Some(manifest.artifacts.interface.clone()),
+        ));
+        return;
+    };
+    let functions = solidity_declarations(&text, "function");
+    let events = solidity_declarations(&text, "event");
+    let errors = solidity_declarations(&text, "error");
+    for function in &manifest.abi.functions {
+        if !functions.contains(&function.signature) {
+            issues.push(issue(
+                "selectors",
+                Some(&manifest.contract),
+                "TAMA_SELECTOR_INTERFACE_DRIFT",
+                format!(
+                    "generated interface does not declare function `{}`",
+                    function.signature
+                ),
+                Some(manifest.artifacts.interface.clone()),
+            ));
+        }
+    }
+    for event in &manifest.abi.events {
+        if !events.contains(&event.signature) {
+            issues.push(issue(
+                "selectors",
+                Some(&manifest.contract),
+                "TAMA_SELECTOR_INTERFACE_DRIFT",
+                format!(
+                    "generated interface does not declare event `{}`",
+                    event.signature
+                ),
+                Some(manifest.artifacts.interface.clone()),
+            ));
+        }
+    }
+    for error in &manifest.abi.errors {
+        if !errors.contains(&error.signature) {
+            issues.push(issue(
+                "selectors",
+                Some(&manifest.contract),
+                "TAMA_SELECTOR_INTERFACE_DRIFT",
+                format!(
+                    "generated interface does not declare error `{}`",
+                    error.signature
+                ),
+                Some(manifest.artifacts.interface.clone()),
+            ));
+        }
+    }
+}
+
+fn solidity_declarations(text: &str, kind: &str) -> BTreeSet<String> {
+    let re = Regex::new(&format!(
+        r"\b{}\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)",
+        regex::escape(kind)
+    ))
+    .expect("valid regex");
+    re.captures_iter(text)
+        .map(|captures| {
+            let name = captures.get(1).map(|m| m.as_str()).unwrap_or("");
+            let params = captures
+                .get(2)
+                .map(|m| canonical_solidity_param_types(m.as_str()))
+                .unwrap_or_default();
+            format!("{name}({params})")
+        })
+        .collect()
+}
+
+fn canonical_solidity_param_types(params: &str) -> String {
+    params
+        .split(',')
+        .map(str::trim)
+        .filter(|param| !param.is_empty())
+        .filter_map(|param| {
+            let parts = param
+                .split_whitespace()
+                .filter(|part| !matches!(*part, "indexed" | "memory" | "calldata" | "storage"))
+                .collect::<Vec<_>>();
+            parts.first().copied()
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn storage(manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
@@ -583,6 +680,56 @@ mod tests {
         assert!(issues
             .iter()
             .any(|issue| issue.code == "TAMA_TRUST_DECL_MISSING"));
+    }
+
+    #[test]
+    fn selectors_report_generated_interface_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        std::fs::create_dir_all(root.join("src/generated/verity")).unwrap();
+        tama_common::write_generated(
+            &root.join("src/generated/verity/CounterIface.sol"),
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+interface CounterIface {
+    function wrong() external;
+}
+"#,
+        )
+        .unwrap();
+        let mut manifest = counter_manifest();
+        manifest.abi.functions.push(tama_manifest::Function {
+            name: "getCount".to_string(),
+            signature: "getCount()".to_string(),
+            selector: tama_common::function_selector("getCount()"),
+            visibility: "external".to_string(),
+            mutability: "view".to_string(),
+            inputs: vec![],
+            outputs: vec![tama_manifest::Param {
+                name: "".to_string(),
+                ty: "uint256".to_string(),
+            }],
+        });
+        let mut issues = Vec::new();
+        selectors(&root, &[manifest], &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_SELECTOR_INTERFACE_DRIFT"));
+    }
+
+    #[test]
+    fn solidity_declaration_parser_ignores_names_and_location_modifiers() {
+        let text = r#"
+interface Example {
+    function set(uint256 amount, bytes32[] calldata proof) external;
+    event Transfer(address indexed from, address indexed to, uint256 amount);
+    error Bad(address account);
+}
+"#;
+        assert!(solidity_declarations(text, "function").contains("set(uint256,bytes32[])"));
+        assert!(solidity_declarations(text, "event").contains("Transfer(address,address,uint256)"));
+        assert!(solidity_declarations(text, "error").contains("Bad(address)"));
     }
 
     fn test_config() -> tama_config::TamaConfig {
