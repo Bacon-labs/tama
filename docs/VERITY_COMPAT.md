@@ -49,7 +49,7 @@ For v0.1, Tama ports the externally applicable semantics into manifest-centered 
 - selector and topic derivation, generated interface signatures, and generated Yul dispatch cases;
 - required source/spec/proof/test/generated artifact structure for flat Tama projects;
 - storage entry validity, overlap detection, and compiler layout-report drift;
-- public obligation mirror coverage, with mirror symbols restricted to Foundry fuzz tests and invariants;
+- public obligation mirror coverage, with mirror symbols restricted to contract-qualified Foundry fuzz tests and invariants;
 - proof-only coverage reasons for obligations that cannot be mirrored in Solidity.
 
 Direct Python-vs-Rust issue-set comparison applies only to checks that can be represented in both layouts. Monorepo-only checks, such as compiler constant synchronization and package-wide import surfaces, remain upstream Verity CI responsibilities rather than Tama project audits.

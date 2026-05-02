@@ -580,9 +580,12 @@ Coverage is not over every theorem in `verity/proof/`. Helper lemmas are not obl
 - linked to a Foundry mirror test; or
 - marked proof-only with a reason.
 
-Mirror links for executable public obligations must point to property-shaped Foundry
-symbols: fuzz tests named `testFuzz*` or invariants named `invariant_*`. Plain
-example tests may exist as smoke tests, but they do not satisfy mirror coverage.
+Mirror links for executable public obligations must point to contract-qualified,
+property-shaped Foundry symbols such as
+`ERC20LiteTest.testFuzzTransferPreservesTotalSupply` or
+`ERC20LiteTest.invariant_totalSupplyTracksMinted`. The function part must be a
+fuzz test named `testFuzz*` or an invariant named `invariant_*`. Plain example
+tests may exist as smoke tests, but they do not satisfy mirror coverage.
 
 Example Lean shape:
 
