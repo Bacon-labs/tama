@@ -118,6 +118,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 },
             )
             .map_err(|err| err.to_string())?;
+            finalize_init(&path, cli.offline)?;
             println!("Initialized Tama ERC20Lite starter at {path}");
             Ok(ExitCode::SUCCESS)
         }
@@ -325,6 +326,22 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
     }
 }
 
+fn finalize_init(root: &Utf8PathBuf, offline: bool) -> Result<(), String> {
+    if offline {
+        for line in offline_init_instructions() {
+            eprintln!("{line}");
+        }
+        return Ok(());
+    }
+    run_tool(root, "lake", &["update"])?;
+    run_tool(
+        root,
+        "forge",
+        &["install", "foundry-rs/forge-std", "--no-commit"],
+    )?;
+    refresh_lock(root)
+}
+
 fn install_package(
     root: &Utf8PathBuf,
     package: &str,
@@ -395,6 +412,10 @@ fn mutate_dependencies(
     }
     edit(root)?;
     run_tool(root, "lake", &["update"])?;
+    refresh_lock(root)
+}
+
+fn refresh_lock(root: &Utf8PathBuf) -> Result<(), String> {
     let mut lock = tama_config::load_lock(root).map_err(|err| err.to_string())?;
     tama_config::update_lock_inputs(root, &mut lock).map_err(|err| err.to_string())?;
     tama_config::write_lock(root, &lock).map_err(|err| err.to_string())
@@ -477,6 +498,15 @@ fn looks_like_git_rev(value: &str) -> bool {
     value.len() >= 7 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
+fn offline_init_instructions() -> [&'static str; 4] {
+    [
+        "offline init: skipped `lake update` and `forge install foundry-rs/forge-std --no-commit`.",
+        "when network access is available, run:",
+        "  lake update",
+        "  forge install foundry-rs/forge-std --no-commit",
+    ]
+}
+
 fn project_root(root: Option<Utf8PathBuf>) -> Result<Utf8PathBuf, String> {
     match root {
         Some(root) => Ok(root),
@@ -544,5 +574,12 @@ mod tests {
             ]),
             vec!["test", "--match-test", "foo", "-vvv"]
         );
+    }
+
+    #[test]
+    fn offline_init_instructions_are_actionable() {
+        let instructions = offline_init_instructions().join("\n");
+        assert!(instructions.contains("lake update"));
+        assert!(instructions.contains("forge install foundry-rs/forge-std --no-commit"));
     }
 }
