@@ -390,12 +390,13 @@ fn check_interface_abi(root: &Utf8Path, manifest: &ContractManifest, issues: &mu
 }
 
 fn solidity_declarations(text: &str, kind: &str) -> BTreeSet<String> {
+    let text = strip_solidity_non_code(text);
     let re = Regex::new(&format!(
         r"\b{}\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)",
         regex::escape(kind)
     ))
     .expect("valid regex");
-    re.captures_iter(text)
+    re.captures_iter(&text)
         .map(|captures| {
             let name = captures.get(1).map(|m| m.as_str()).unwrap_or("");
             let params = captures
@@ -405,6 +406,95 @@ fn solidity_declarations(text: &str, kind: &str) -> BTreeSet<String> {
             format!("{name}({params})")
         })
         .collect()
+}
+
+fn solidity_function_declared(text: &str, name: &str) -> bool {
+    let text = strip_solidity_non_code(text);
+    let re =
+        Regex::new(&format!(r"\bfunction\s+{}\s*\(", regex::escape(name))).expect("valid regex");
+    re.is_match(&text)
+}
+
+fn strip_solidity_non_code(text: &str) -> String {
+    #[derive(Clone, Copy)]
+    enum State {
+        Code,
+        LineComment,
+        BlockComment,
+        String { quote: char, escaped: bool },
+    }
+
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut state = State::Code;
+    while let Some(ch) = chars.next() {
+        match state {
+            State::Code => match ch {
+                '/' if chars.peek() == Some(&'/') => {
+                    chars.next();
+                    out.push(' ');
+                    out.push(' ');
+                    state = State::LineComment;
+                }
+                '/' if chars.peek() == Some(&'*') => {
+                    chars.next();
+                    out.push(' ');
+                    out.push(' ');
+                    state = State::BlockComment;
+                }
+                '"' | '\'' => {
+                    out.push(' ');
+                    state = State::String {
+                        quote: ch,
+                        escaped: false,
+                    };
+                }
+                _ => out.push(ch),
+            },
+            State::LineComment => {
+                if ch == '\n' {
+                    out.push('\n');
+                    state = State::Code;
+                } else {
+                    out.push(' ');
+                }
+            }
+            State::BlockComment => {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    out.push(' ');
+                    out.push(' ');
+                    state = State::Code;
+                } else if ch == '\n' {
+                    out.push('\n');
+                } else {
+                    out.push(' ');
+                }
+            }
+            State::String { quote, escaped } => {
+                if ch == '\n' {
+                    out.push('\n');
+                    state = State::Code;
+                } else {
+                    out.push(' ');
+                    if escaped {
+                        state = State::String {
+                            quote,
+                            escaped: false,
+                        };
+                    } else if ch == '\\' {
+                        state = State::String {
+                            quote,
+                            escaped: true,
+                        };
+                    } else if ch == quote {
+                        state = State::Code;
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 fn canonical_solidity_param_types(params: &str) -> String {
@@ -540,9 +630,7 @@ fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Is
                     if let Some((_, symbol)) = path_ref.split_once(':') {
                         let text = tama_common::read_to_string(&abs).unwrap_or_default();
                         let name = symbol.rsplit('.').next().unwrap_or(symbol);
-                        let re = Regex::new(&format!(r"\b{}\b", regex::escape(name)))
-                            .expect("valid regex");
-                        if !re.is_match(&text) {
+                        if !solidity_function_declared(&text, name) {
                             issues.push(issue(
                                 "coverage",
                                 Some(&manifest.contract),
@@ -1682,14 +1770,64 @@ interface CounterIface {
     fn solidity_declaration_parser_ignores_names_and_location_modifiers() {
         let text = r#"
 interface Example {
+    // function ignored(uint256 amount) external;
+    /* event Ignored(address indexed from); */
+    string constant S = "function alsoIgnored(bytes32) external";
     function set(uint256 amount, bytes32[] calldata proof) external;
     event Transfer(address indexed from, address indexed to, uint256 amount);
     error Bad(address account);
 }
 "#;
         assert!(solidity_declarations(text, "function").contains("set(uint256,bytes32[])"));
+        assert!(!solidity_declarations(text, "function").contains("ignored(uint256)"));
+        assert!(!solidity_declarations(text, "function").contains("alsoIgnored(bytes32)"));
         assert!(solidity_declarations(text, "event").contains("Transfer(address,address,uint256)"));
+        assert!(!solidity_declarations(text, "event").contains("Ignored(address)"));
         assert!(solidity_declarations(text, "error").contains("Bad(address)"));
+    }
+
+    #[test]
+    fn coverage_requires_solidity_function_declaration() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut manifest = counter_manifest();
+        let mut obligation = public_obligation();
+        obligation.coverage = tama_manifest::Coverage {
+            disposition: CoverageDisposition::Mirror,
+            path: Some("test/verity/Counter.t.sol:CounterTest.testIncrementPost".to_string()),
+            reason: None,
+        };
+        manifest.obligations.push(obligation);
+        tama_common::write_string(
+            &root.join("test/verity/Counter.t.sol"),
+            r#"// function testIncrementPost() public {}
+contract CounterTest {
+    string constant S = "function testIncrementPost() public";
+}
+"#,
+        )
+        .unwrap();
+
+        let mut issues = Vec::new();
+        coverage(&root, &[manifest.clone()], &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_COVERAGE_MISSING_SYMBOL"));
+
+        tama_common::write_string(
+            &root.join("test/verity/Counter.t.sol"),
+            r#"contract CounterTest {
+    function testIncrementPost() public {}
+}
+"#,
+        )
+        .unwrap();
+
+        let mut clean_issues = Vec::new();
+        coverage(&root, &[manifest], &mut clean_issues);
+        assert!(!clean_issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_COVERAGE_MISSING_SYMBOL"));
     }
 
     #[test]
