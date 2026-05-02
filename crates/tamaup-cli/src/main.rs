@@ -1423,6 +1423,109 @@ mod tests {
     }
 
     #[test]
+    fn install_rejects_bad_signature_before_artifact_read() {
+        let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let home = root.join("home");
+        let _home_guard = EnvVarGuard::set("TAMAUP_HOME", home.as_std_path().as_os_str());
+        let manifest_path = root.join("manifest.json");
+        let missing_archive = root.join("missing.tar.gz");
+        let manifest = serde_json::json!({
+            "schema": RELEASE_MANIFEST_SCHEMA,
+            "stable": "0.1.0",
+            "releases": [{
+                "version": "0.1.0",
+                "artifacts": [{
+                    "platform": platform().unwrap(),
+                    "url": format!("file://{missing_archive}"),
+                    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+                }]
+            }]
+        });
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        fs::write(manifest_path.with_extension("json.minisig"), b"bad").unwrap();
+        let mut bootstrap_called = false;
+
+        let err = install_with_hooks(
+            "stable",
+            Some(manifest_path),
+            BootstrapOptions {
+                yes: true,
+                offline: true,
+                no_modify_path: true,
+                no_install_lean: true,
+                no_install_foundry: true,
+                no_install_solc: true,
+            },
+            |_| {
+                bootstrap_called = true;
+                Ok(())
+            },
+            |_, _| Err("bad test signature".to_string()),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, "bad test signature");
+        assert!(!bootstrap_called);
+        assert!(!home.exists());
+    }
+
+    #[test]
+    fn install_rejects_bad_sha_before_bootstrap_and_extract() {
+        let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let home = root.join("home");
+        let _home_guard = EnvVarGuard::set("TAMAUP_HOME", home.as_std_path().as_os_str());
+        let archive = test_archive(&[
+            ("bin/tama", b"fake tama".as_slice(), 0o755),
+            ("bin/tamaup", b"fake tamaup".as_slice(), 0o755),
+        ]);
+        let archive_path = root.join("tama.tar.gz");
+        fs::write(&archive_path, &archive).unwrap();
+        let manifest_path = root.join("manifest.json");
+        let manifest = serde_json::json!({
+            "schema": RELEASE_MANIFEST_SCHEMA,
+            "stable": "0.1.0",
+            "releases": [{
+                "version": "0.1.0",
+                "artifacts": [{
+                    "platform": platform().unwrap(),
+                    "url": format!("file://{archive_path}"),
+                    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+                }]
+            }]
+        });
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        fs::write(manifest_path.with_extension("json.minisig"), b"fake").unwrap();
+        let mut bootstrap_called = false;
+
+        let err = install_with_hooks(
+            "stable",
+            Some(manifest_path),
+            BootstrapOptions {
+                yes: true,
+                offline: true,
+                no_modify_path: true,
+                no_install_lean: true,
+                no_install_foundry: true,
+                no_install_solc: true,
+            },
+            |_| {
+                bootstrap_called = true;
+                Ok(())
+            },
+            |_, _| Ok(()),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("bad artifact SHA-256"));
+        assert!(!bootstrap_called);
+        assert!(!home.exists());
+    }
+
+    #[test]
     fn fake_signed_manifest_installs_local_fake_artifact() {
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
