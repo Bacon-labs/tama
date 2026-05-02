@@ -888,6 +888,7 @@ fn parse_hex_slot_u64(slot: &str) -> Option<u64> {
 fn layout_field_shape(value: Option<&serde_json::Value>) -> Option<(&str, &str)> {
     match value?.get("kind").and_then(serde_json::Value::as_str)? {
         "address" => Some(("address", "value")),
+        "bool" => Some(("bool", "value")),
         "uint256" => Some(("uint256", "value")),
         "mapping" => Some(("mapping", "mapping")),
         kind => Some((kind, kind)),
@@ -2736,6 +2737,34 @@ interface CounterIface {
         let mut clean_issues = Vec::new();
         storage(&root, &config, &[manifest], &mut clean_issues);
         assert!(!clean_issues
+            .iter()
+            .any(|issue| issue.code.starts_with("TAMA_STORAGE_LAYOUT_REPORT_")));
+    }
+
+    #[test]
+    fn storage_accepts_bool_layout_report_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        let mut manifest = counter_manifest();
+        manifest.storage = vec![tama_manifest::StorageEntry {
+            name: "enabled".to_string(),
+            ty: "bool".to_string(),
+            slot: "0x00".to_string(),
+            offset: 0,
+            width_bytes: 32,
+            encoding: "value".to_string(),
+        }];
+        tama_common::write_string(
+            &root.join("artifacts/layout-report.json"),
+            r#"{"contracts":[{"contract":"Counter","fields":[{"name":"enabled","canonicalSlot":0,"type":{"kind":"bool"}}]}]}"#,
+        )
+        .unwrap();
+
+        let mut issues = Vec::new();
+        storage(&root, &config, &[manifest], &mut issues);
+
+        assert!(!issues
             .iter()
             .any(|issue| issue.code.starts_with("TAMA_STORAGE_LAYOUT_REPORT_")));
     }
