@@ -390,6 +390,48 @@ jobs:
           test -x "$tmp/home/versions/0.1.0/bin/tamaup"
           test -L "$tmp/home/bin/tama"
           test -L "$tmp/home/bin/tamaup"
+      - name: Shell installer installs from local HTTP server
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tmp="$(mktemp -d)"
+          mkdir -p "$tmp/archive" "$tmp/server/releases"
+          printf '%s\n' '#!/bin/sh' 'echo tama' > "$tmp/archive/tama"
+          printf '%s\n' '#!/bin/sh' 'echo tamaup' > "$tmp/archive/tamaup"
+          chmod +x "$tmp/archive/tama" "$tmp/archive/tamaup"
+          tar -C "$tmp/archive" -czf "$tmp/server/releases/tama-0.1.0-linux-x86_64.tar.gz" tama tamaup
+          sha="$(sha256sum "$tmp/server/releases/tama-0.1.0-linux-x86_64.tar.gz" | awk '{print $1}')"
+          minisign -G -p "$tmp/minisign.pub" -s "$tmp/minisign.sec" -W
+          pubkey="$(tail -n 1 "$tmp/minisign.pub")"
+          cat > "$tmp/server/manifest.json" <<JSON
+          {
+            "schema": "tama.release-manifest.v1",
+            "stable": "0.1.0",
+            "releases": [
+              {
+                "version": "0.1.0",
+                "artifacts": [
+                  {
+                    "platform": "linux-x86_64",
+                    "url": "http://127.0.0.1:8765/releases/tama-0.1.0-linux-x86_64.tar.gz",
+                    "sha256": "$sha"
+                  }
+                ]
+              }
+            ]
+          }
+          JSON
+          minisign -S -s "$tmp/minisign.sec" -m "$tmp/server/manifest.json" -x "$tmp/server/manifest.json.minisig" -W
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory "$tmp/server" &
+          server_pid="$!"
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for _ in 1 2 3 4 5; do
+            curl -fsS http://127.0.0.1:8765/manifest.json >/dev/null && break
+            sleep 1
+          done
+          TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMA_BASE_URL="http://127.0.0.1:8765" TAMAUP_HOME="$tmp/home" sh installer/install.sh --no-modify-path --version 0.1.0
+          test -x "$tmp/home/versions/0.1.0/bin/tama"
+          test -x "$tmp/home/versions/0.1.0/bin/tamaup"
       - name: Shell installer rejects bad SHA before extraction
         shell: bash
         run: |
