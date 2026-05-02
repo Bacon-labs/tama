@@ -953,6 +953,11 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
                 });
             }
             "event" => {
+                if entry.anonymous {
+                    return Err(Error::Adapter(format!(
+                        "unsupported anonymous event ABI entry in {path}"
+                    )));
+                }
                 let name = abi_entry_name(path, "event", entry.name)?;
                 let signature = format!(
                     "{}({})",
@@ -1633,6 +1638,8 @@ struct AbiEntry {
     outputs: Vec<AbiParam>,
     #[serde(rename = "stateMutability")]
     state_mutability: Option<String>,
+    #[serde(default)]
+    anonymous: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2203,6 +2210,17 @@ end proof.CounterProof
         assert!(
             matches!(err, Error::Adapter(message) if message.contains("unsupported ABI entry type"))
         );
+
+        tama_common::write_string(
+            &path,
+            r#"[{"type":"event","name":"Hidden","anonymous":true,"inputs":[]}]"#,
+        )
+        .unwrap();
+        let err = parse_abi(&path).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Adapter(message) if message.contains("anonymous event")
+        ));
     }
 
     #[test]
