@@ -426,7 +426,10 @@ fn check_bytecode_hash(root: &Utf8Path, manifest: &ContractManifest, issues: &mu
 }
 
 fn deployer_creation_bytecode(deployer: &str) -> Option<String> {
-    let re = Regex::new(r#"hex"([0-9a-fA-F]+)""#).expect("valid regex");
+    let re = Regex::new(
+        r#"(?s)\bbytes\s+memory\s+code\s*=\s*(?:abi\s*\.\s*encodePacked\s*\(\s*)?hex"([0-9a-fA-F]+)""#,
+    )
+    .expect("valid regex");
     re.captures(deployer)
         .and_then(|captures| captures.get(1))
         .map(|bytecode| bytecode.as_str().to_ascii_lowercase())
@@ -2334,6 +2337,25 @@ mod tests {
         let mut deployer_issues = Vec::new();
         structure(&root, &config, &[manifest.clone()], &mut deployer_issues);
         assert!(deployer_issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_STRUCTURE_DEPLOYER_BYTECODE"));
+
+        tama_common::write_generated(
+            &root.join(&manifest.artifacts.deployer),
+            r#"library CounterDeployer {
+    function deploy() internal {
+        bytes memory decoy = hex"6000";
+        bytes memory code = hex"6001";
+        decoy;
+        code;
+    }
+}
+"#,
+        )
+        .unwrap();
+        let mut decoy_issues = Vec::new();
+        structure(&root, &config, &[manifest.clone()], &mut decoy_issues);
+        assert!(decoy_issues
             .iter()
             .any(|issue| issue.code == "TAMA_STRUCTURE_DEPLOYER_BYTECODE"));
 
