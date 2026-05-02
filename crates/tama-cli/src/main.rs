@@ -919,6 +919,21 @@ fn git_head_rev(checkout: &Utf8Path) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn git_worktree_clean(checkout: &Utf8Path) -> Result<bool, String> {
+    let output = ProcessCommand::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(checkout)
+        .output()
+        .map_err(|err| format!("failed to inspect cached package status: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`git status --porcelain` failed with status {}",
+            output.status
+        ));
+    }
+    Ok(output.stdout.is_empty())
+}
+
 fn run_lake_update(root: &Utf8PathBuf, package: Option<&str>) -> Result<(), String> {
     let args = lake_update_args(package);
     let Some(cache) = lake_package_cache()? else {
@@ -1096,6 +1111,9 @@ fn copy_matching_package_dirs(
         if git_head_rev(&source).ok().as_deref() != Some(expected_rev.as_str()) {
             continue;
         }
+        if !git_worktree_clean(&source).unwrap_or(false) {
+            continue;
+        }
         let target = destination.join(&name);
         if path_exists(&target)? {
             continue;
@@ -1134,6 +1152,9 @@ fn copy_package_dirs(
             .file_name()
             .into_string()
             .map_err(|name| format!("package cache entry `{name:?}` is not UTF-8"))?;
+        if !git_worktree_clean(&source).unwrap_or(false) {
+            continue;
+        }
         let target = destination.join(&name);
         if path_exists(&target)? && !replace_existing {
             continue;
@@ -1797,17 +1818,13 @@ mod tests {
         let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
         let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
 
-        tama_common::write_string(&cache.join("mathlib/.git/config"), "[remote]\n").unwrap();
+        init_git_package(&cache.join("mathlib"), "cached").unwrap();
         seed_lake_package_cache(&root, &cache).unwrap();
-        assert!(root.join(".lake/packages/mathlib/.git/config").is_file());
+        assert!(root.join(".lake/packages/mathlib/package.txt").is_file());
 
-        tama_common::write_string(
-            &root.join(".lake/packages/verity/.git/config"),
-            "[remote]\n",
-        )
-        .unwrap();
+        init_git_package(&root.join(".lake/packages/verity"), "resolved").unwrap();
         sync_lake_package_cache(&root, &cache).unwrap();
-        assert!(cache.join("verity/.git/config").is_file());
+        assert!(cache.join("verity/package.txt").is_file());
     }
 
     #[test]
@@ -1816,18 +1833,13 @@ mod tests {
         let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
         let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
 
-        tama_common::write_string(&cache.join("verity/.git/config"), "old\n").unwrap();
-        tama_common::write_string(&cache.join("verity/revision"), "old\n").unwrap();
-        tama_common::write_string(&root.join(".lake/packages/verity/.git/config"), "new\n")
-            .unwrap();
-        tama_common::write_string(&root.join(".lake/packages/verity/revision"), "new\n").unwrap();
+        init_git_package(&cache.join("verity"), "old").unwrap();
+        init_git_package(&root.join(".lake/packages/verity"), "new").unwrap();
 
         sync_lake_package_cache(&root, &cache).unwrap();
 
-        let config = std::fs::read_to_string(cache.join("verity/.git/config")).unwrap();
-        let revision = std::fs::read_to_string(cache.join("verity/revision")).unwrap();
-        assert_eq!(config, "new\n");
-        assert_eq!(revision, "new\n");
+        let package = std::fs::read_to_string(cache.join("verity/package.txt")).unwrap();
+        assert_eq!(package, "new");
     }
 
     #[test]
@@ -1857,6 +1869,34 @@ mod tests {
 
         assert!(root.join(".lake/packages/verity/package.txt").is_file());
         assert!(!root.join(".lake/packages/mathlib").exists());
+    }
+
+    #[test]
+    fn lake_package_cache_for_build_skips_dirty_matching_revisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
+        let verity = cache.join("verity");
+        let verity_rev = init_git_package(&verity, "matching").unwrap();
+        tama_common::write_string(&verity.join("untracked.lean"), "local change\n").unwrap();
+
+        tama_common::write_string(
+            &root.join("lake-manifest.json"),
+            &format!(
+                r#"{{
+  "version": "1.1.0",
+  "packages": [
+    {{"type": "git", "name": "verity", "rev": "{verity_rev}"}}
+  ]
+}}
+"#
+            ),
+        )
+        .unwrap();
+
+        seed_lake_package_cache_from_manifest(&root, &cache).unwrap();
+
+        assert!(!root.join(".lake/packages/verity").exists());
     }
 
     #[test]
