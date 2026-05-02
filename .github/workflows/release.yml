@@ -204,6 +204,22 @@ jobs:
           PY
           expect_audit_failure "$project" selectors
 
+          project="$(copy_case corrupted-event-topic)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["abi"].setdefault("events", []).append({
+              "name": "SyntheticEvent",
+              "signature": "SyntheticEvent(address)",
+              "topic0": "0x00",
+              "fields": [{"name": "account", "type": "address", "indexed": False}],
+          })
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" selectors
+
           project="$(copy_case duplicate-storage)"
           python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
           import json
@@ -249,6 +265,50 @@ jobs:
           PY
           expect_audit_failure "$project" coverage
 
+          project="$(copy_case example-shaped-mirror)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" "$project/test/verity/ERC20Lite.t.sol" <<'PY'
+          import json
+          import sys
+          manifest_path, test_path = sys.argv[1:]
+          data = json.load(open(manifest_path, encoding="utf-8"))
+          data["obligations"][0]["coverage"] = {
+              "disposition": "mirror",
+              "path": "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransferExample",
+              "reason": None,
+          }
+          json.dump(data, open(manifest_path, "w", encoding="utf-8"), indent=2)
+          text = open(test_path, encoding="utf-8").read()
+          text = text.rstrip().removesuffix("}") + "\n    function testTransferExample() public {}\n}\n"
+          open(test_path, "w", encoding="utf-8").write(text)
+          PY
+          expect_audit_failure "$project" coverage
+
+          project="$(copy_case empty-proof-only-reason)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["obligations"][0]["coverage"] = {"disposition": "proof_only", "path": None, "reason": ""}
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" coverage
+
+          project="$(copy_case hand-edited-bridge)"
+          printf '%s\n' "// user edit" > "$project/src/generated/verity/ERC20LiteIface.sol"
+          expect_audit_failure "$project" structure
+
+          project="$(copy_case unresolved-decl)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["obligations"][0]["lean_decl"] = "proof.Missing.nope"
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" trust-boundary
+
           project="$(copy_case inserted-sorry)"
           python3 - "$project/artifacts/trust-probe/axioms.json" <<'PY'
           import json
@@ -256,6 +316,17 @@ jobs:
           path = sys.argv[1]
           data = json.load(open(path, encoding="utf-8"))
           data["obligations"][0]["axioms"].append("sorryAx")
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" trust-boundary
+
+          project="$(copy_case inserted-custom-axiom)"
+          python3 - "$project/artifacts/trust-probe/axioms.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["obligations"][0]["axioms"].append("Tama.UnsafeAxiom")
           json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
           PY
           expect_audit_failure "$project" trust-boundary
