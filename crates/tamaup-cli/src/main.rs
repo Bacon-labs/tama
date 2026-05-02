@@ -192,10 +192,9 @@ fn install(
         download(&artifact.url)?
     };
     verify_sha256(&archive, &artifact.sha256)?;
-    let version_dir = tama_home().join("versions").join(&selected_version);
-    fs::create_dir_all(&version_dir).map_err(|err| err.to_string())?;
-    extract_archive(&archive, &version_dir)?;
-    use_version(&selected_version)?;
+    let home = tama_home();
+    install_archive_at(&home, &selected_version, &archive)?;
+    use_version_at(&home, &selected_version)?;
     println!("Installed Tama {selected_version}");
     Ok(())
 }
@@ -372,6 +371,48 @@ fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), String> {
         Err(format!(
             "bad artifact SHA-256: expected {expected}, got {actual}"
         ))
+    }
+}
+
+fn install_archive_at(home: &Utf8Path, version: &str, archive: &[u8]) -> Result<(), String> {
+    validate_release_version(version)?;
+    let versions = home.join("versions");
+    fs::create_dir_all(&versions).map_err(|err| err.to_string())?;
+    let version_dir = versions.join(version);
+    let suffix = std::process::id();
+    let stage = versions.join(format!(".install-{version}-{suffix}"));
+    let previous = versions.join(format!(".previous-{version}-{suffix}"));
+    remove_dir_if_exists(&stage)?;
+    remove_dir_if_exists(&previous)?;
+
+    fs::create_dir_all(&stage).map_err(|err| err.to_string())?;
+    if let Err(err) = extract_archive(archive, &stage) {
+        let _ = fs::remove_dir_all(&stage);
+        return Err(err);
+    }
+
+    if version_dir.exists() {
+        fs::rename(&version_dir, &previous).map_err(|err| err.to_string())?;
+    }
+    match fs::rename(&stage, &version_dir) {
+        Ok(()) => {
+            remove_dir_if_exists(&previous)?;
+            Ok(())
+        }
+        Err(err) => {
+            if previous.exists() {
+                let _ = fs::rename(&previous, &version_dir);
+            }
+            Err(err.to_string())
+        }
+    }
+}
+
+fn remove_dir_if_exists(path: &Utf8Path) -> Result<(), String> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!("failed to remove `{path}`: {err}")),
     }
 }
 
@@ -980,6 +1021,61 @@ mod tests {
         assert!(home.join("bin/tamaup").exists());
         assert!(version_bin.join("tamaup").exists());
         assert!(!home.join("active").exists());
+    }
+
+    #[test]
+    fn install_archive_replaces_existing_version_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let version_bin = home.join("versions/0.1.0/bin");
+        fs::create_dir_all(&version_bin).unwrap();
+        fs::write(version_bin.join("tama"), b"old").unwrap();
+        fs::write(version_bin.join("tamaup"), b"old").unwrap();
+        let tarball = test_archive(&[
+            ("bin/tama", b"new-tama".as_slice(), 0o755),
+            ("bin/tamaup", b"new-tamaup".as_slice(), 0o755),
+        ]);
+
+        install_archive_at(&home, "0.1.0", &tarball).unwrap();
+
+        assert_eq!(
+            fs::read(home.join("versions/0.1.0/bin/tama")).unwrap(),
+            b"new-tama"
+        );
+        assert_eq!(
+            fs::read(home.join("versions/0.1.0/bin/tamaup")).unwrap(),
+            b"new-tamaup"
+        );
+        assert!(fs::read_dir(home.join("versions"))
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with('.')));
+    }
+
+    #[test]
+    fn install_archive_failure_keeps_existing_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let version_bin = home.join("versions/0.1.0/bin");
+        fs::create_dir_all(&version_bin).unwrap();
+        fs::write(version_bin.join("tama"), b"old-tama").unwrap();
+        fs::write(version_bin.join("tamaup"), b"old-tamaup").unwrap();
+        let tarball = test_archive(&[("bin/tama", b"partial".as_slice(), 0o755)]);
+
+        let err = install_archive_at(&home, "0.1.0", &tarball).unwrap_err();
+
+        assert!(err.contains("missing expected"));
+        assert_eq!(
+            fs::read(home.join("versions/0.1.0/bin/tama")).unwrap(),
+            b"old-tama"
+        );
+        assert_eq!(
+            fs::read(home.join("versions/0.1.0/bin/tamaup")).unwrap(),
+            b"old-tamaup"
+        );
     }
 
     #[test]
