@@ -651,16 +651,17 @@ pub fn lake_dependency(root: &Utf8Path, name: &str) -> Result<LakeDependency> {
 pub fn upsert_lake_dependency(root: &Utf8Path, dependency: &LakeDependency) -> Result<()> {
     let path = lakefile_toml_path(root)?;
     preserve_toml_edit(&path, |doc| {
-        let requires = require_array_mut(doc);
+        let requires = require_array_mut(doc)?;
         for table in requires.iter_mut() {
             if table_string(table, "name") == Some(dependency.name.as_str()) {
                 set_dependency_table(table, dependency);
-                return;
+                return Ok(());
             }
         }
         let mut table = Table::new();
         set_dependency_table(&mut table, dependency);
         requires.push(table);
+        Ok(())
     })
 }
 
@@ -668,7 +669,7 @@ pub fn remove_lake_dependency(root: &Utf8Path, name: &str) -> Result<()> {
     let path = lakefile_toml_path(root)?;
     let mut removed = false;
     preserve_toml_edit(&path, |doc| {
-        if let Some(requires) = doc["require"].as_array_of_tables_mut() {
+        if let Some(requires) = existing_require_array_mut(doc)? {
             requires.retain(|table| {
                 let keep = table_string(table, "name") != Some(name);
                 if !keep {
@@ -677,6 +678,7 @@ pub fn remove_lake_dependency(root: &Utf8Path, name: &str) -> Result<()> {
                 keep
             });
         }
+        Ok(())
     })?;
     if removed {
         Ok(())
@@ -687,13 +689,13 @@ pub fn remove_lake_dependency(root: &Utf8Path, name: &str) -> Result<()> {
 
 pub fn preserve_toml_edit(
     path: &Utf8Path,
-    edit: impl FnOnce(&mut toml_edit::DocumentMut),
+    edit: impl FnOnce(&mut toml_edit::DocumentMut) -> Result<()>,
 ) -> Result<()> {
     let text = read_to_string(path)?;
     let mut doc = text
         .parse::<toml_edit::DocumentMut>()
         .map_err(|source| Error::StaleLock(format!("failed to parse {path}: {source}")))?;
-    edit(&mut doc);
+    edit(&mut doc)?;
     fs::write(path, doc.to_string())
         .map_err(|source| tama_common::io_error(path.to_owned(), source))?;
     Ok(())
@@ -714,13 +716,29 @@ fn lakefile_toml_path(root: &Utf8Path) -> Result<Utf8PathBuf> {
     }
 }
 
-fn require_array_mut(doc: &mut toml_edit::DocumentMut) -> &mut ArrayOfTables {
-    if doc["require"].as_array_of_tables_mut().is_none() {
+fn require_array_mut(doc: &mut toml_edit::DocumentMut) -> Result<&mut ArrayOfTables> {
+    if has_no_require_item(doc) {
         doc["require"] = Item::ArrayOfTables(ArrayOfTables::new());
     }
-    doc["require"]
-        .as_array_of_tables_mut()
-        .expect("require was initialized as array of tables")
+    existing_require_array_mut(doc)?.ok_or_else(|| {
+        Error::UnsupportedLakefile("failed to initialize `require` array of tables".to_string())
+    })
+}
+
+fn existing_require_array_mut(
+    doc: &mut toml_edit::DocumentMut,
+) -> Result<Option<&mut ArrayOfTables>> {
+    match doc.get_mut("require") {
+        None | Some(Item::None) => Ok(None),
+        Some(Item::ArrayOfTables(requires)) => Ok(Some(requires)),
+        Some(_) => Err(Error::UnsupportedLakefile(
+            "`require` must be an array of tables (`[[require]]`)".to_string(),
+        )),
+    }
+}
+
+fn has_no_require_item(doc: &toml_edit::DocumentMut) -> bool {
+    matches!(doc.get("require"), None | Some(Item::None))
 }
 
 fn set_dependency_table(table: &mut Table, dependency: &LakeDependency) {
@@ -1414,6 +1432,40 @@ pp.unicode.fun = true
         assert!(removed.contains("# project comment"));
         assert!(removed.contains("[leanOptions]"));
         assert!(!removed.contains("name = \"mathlib\""));
+    }
+
+    #[test]
+    fn lake_dependency_edits_reject_malformed_require_without_rewriting() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let lakefile = root.join("lakefile.toml");
+        tama_common::write_string(
+            &lakefile,
+            r#"name = "demo"
+require = "not a dependency list"
+"#,
+        )
+        .unwrap();
+        let original = tama_common::read_to_string(&lakefile).unwrap();
+        let dependency = LakeDependency {
+            name: "mathlib".to_string(),
+            source: LakeDependencySource::Git {
+                url: "https://github.com/leanprover-community/mathlib4.git".to_string(),
+                rev: "v4.22.0".to_string(),
+            },
+        };
+
+        let err = upsert_lake_dependency(&root, &dependency).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("`require` must be an array of tables"));
+        assert_eq!(tama_common::read_to_string(&lakefile).unwrap(), original);
+
+        let err = remove_lake_dependency(&root, "mathlib").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("`require` must be an array of tables"));
+        assert_eq!(tama_common::read_to_string(&lakefile).unwrap(), original);
     }
 
     #[test]
