@@ -298,9 +298,12 @@ fn use_version_at(home: &Utf8Path, version: &str) -> Result<(), String> {
     if !version_dir.is_dir() {
         return Err(format!("Tama version `{version}` is not installed"));
     }
+    let targets = [
+        ("tama", binary_path(&version_dir, "tama")?),
+        ("tamaup", binary_path(&version_dir, "tamaup")?),
+    ];
     fs::create_dir_all(&bin).map_err(|err| err.to_string())?;
-    for binary in ["tama", "tamaup"] {
-        let target = binary_path(&version_dir, binary)?;
+    for (binary, target) in targets {
         atomic_symlink(&target, &bin.join(binary))?;
     }
     atomic_write(&active, version.as_bytes())?;
@@ -1150,6 +1153,35 @@ mod tests {
         assert_eq!(fs::read_to_string(home.join("active")).unwrap(), "0.1.0");
         assert!(home.join("bin/tama").exists());
         assert!(home.join("bin/tamaup").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn use_version_preflights_binaries_before_switching() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let old_bin = home.join("versions/0.1.0/bin");
+        fs::create_dir_all(&old_bin).unwrap();
+        fs::write(old_bin.join("tama"), b"old tama").unwrap();
+        fs::write(old_bin.join("tamaup"), b"old tamaup").unwrap();
+        use_version_at(&home, "0.1.0").unwrap();
+
+        let new_bin = home.join("versions/0.2.0/bin");
+        fs::create_dir_all(&new_bin).unwrap();
+        fs::write(new_bin.join("tama"), b"new tama").unwrap();
+
+        let err = use_version_at(&home, "0.2.0").unwrap_err();
+
+        assert!(err.contains("tamaup"));
+        assert_eq!(fs::read_to_string(home.join("active")).unwrap(), "0.1.0");
+        assert_eq!(
+            fs::read_link(home.join("bin/tama")).unwrap(),
+            old_bin.join("tama")
+        );
+        assert_eq!(
+            fs::read_link(home.join("bin/tamaup")).unwrap(),
+            old_bin.join("tamaup")
+        );
     }
 
     #[test]
