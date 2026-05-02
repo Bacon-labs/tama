@@ -654,10 +654,23 @@ fn install_package(
         return Err("`tama install` cannot run with --offline because it must validate the dependency and run `lake update`".to_string());
     }
     let explicit_rev = package_has_explicit_git_rev(package);
-    if let tama_config::LakeDependencySource::Git { url, rev } = &mut dependency.source {
-        let resolved_rev = validate_remote_tama_package(url, rev, explicit_rev)?;
-        if !explicit_rev {
-            *rev = resolved_rev;
+    match &mut dependency.source {
+        tama_config::LakeDependencySource::Git { url, rev } => {
+            let package = validate_remote_tama_package(url, rev, explicit_rev)?;
+            dependency.name = package.name;
+            if !explicit_rev {
+                *rev = package.rev;
+            }
+        }
+        tama_config::LakeDependencySource::Path { path } => {
+            let resolved = if path.is_absolute() {
+                path.clone()
+            } else {
+                root.join(&path)
+            };
+            dependency.name = tama_config::lake_package_name(&resolved).map_err(|err| {
+                format!("local dependency `{path}` must contain Lake package metadata: {err}")
+            })?;
         }
     }
     mutate_dependencies(root, locked, offline, |root| {
@@ -792,11 +805,16 @@ fn refresh_lock(root: &Utf8PathBuf) -> Result<(), String> {
     tama_config::write_lock(root, &lock).map_err(|err| err.to_string())
 }
 
+struct RemoteTamaPackage {
+    name: String,
+    rev: String,
+}
+
 fn validate_remote_tama_package(
     url: &str,
     rev: &str,
     explicit_rev: bool,
-) -> Result<String, String> {
+) -> Result<RemoteTamaPackage, String> {
     let temp = tempfile::tempdir().map_err(|err| err.to_string())?;
     let checkout = Utf8PathBuf::from_path_buf(temp.path().join("package"))
         .map_err(|path| path.display().to_string())?;
@@ -818,7 +836,11 @@ fn validate_remote_tama_package(
             "remote dependency `{url}` at `{rev}` does not contain tama.toml"
         ));
     }
-    git_head_rev(&checkout)
+    let name = tama_config::lake_package_name(&checkout).map_err(|err| {
+        format!("remote dependency `{url}` at `{rev}` must contain Lake package metadata: {err}")
+    })?;
+    let rev = git_head_rev(&checkout)?;
+    Ok(RemoteTamaPackage { name, rev })
 }
 
 fn package_has_explicit_git_rev(raw: &str) -> bool {
@@ -1461,6 +1483,32 @@ fn ensure_project_relative(path: &Utf8Path, action: &str) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    struct EnvVarGuard {
+        name: &'static str,
+        old: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(name: &'static str, value: impl Into<OsString>) -> Self {
+            let old = std::env::var_os(name);
+            std::env::set_var(name, value.into());
+            Self { name, old }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.old {
+                Some(value) => std::env::set_var(self.name, value),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
 
     #[test]
     fn verity_versions_default_to_tags() {
@@ -1647,7 +1695,12 @@ mod tests {
             "[project]\nname='dep'\nverity='v'\n[yul]\nsolc='0.8.33'\n",
         )
         .unwrap();
-        run_process("git", &["add", "tama.toml"], Some(&repo)).unwrap();
+        tama_common::write_string(
+            &repo.join("lakefile.toml"),
+            "name = \"metadata_dep\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        run_process("git", &["add", "tama.toml", "lakefile.toml"], Some(&repo)).unwrap();
         run_process(
             "git",
             &[
@@ -1666,7 +1719,8 @@ mod tests {
         let expected = git_head_rev(&repo).unwrap();
         let resolved = validate_remote_tama_package(repo.as_str(), "main", false).unwrap();
 
-        assert_eq!(resolved, expected);
+        assert_eq!(resolved.rev, expected);
+        assert_eq!(resolved.name, "metadata_dep");
     }
 
     #[test]
@@ -1822,6 +1876,71 @@ mod tests {
             Some(&cwd),
         )?;
         git_head_rev(path)
+    }
+
+    #[test]
+    fn local_fake_tama_dependency_installs_and_removes_with_lake_metadata() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let dependency_root = Utf8PathBuf::from_path_buf(dir.path().join("dep-worktree")).unwrap();
+        tama_common::write_string(
+            &dependency_root.join("tama.toml"),
+            "[project]\nname='dep'\nverity='v'\n[yul]\nsolc='0.8.33'\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &dependency_root.join("lakefile.toml"),
+            "name = \"utility_dep\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let bin = Utf8PathBuf::from_path_buf(dir.path().join("bin")).unwrap();
+        let lake = bin.join("lake");
+        let log = Utf8PathBuf::from_path_buf(dir.path().join("lake.log")).unwrap();
+        tama_common::write_string(
+            &lake,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$TAMA_TEST_LAKE_LOG\"\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&lake).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&lake, permissions).unwrap();
+        }
+        let mut path_entries = vec![bin.as_std_path().to_path_buf()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        let _path_guard = EnvVarGuard::set("PATH", std::env::join_paths(path_entries).unwrap());
+        let _lake_log_guard = EnvVarGuard::set("TAMA_TEST_LAKE_LOG", log.as_str());
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, "off");
+
+        install_package(&root, "../dep-worktree", false, false).unwrap();
+
+        let installed = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+        assert!(installed.contains("name = \"utility_dep\""));
+        assert!(installed.contains("path = \"../dep-worktree\""));
+        assert!(
+            tama_config::lock_drift(&root, &tama_config::load_lock(&root).unwrap())
+                .unwrap()
+                .is_empty()
+        );
+
+        mutate_dependencies(&root, false, false, |root| {
+            tama_config::remove_lake_dependency(root, "utility_dep").map_err(|err| err.to_string())
+        })
+        .unwrap();
+
+        let removed = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+        assert!(!removed.contains("name = \"utility_dep\""));
+        let lake_log = tama_common::read_to_string(&log).unwrap();
+        assert_eq!(
+            lake_log.lines().collect::<Vec<_>>(),
+            vec!["update", "update"]
+        );
     }
 
     #[test]

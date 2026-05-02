@@ -251,6 +251,22 @@ pub fn parse_lake_build_dir(root: &Utf8Path) -> Result<Option<Utf8PathBuf>> {
         .map(Utf8PathBuf::from))
 }
 
+pub fn lake_package_name(root: &Utf8Path) -> Result<String> {
+    let path = lakefile_toml_path(root)?;
+    let text = read_to_string(&path)?;
+    let doc = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|source| Error::StaleLock(format!("failed to parse {path}: {source}")))?;
+    let name = doc
+        .get("name")
+        .and_then(Item::as_str)
+        .filter(|name| is_safe_dependency_name(name))
+        .ok_or_else(|| {
+            Error::UnsupportedLakefile("missing or invalid root package name".to_string())
+        })?;
+    Ok(name.to_string())
+}
+
 pub fn read_lean_toolchain(root: &Utf8Path) -> Result<String> {
     Ok(read_to_string(&root.join("lean-toolchain"))?
         .trim()
@@ -357,6 +373,10 @@ pub fn record_lake_manifest_resolutions(root: &Utf8Path, lock: &mut TamaLock) ->
 }
 
 fn valid_lock_component(name: &str) -> bool {
+    is_safe_dependency_name(name)
+}
+
+fn is_safe_dependency_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()
@@ -938,6 +958,25 @@ rev = "v1"
 
         tama_common::write_string(&root.join("lakefile.toml"), "name = \"demo\"\n").unwrap();
         assert_eq!(parse_lake_build_dir(&root).unwrap(), None);
+    }
+
+    #[test]
+    fn lake_package_name_reads_safe_root_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("lakefile.toml"),
+            "name = \"utility_dep\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(lake_package_name(&root).unwrap(), "utility_dep");
+
+        tama_common::write_string(&root.join("lakefile.toml"), "name = \"bad/name\"\n").unwrap();
+        assert!(matches!(
+            lake_package_name(&root).unwrap_err(),
+            Error::UnsupportedLakefile(message) if message.contains("package name")
+        ));
     }
 
     #[test]
