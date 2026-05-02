@@ -3045,6 +3045,26 @@ buildDir = ""
     }
 
     #[test]
+    fn doctor_reports_invalid_tama_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(&root.join("tama.toml"), "not = [valid").unwrap();
+
+        let report = doctor_report(Some(&root)).unwrap();
+
+        assert!(doctor_report_has_failures(&report));
+        assert!(report
+            .notes
+            .iter()
+            .any(|note| note.contains("tama.toml could not be read")));
+        assert!(report.tools.iter().any(|status| matches!(
+            status,
+            tama_toolchain::ToolStatus::Incompatible { name, expected, .. }
+                if name == "tama.toml" && expected == "valid Tama project config"
+        )));
+    }
+
+    #[test]
     fn doctor_marks_verity_resolution_mismatch() {
         let config = tama_config::TamaConfig {
             project: tama_config::ProjectConfig {
