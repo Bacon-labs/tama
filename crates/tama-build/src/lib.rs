@@ -274,7 +274,7 @@ pub fn adapt_verity_outputs(
                 proof_module: proof_module.clone(),
             },
             abi: parse_abi(&path)?,
-            storage: parse_storage(&storage_report, &contract),
+            storage: parse_storage(&storage_report, &contract)?,
             obligations: extract_obligations(root, config, &contract, &proof_module)?,
             artifacts: ArtifactPaths {
                 yul: config.paths.out.join("yul").join(format!("{contract}.yul")),
@@ -860,53 +860,80 @@ fn abi_entry_name(path: &Utf8Path, kind: &str, name: Option<String>) -> Result<S
     Ok(name)
 }
 
-fn parse_storage(report: &Option<Value>, contract: &str) -> Vec<StorageEntry> {
+fn parse_storage(report: &Option<Value>, contract: &str) -> Result<Vec<StorageEntry>> {
     let Some(report) = report else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let Some(contracts) = report.get("contracts").and_then(Value::as_array) else {
-        return Vec::new();
+        return Err(Error::Adapter(
+            "layout report is missing `contracts[]`".to_string(),
+        ));
     };
-    contracts
+    let Some(fields) = contracts
         .iter()
         .find(|entry| entry.get("contract").and_then(Value::as_str) == Some(contract))
-        .and_then(|entry| entry.get("fields").and_then(Value::as_array))
-        .into_iter()
-        .flatten()
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(fields) = fields.get("fields").and_then(Value::as_array) else {
+        return Err(Error::Adapter(format!(
+            "{contract} layout report entry is missing `fields[]`"
+        )));
+    };
+    fields
+        .iter()
         .map(|field| {
             let name = field
                 .get("name")
                 .and_then(Value::as_str)
-                .unwrap_or("field")
+                .filter(|name| !name.trim().is_empty())
+                .ok_or_else(|| {
+                    Error::Adapter(format!(
+                        "{contract} layout report storage field is missing `name`"
+                    ))
+                })?
                 .to_string();
             let slot = field
                 .get("canonicalSlot")
                 .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let ty_value = field.get("type").cloned().unwrap_or(Value::Null);
-            let (ty, encoding) = storage_type(&ty_value);
-            StorageEntry {
+                .ok_or_else(|| {
+                    Error::Adapter(format!(
+                        "{contract}.{name} layout report field is missing `canonicalSlot`"
+                    ))
+                })?;
+            let ty_value = field.get("type").ok_or_else(|| {
+                Error::Adapter(format!(
+                    "{contract}.{name} layout report field is missing `type`"
+                ))
+            })?;
+            let (ty, encoding) = storage_type(ty_value, contract, &name)?;
+            Ok(StorageEntry {
                 name,
                 ty,
                 slot: format!("0x{slot:02x}"),
                 offset: 0,
                 width_bytes: 32,
                 encoding,
-            }
+            })
         })
         .collect()
 }
 
-fn storage_type(value: &Value) -> (String, String) {
+fn storage_type(value: &Value, contract: &str, field: &str) -> Result<(String, String)> {
     match value.get("kind").and_then(Value::as_str) {
-        Some("address") => ("address".to_string(), "value".to_string()),
-        Some("uint256") => ("uint256".to_string(), "value".to_string()),
-        Some("mapping") => (
+        Some("address") => Ok(("address".to_string(), "value".to_string())),
+        Some("bool") => Ok(("bool".to_string(), "value".to_string())),
+        Some("uint256") => Ok(("uint256".to_string(), "value".to_string())),
+        Some("mapping") => Ok((
             "mapping(address => uint256)".to_string(),
             "mapping".to_string(),
-        ),
-        Some(kind) => (kind.to_string(), kind.to_string()),
-        None => ("uint256".to_string(), "value".to_string()),
+        )),
+        Some(kind) => Err(Error::Adapter(format!(
+            "{contract}.{field} layout report has unsupported storage type `{kind}`"
+        ))),
+        None => Err(Error::Adapter(format!(
+            "{contract}.{field} layout report field type is missing `kind`"
+        ))),
     }
 }
 
@@ -1718,6 +1745,67 @@ end proof.CounterProof
             Utf8PathBuf::from("artifacts/yul/Counter.yul")
         );
         assert!(root.join("artifacts/manifest/Counter.json").is_file());
+    }
+
+    #[test]
+    fn storage_adapter_parses_supported_layout_fields() {
+        let report = Some(json!({
+            "contracts": [{
+                "contract": "Counter",
+                "fields": [
+                    {"name": "owner", "canonicalSlot": 0, "type": {"kind": "address"}},
+                    {"name": "enabled", "canonicalSlot": 1, "type": {"kind": "bool"}},
+                    {"name": "count", "canonicalSlot": 2, "type": {"kind": "uint256"}},
+                    {"name": "balances", "canonicalSlot": 3, "type": {"kind": "mapping"}}
+                ]
+            }]
+        }));
+
+        let storage = parse_storage(&report, "Counter").unwrap();
+
+        assert_eq!(
+            storage
+                .iter()
+                .map(|entry| (entry.name.as_str(), entry.ty.as_str(), entry.slot.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("owner", "address", "0x00"),
+                ("enabled", "bool", "0x01"),
+                ("count", "uint256", "0x02"),
+                ("balances", "mapping(address => uint256)", "0x03"),
+            ]
+        );
+    }
+
+    #[test]
+    fn storage_adapter_rejects_malformed_layout_fields() {
+        let missing_contracts = Some(json!({}));
+        assert!(matches!(
+            parse_storage(&missing_contracts, "Counter"),
+            Err(Error::Adapter(message)) if message.contains("contracts")
+        ));
+
+        let missing_slot = Some(json!({
+            "contracts": [{
+                "contract": "Counter",
+                "fields": [{"name": "count", "type": {"kind": "uint256"}}]
+            }]
+        }));
+        assert!(matches!(
+            parse_storage(&missing_slot, "Counter"),
+            Err(Error::Adapter(message)) if message.contains("canonicalSlot")
+        ));
+
+        let unsupported_type = Some(json!({
+            "contracts": [{
+                "contract": "Counter",
+                "fields": [{"name": "nested", "canonicalSlot": 0, "type": {"kind": "nestedMapping"}}]
+            }]
+        }));
+        assert!(matches!(
+            parse_storage(&unsupported_type, "Counter"),
+            Err(Error::Adapter(message)) if message.contains("unsupported storage type")
+        ));
     }
 
     #[test]
