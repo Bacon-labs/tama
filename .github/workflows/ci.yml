@@ -108,6 +108,7 @@ jobs:
           git -C "$counter" init
           (cd "$counter" && lake update)
           (cd "$counter" && forge install foundry-rs/forge-std --no-commit)
+          tama --root "$counter" doctor --fix
           tama --root "$counter" doctor
           tama --root "$counter" check
           tama --root "$counter" --locked build
