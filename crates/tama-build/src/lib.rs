@@ -464,10 +464,7 @@ pub fn generate_bridge(root: &Utf8Path, manifest: &ContractManifest) -> Result<(
         .trim()
         .trim_start_matches("0x")
         .to_string();
-    if bytecode.is_empty()
-        || bytecode.len() % 2 != 0
-        || !bytecode.chars().all(|ch| ch.is_ascii_hexdigit())
-    {
+    if !valid_bytecode_hex(&bytecode) {
         return Err(Error::Adapter(format!(
             "creation bytecode for {} is empty or not valid hex",
             manifest.contract
@@ -1457,13 +1454,19 @@ fn extract_solc_bytecode(value: &Value) -> Option<(String, String)> {
             let runtime = evm
                 .get("deployedBytecode")
                 .and_then(|bytecode| bytecode.get("object"))
-                .and_then(Value::as_str)
-                .unwrap_or("")
+                .and_then(Value::as_str)?
                 .to_string();
+            if !valid_bytecode_hex(&creation) || !valid_bytecode_hex(&runtime) {
+                return None;
+            }
             return Some((creation, runtime));
         }
     }
     None
+}
+
+fn valid_bytecode_hex(value: &str) -> bool {
+    !value.is_empty() && value.len() % 2 == 0 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 #[derive(Debug, Deserialize)]
@@ -1515,6 +1518,53 @@ mod tests {
             .filter(|entry| entry.get("severity").and_then(Value::as_str) == Some("error"))
             .count();
         assert_eq!(errors, 1);
+    }
+
+    #[test]
+    fn solc_bytecode_requires_creation_and_runtime_objects() {
+        let valid = json!({
+            "contracts": {
+                "Counter.yul": {
+                    "Counter": {
+                        "evm": {
+                            "bytecode": {"object": "6000"},
+                            "deployedBytecode": {"object": "6001"}
+                        }
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            extract_solc_bytecode(&valid),
+            Some(("6000".to_string(), "6001".to_string()))
+        );
+
+        let missing_runtime = json!({
+            "contracts": {
+                "Counter.yul": {
+                    "Counter": {
+                        "evm": {
+                            "bytecode": {"object": "6000"}
+                        }
+                    }
+                }
+            }
+        });
+        assert_eq!(extract_solc_bytecode(&missing_runtime), None);
+
+        let malformed_creation = json!({
+            "contracts": {
+                "Counter.yul": {
+                    "Counter": {
+                        "evm": {
+                            "bytecode": {"object": "0"},
+                            "deployedBytecode": {"object": "6001"}
+                        }
+                    }
+                }
+            }
+        });
+        assert_eq!(extract_solc_bytecode(&malformed_creation), None);
     }
 
     #[test]
