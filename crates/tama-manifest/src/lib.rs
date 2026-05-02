@@ -204,6 +204,31 @@ impl ContractManifest {
         self.validate_contract_name()?;
         self.validate_paths()?;
         for function in &self.abi.functions {
+            if function.name.trim().is_empty() {
+                return self.invalid("function name cannot be empty");
+            }
+            let expected_signature = function_signature(function);
+            if function.signature != expected_signature {
+                return self.invalid(format!(
+                    "function `{}` signature must be `{}`",
+                    function.name, expected_signature
+                ));
+            }
+            if function.visibility.trim().is_empty() {
+                return self.invalid(format!(
+                    "function `{}` visibility cannot be empty",
+                    function.name
+                ));
+            }
+            if !matches!(
+                function.mutability.as_str(),
+                "nonpayable" | "payable" | "view" | "pure"
+            ) {
+                return self.invalid(format!(
+                    "function `{}` has unsupported mutability `{}`",
+                    function.name, function.mutability
+                ));
+            }
             let expected = tama_common::function_selector(&function.signature);
             if function.selector != expected {
                 return self.invalid(format!(
@@ -213,6 +238,16 @@ impl ContractManifest {
             }
         }
         for error in &self.abi.errors {
+            if error.name.trim().is_empty() {
+                return self.invalid("error name cannot be empty");
+            }
+            let expected_signature = error_signature(error);
+            if error.signature != expected_signature {
+                return self.invalid(format!(
+                    "error `{}` signature must be `{}`",
+                    error.name, expected_signature
+                ));
+            }
             let expected = tama_common::error_selector(&error.signature);
             if error.selector != expected {
                 return self.invalid(format!(
@@ -222,6 +257,16 @@ impl ContractManifest {
             }
         }
         for event in &self.abi.events {
+            if event.name.trim().is_empty() {
+                return self.invalid("event name cannot be empty");
+            }
+            let expected_signature = event_signature(event);
+            if event.signature != expected_signature {
+                return self.invalid(format!(
+                    "event `{}` signature must be `{}`",
+                    event.name, expected_signature
+                ));
+            }
             let expected = tama_common::event_topic(&event.signature);
             if event.topic0 != expected {
                 return self.invalid(format!(
@@ -366,6 +411,31 @@ fn mirror_symbol_is_property(symbol: &str) -> bool {
     name.starts_with("testFuzz") || name.starts_with("invariant_")
 }
 
+fn function_signature(function: &Function) -> String {
+    signature_from_types(
+        &function.name,
+        function.inputs.iter().map(|param| param.ty.as_str()),
+    )
+}
+
+fn error_signature(error: &ErrorEntry) -> String {
+    signature_from_types(
+        &error.name,
+        error.inputs.iter().map(|param| param.ty.as_str()),
+    )
+}
+
+fn event_signature(event: &Event) -> String {
+    signature_from_types(
+        &event.name,
+        event.fields.iter().map(|field| field.ty.as_str()),
+    )
+}
+
+fn signature_from_types<'a>(name: &str, types: impl Iterator<Item = &'a str>) -> String {
+    format!("{}({})", name, types.collect::<Vec<_>>().join(","))
+}
+
 fn validate_hex_slot(slot: &str) -> std::result::Result<(), &'static str> {
     let rest = slot.strip_prefix("0x").ok_or("slot must have 0x prefix")?;
     if rest.is_empty() || rest.len() > 64 || !rest.chars().all(|ch| ch.is_ascii_hexdigit()) {
@@ -403,7 +473,16 @@ mod tests {
                     selector: "0xa9059cbb".to_string(),
                     visibility: "external".to_string(),
                     mutability: "nonpayable".to_string(),
-                    inputs: vec![],
+                    inputs: vec![
+                        Param {
+                            name: "to".to_string(),
+                            ty: "address".to_string(),
+                        },
+                        Param {
+                            name: "amount".to_string(),
+                            ty: "uint256".to_string(),
+                        },
+                    ],
                     outputs: vec![],
                 }],
                 events: vec![Event {
@@ -411,7 +490,23 @@ mod tests {
                     signature: "Transfer(address,address,uint256)".to_string(),
                     topic0: "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
                         .to_string(),
-                    fields: vec![],
+                    fields: vec![
+                        EventField {
+                            name: "from".to_string(),
+                            ty: "address".to_string(),
+                            indexed: true,
+                        },
+                        EventField {
+                            name: "to".to_string(),
+                            ty: "address".to_string(),
+                            indexed: true,
+                        },
+                        EventField {
+                            name: "amount".to_string(),
+                            ty: "uint256".to_string(),
+                            indexed: false,
+                        },
+                    ],
                 }],
                 errors: vec![],
             },
@@ -466,6 +561,45 @@ mod tests {
         let mut manifest = manifest();
         manifest.abi.events[0].topic0 = "0x00".to_string();
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn abi_entries_require_canonical_names_and_signatures() {
+        let mut empty_name = manifest();
+        empty_name.abi.functions[0].name.clear();
+        assert!(matches!(
+            empty_name.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("function name cannot be empty")
+        ));
+
+        let mut bad_signature = manifest();
+        bad_signature.abi.functions[0].signature = "transfer(uint256,address)".to_string();
+        bad_signature.abi.functions[0].selector =
+            tama_common::function_selector(&bad_signature.abi.functions[0].signature);
+        assert!(matches!(
+            bad_signature.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("signature must be")
+        ));
+
+        let mut bad_event_signature = manifest();
+        bad_event_signature.abi.events[0].signature =
+            "Transfer(address,uint256,address)".to_string();
+        bad_event_signature.abi.events[0].topic0 =
+            tama_common::event_topic(&bad_event_signature.abi.events[0].signature);
+        assert!(matches!(
+            bad_event_signature.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("signature must be")
+        ));
+    }
+
+    #[test]
+    fn function_mutability_must_be_supported() {
+        let mut manifest = manifest();
+        manifest.abi.functions[0].mutability = "delegatecall".to_string();
+        assert!(matches!(
+            manifest.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("unsupported mutability")
+        ));
     }
 
     #[test]

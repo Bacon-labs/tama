@@ -529,7 +529,7 @@ fn interface_sol(manifest: &ContractManifest) -> String {
             format!(" returns ({})", solidity_params(&function.outputs))
         };
         let mutability = match function.mutability.as_str() {
-            "view" | "pure" => format!(" {}", function.mutability),
+            "view" | "pure" | "payable" => format!(" {}", function.mutability),
             _ => String::new(),
         };
         out.push_str(&format!(
@@ -750,9 +750,10 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
                 });
             }
             "function" => {
+                let name = abi_entry_name(path, "function", entry.name)?;
                 let signature = format!(
                     "{}({})",
-                    entry.name.clone().unwrap_or_default(),
+                    name,
                     entry
                         .inputs
                         .iter()
@@ -760,20 +761,21 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
                         .collect::<Vec<_>>()
                         .join(",")
                 );
+                let mutability = entry
+                    .state_mutability
+                    .unwrap_or_else(|| "nonpayable".to_string());
                 abi.functions.push(Function {
-                    name: entry.name.unwrap_or_default(),
+                    name,
                     selector: tama_common::function_selector(&signature),
                     signature,
                     visibility: "external".to_string(),
-                    mutability: entry
-                        .state_mutability
-                        .unwrap_or_else(|| "nonpayable".to_string()),
+                    mutability,
                     inputs: entry.inputs.into_iter().map(Param::from).collect(),
                     outputs: entry.outputs.into_iter().map(Param::from).collect(),
                 });
             }
             "event" => {
-                let name = entry.name.unwrap_or_default();
+                let name = abi_entry_name(path, "event", entry.name)?;
                 let signature = format!(
                     "{}({})",
                     name,
@@ -800,7 +802,7 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
                 });
             }
             "error" => {
-                let name = entry.name.unwrap_or_default();
+                let name = abi_entry_name(path, "error", entry.name)?;
                 let signature = format!(
                     "{}({})",
                     name,
@@ -818,10 +820,28 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
                     inputs: entry.inputs.into_iter().map(Param::from).collect(),
                 });
             }
-            _ => {}
+            other => {
+                return Err(Error::Adapter(format!(
+                    "unsupported ABI entry type `{other}` in {path}"
+                )));
+            }
         }
     }
     Ok(abi)
+}
+
+fn abi_entry_name(path: &Utf8Path, kind: &str, name: Option<String>) -> Result<String> {
+    let Some(name) = name else {
+        return Err(Error::Adapter(format!(
+            "{kind} ABI entry in {path} is missing `name`"
+        )));
+    };
+    if name.trim().is_empty() {
+        return Err(Error::Adapter(format!(
+            "{kind} ABI entry in {path} has an empty `name`"
+        )));
+    }
+    Ok(name)
 }
 
 fn parse_storage(report: &Option<Value>, contract: &str) -> Vec<StorageEntry> {
@@ -1701,6 +1721,23 @@ end proof.CounterProof
                 .map(|field| field.indexed)
                 .collect::<Vec<_>>(),
             vec![true, true, false]
+        );
+    }
+
+    #[test]
+    fn abi_parser_rejects_missing_names_and_unsupported_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("Counter.abi.json")).unwrap();
+
+        tama_common::write_string(&path, r#"[{"type":"function","inputs":[],"outputs":[]}]"#)
+            .unwrap();
+        let err = parse_abi(&path).unwrap_err();
+        assert!(matches!(err, Error::Adapter(message) if message.contains("missing `name`")));
+
+        tama_common::write_string(&path, r#"[{"type":"fallback"}]"#).unwrap();
+        let err = parse_abi(&path).unwrap_err();
+        assert!(
+            matches!(err, Error::Adapter(message) if message.contains("unsupported ABI entry type"))
         );
     }
 
