@@ -446,6 +446,12 @@ fn interface_sol(manifest: &ContractManifest) -> String {
 }
 
 fn deployer_sol(manifest: &ContractManifest, bytecode: &str) -> String {
+    let (deploy_params, constructor_args) = constructor_params(manifest);
+    let code_expr = if constructor_args.is_empty() {
+        format!(r#"hex"{bytecode}""#)
+    } else {
+        format!(r#"abi.encodePacked(hex"{bytecode}", abi.encode({constructor_args}))"#)
+    };
     format!(
         r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -453,8 +459,8 @@ pragma solidity ^0.8.20;
 import {{{contract}Iface}} from "./{contract}Iface.sol";
 
 library {contract}Deployer {{
-    function deploy() internal returns ({contract}Iface deployed) {{
-        bytes memory code = hex"{bytecode}";
+    function deploy({deploy_params}) internal returns ({contract}Iface deployed) {{
+        bytes memory code = {code_expr};
         address addr;
         assembly {{
             addr := create(0, add(code, 0x20), mload(code))
@@ -466,6 +472,36 @@ library {contract}Deployer {{
 "#,
         contract = manifest.contract
     )
+}
+
+fn constructor_params(manifest: &ContractManifest) -> (String, String) {
+    let Some(constructor) = &manifest.abi.constructor else {
+        return (String::new(), String::new());
+    };
+    let params = constructor
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(index, param)| {
+            let name = constructor_param_name(param, index);
+            format!("{} {}", param.ty, name)
+        })
+        .collect::<Vec<_>>();
+    let args = constructor
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(index, param)| constructor_param_name(param, index))
+        .collect::<Vec<_>>();
+    (params.join(", "), args.join(", "))
+}
+
+fn constructor_param_name(param: &Param, index: usize) -> String {
+    if param.name.is_empty() {
+        format!("arg{index}")
+    } else {
+        param.name.clone()
+    }
 }
 
 fn solidity_params(params: &[Param]) -> String {
@@ -825,5 +861,51 @@ mod tests {
             ..Default::default()
         }));
         assert!(should_run_forge(&BuildOptions::default()));
+    }
+
+    #[test]
+    fn deployer_encodes_constructor_args() {
+        let mut manifest = ContractManifest {
+            schema: SCHEMA.to_string(),
+            contract: "WithConstructor".to_string(),
+            source: SourcePaths {
+                implementation: "verity/src/WithConstructor.lean".into(),
+                spec: "verity/spec/WithConstructorSpec.lean".into(),
+                proof: "verity/proof/WithConstructorProof.lean".into(),
+            },
+            lean: LeanModules {
+                implementation_module: "src.WithConstructor".to_string(),
+                spec_module: "spec.WithConstructorSpec".to_string(),
+                proof_module: "proof.WithConstructorProof".to_string(),
+            },
+            abi: Abi::default(),
+            storage: vec![],
+            obligations: vec![],
+            artifacts: ArtifactPaths {
+                yul: "artifacts/yul/WithConstructor.yul".into(),
+                creation_bytecode: "artifacts/bytecode/WithConstructor.bin".into(),
+                runtime_bytecode: "artifacts/bytecode/WithConstructor.runtime.bin".into(),
+                bytecode_hash: None,
+                solc_input: "artifacts/solc-json/WithConstructor.input.json".into(),
+                solc_output: "artifacts/solc-json/WithConstructor.output.json".into(),
+                interface: "src/generated/verity/WithConstructorIface.sol".into(),
+                deployer: "src/generated/verity/WithConstructorDeployer.sol".into(),
+            },
+        };
+        manifest.abi.constructor = Some(Constructor {
+            inputs: vec![
+                Param {
+                    name: "owner".to_string(),
+                    ty: "address".to_string(),
+                },
+                Param {
+                    name: "".to_string(),
+                    ty: "uint256".to_string(),
+                },
+            ],
+        });
+        let sol = deployer_sol(&manifest, "6000");
+        assert!(sol.contains("function deploy(address owner, uint256 arg1)"));
+        assert!(sol.contains(r#"abi.encodePacked(hex"6000", abi.encode(owner, arg1))"#));
     }
 }
