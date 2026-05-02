@@ -1,0 +1,19 @@
+[package]
+name = "tama-project"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+camino.workspace = true
+serde.workspace = true
+sha2.workspace = true
+tama-common = { path = "../tama-common" }
+tama-config = { path = "../tama-config" }
+thiserror.workspace = true
+toml_edit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

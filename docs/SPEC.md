@@ -45,15 +45,15 @@ my-protocol/
 ├── lake-manifest.json           # Lake dependency manifest; checked into source control
 ├── lean-toolchain               # Pinned Lean toolchain
 ├── verity/
-│   ├── src/                     # Flat EDSL implementations: Counter.lean, ERC20.lean, …
-│   ├── spec/                    # Flat specs/invariants: CounterSpec.lean, ERC20Spec.lean, …
-│   └── proof/                   # Flat proofs: CounterProof.lean, ERC20Proof.lean, …
+│   ├── src/                     # Flat EDSL implementations: ERC20Lite.lean, TipJar.lean, …
+│   ├── spec/                    # Flat specs/invariants: ERC20LiteSpec.lean, TipJarSpec.lean, …
+│   └── proof/                   # Flat proofs: ERC20LiteProof.lean, TipJarProof.lean, …
 ├── src/
 │   └── generated/verity/        # Generated Solidity interfaces/deployers for Verity contracts
 ├── script/                      # Foundry deployment scripts
 ├── test/
 │   ├── verity/                  # Foundry tests mirroring Verity obligations
-│   │   └── Counter.t.sol
+│   │   └── ERC20Lite.t.sol
 │   └── ...                      # User-authored Foundry tests
 ├── lib/                         # Foundry deps, e.g. forge-std
 ├── out/                         # Foundry build output
@@ -257,48 +257,49 @@ Example:
 ```json
 {
   "schema": "tama.contract-manifest.v1",
-  "contract": "Counter",
+  "contract": "ERC20Lite",
   "lean": {
-    "implementation_module": "Counter",
-    "spec_module": "CounterSpec",
-    "proof_module": "CounterProof"
+    "implementation_module": "src.ERC20Lite",
+    "spec_module": "spec.ERC20LiteSpec",
+    "proof_module": "proof.ERC20LiteProof"
   },
   "abi": [
     {
-      "name": "increment",
-      "signature": "increment()",
-      "selector": "0xd09de08a",
-      "mutability": "nonpayable"
-    },
-    {
-      "name": "number",
-      "signature": "number()",
-      "selector": "0x8381f58a",
+      "name": "balanceOf",
+      "signature": "balanceOf(address)",
+      "selector": "0x70a08231",
       "mutability": "view",
       "returns": ["uint256"]
+    },
+    {
+      "name": "transfer",
+      "signature": "transfer(address,uint256)",
+      "selector": "0xa9059cbb",
+      "mutability": "nonpayable",
+      "returns": ["bool"]
     }
   ],
   "storage": [
     {
-      "name": "number",
-      "type": "uint256",
-      "slot": "0",
+      "name": "balances",
+      "type": "mapping(address => uint256)",
+      "slot": "1",
       "offset": 0
     }
   ],
   "artifacts": {
-    "yul": "artifacts/yul/Counter.yul",
-    "solc_input": "artifacts/solc-json/Counter.input.json",
-    "solc_output": "artifacts/solc-json/Counter.output.json",
-    "creation_bytecode": "artifacts/bytecode/Counter.bin",
-    "runtime_bytecode": "artifacts/bytecode/Counter.runtime.bin",
+    "yul": "artifacts/yul/ERC20Lite.yul",
+    "solc_input": "artifacts/solc-json/ERC20Lite.input.json",
+    "solc_output": "artifacts/solc-json/ERC20Lite.output.json",
+    "creation_bytecode": "artifacts/bytecode/ERC20Lite.bin",
+    "runtime_bytecode": "artifacts/bytecode/ERC20Lite.runtime.bin",
     "bytecode_hash": "..."
   },
   "obligations": [
     {
-      "name": "CounterProof.increment_preserves_nonnegative",
+      "name": "ERC20LiteProof.transfer_preserves_total_supply",
       "kind": "invariant",
-      "mirror": "test/verity/Counter.t.sol:CounterTest.testFuzz_increment_preserves_nonnegative"
+      "mirror": "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransferPreservesTotalSupply"
     }
   ]
 }
@@ -320,42 +321,42 @@ The manifest is not a report-only artifact. It is the canonical source used by:
 
 Tama generates Solidity bridge files from the manifest after Yul bytecode has been compiled and before `forge build` runs.
 
-For `Counter`, Tama emits:
+For `ERC20Lite`, Tama emits:
 
 ```text
-src/generated/verity/CounterIface.sol
-src/generated/verity/CounterDeployer.sol
+src/generated/verity/ERC20LiteIface.sol
+src/generated/verity/ERC20LiteDeployer.sol
 ```
 
-`CounterIface.sol` exposes the ABI-level interface implied by the Verity contract:
+`ERC20LiteIface.sol` exposes the ABI-level interface implied by the Verity contract:
 
 ```solidity
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-interface CounterIface {
-    function increment() external;
-    function number() external view returns (uint256);
+interface ERC20LiteIface {
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address to, uint256 amount) external returns (bool);
 }
 ```
 
-`CounterDeployer.sol` embeds the Verity-compiled creation bytecode:
+`ERC20LiteDeployer.sol` embeds the Verity-compiled creation bytecode:
 
 ```solidity
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {CounterIface} from "./CounterIface.sol";
+import {ERC20LiteIface} from "./ERC20LiteIface.sol";
 
-library CounterDeployer {
-    function deploy() internal returns (CounterIface counter) {
+library ERC20LiteDeployer {
+    function deploy() internal returns (ERC20LiteIface token) {
         bytes memory code = hex"...";
         address addr;
         assembly {
             addr := create(0, add(code, 0x20), mload(code))
         }
         require(addr != address(0), "TAMA_DEPLOY_FAILED");
-        counter = CounterIface(addr);
+        token = ERC20LiteIface(addr);
     }
 }
 ```
@@ -383,7 +384,7 @@ Global flags:
 
 Scaffolds a new Tama project.
 
-It does **not** keep Foundry's default example contracts. The result should be a Tama-native starter project: a simple Verity `Counter`, its spec, its proof skeleton or starter proofs, generated bridge files, and mirror Foundry tests.
+It does **not** keep Foundry's default example contracts. The result should be a Tama-native starter project: a real Verity `ERC20Lite`, its spec, complete starter proofs, generated bridge files, and mirror Foundry tests.
 
 Steps:
 
@@ -394,7 +395,7 @@ Steps:
 5. Write `lakefile.toml` with Lake build output configured under `artifacts/lean`.
 6. Write `lean-toolchain` pinned to the compatible Lean version.
 7. Create `verity/src`, `verity/spec`, `verity/proof`, `test/verity`, `src/generated/verity`.
-8. Generate the `Counter` starter across implementation, spec, proof, bridge, manifest, and mirror test layers.
+8. Generate the `ERC20Lite` starter across implementation, spec, proof, bridge, manifest, and mirror test layers.
 9. Install `forge-std` using Foundry.
 10. Pin the Verity Lean dependency in `lakefile.toml` and `lake-manifest.json`.
 11. Print next steps.
@@ -471,8 +472,8 @@ Examples:
 ```text
 tama test
 tama test -vvv
-tama test --match-contract CounterTest
-tama test --match-path test/verity/Counter.t.sol
+tama test --match-contract ERC20LiteTest
+tama test --match-path test/verity/ERC20Lite.t.sol
 ```
 
 ### `tama audit [check-name]`
@@ -522,8 +523,8 @@ Example Lean shape:
 
 ```lean
 @[tama.obligation]
-@[tama.mirror "test/verity/Counter.t.sol:CounterTest.testFuzz_increment_preserves_nonnegative"]
-theorem increment_preserves_nonnegative : ... := by
+@[tama.mirror "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransferPreservesTotalSupply"]
+theorem transfer_preserves_total_supply : ... := by
   ...
 
 @[tama.helper]
@@ -858,7 +859,7 @@ Local development commonly uses:
 ```text
 tama check
 tama build
-tama test --match-contract CounterTest
+tama test --match-contract ERC20LiteTest
 ```
 
 `sorry` is allowed during local `tama build` because Lean allows it. It is rejected by `tama audit trust-boundary`.

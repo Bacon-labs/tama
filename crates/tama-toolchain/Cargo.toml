@@ -1,0 +1,20 @@
+[package]
+name = "tama-toolchain"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+camino.workspace = true
+regex.workspace = true
+semver.workspace = true
+serde.workspace = true
+tama-common = { path = "../tama-common" }
+thiserror.workspace = true
+which.workspace = true
+xshell.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

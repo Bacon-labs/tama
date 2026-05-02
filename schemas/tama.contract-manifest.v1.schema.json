@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tama.tools/schemas/tama.contract-manifest.v1.schema.json",
+  "title": "Tama contract manifest v1",
+  "type": "object",
+  "required": ["schema", "contract", "source", "lean", "abi", "storage", "obligations", "artifacts"],
+  "properties": {
+    "schema": { "const": "tama.contract-manifest.v1" },
+    "contract": { "type": "string" },
+    "source": { "type": "object" },
+    "lean": { "type": "object" },
+    "abi": { "type": "object" },
+    "storage": { "type": "array" },
+    "obligations": { "type": "array" },
+    "artifacts": { "type": "object" }
+  }
+}

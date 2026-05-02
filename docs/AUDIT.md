@@ -1,0 +1,15 @@
+# Audit
+
+`tama audit` validates the project after a real build. It fails on error-severity issues and reports all findings it can collect.
+
+Checks:
+
+- `structure`: required files, aggregate imports, generated bridge headers, manifest artifact paths.
+- `selectors`: function selectors, error selectors, event topic0, and generated interface signatures.
+- `storage-layout`: manifest storage declarations, duplicate slots, fixed-slot overlap, valid encodings, and available compiler layout reports.
+- `coverage`: every public invariant and postcondition has mirror or proof-only coverage; proof-only entries require a reason.
+- `trust-boundary`: Lean axiom dependencies, `sorryAx`, unallowlisted axioms, unresolved declarations, and Verity trust-surface reports.
+
+Negative fixture coverage must include deleted files, corrupt selectors/topics, duplicate storage slots, missing mirrors, empty proof-only reasons, unresolved Lean declarations, inserted `sorry`, inserted custom axioms, and hand-edited generated bridge files.
+
+`--json` emits stable issue records for CI consumers.

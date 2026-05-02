@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tama</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <p class="eyebrow">Verity developer toolchain</p>
+      <h1>Tama</h1>
+      <p class="lede">Create, build, test, audit, and inspect real Verity smart-contract projects from one CLI.</p>
+      <pre><code>curl -L https://tama.tools/install.sh | sh</code></pre>
+      <div class="links">
+        <a href="#quickstart">Quickstart</a>
+        <a href="#commands">Commands</a>
+        <a href="/manifest.json">Manifest</a>
+        <a href="/install.sh">Installer</a>
+      </div>
+    </section>
+
+    <section id="quickstart">
+      <h2>Quickstart</h2>
+      <pre><code>tama init my-protocol
+cd my-protocol
+tama doctor
+tama check
+tama build
+tama test
+tama audit
+tama inspect ERC20Lite selectors</code></pre>
+    </section>
+
+    <section id="commands">
+      <h2>Core Commands</h2>
+      <div class="grid">
+        <article><h3>init</h3><p>Create the ERC20Lite starter project.</p></article>
+        <article><h3>build</h3><p>Run Lean, Verity, solc, bridge generation, and Foundry.</p></article>
+        <article><h3>test</h3><p>Pass through directly to <code>forge test</code>.</p></article>
+        <article><h3>audit</h3><p>Check structure, selectors, storage, coverage, and trust boundaries.</p></article>
+        <article><h3>inspect</h3><p>Read manifests, ABI, selectors, storage, Yul, bytecode, and obligations.</p></article>
+        <article><h3>doctor</h3><p>Diagnose toolchain drift and missing dependencies.</p></article>
+      </div>
+    </section>
+
+    <section>
+      <h2>Documentation</h2>
+      <ul>
+        <li><a href="https://github.com/foglight-labs/tama/blob/main/docs/QUICKSTART.md">Quickstart</a></li>
+        <li><a href="https://github.com/foglight-labs/tama/blob/main/docs/COMMANDS.md">Command reference</a></li>
+        <li><a href="https://github.com/foglight-labs/tama/blob/main/docs/AUDIT.md">Audit guide</a></li>
+        <li><a href="https://github.com/foglight-labs/tama/blob/main/docs/LIMITATIONS.md">Limitations</a></li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

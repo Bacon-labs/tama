@@ -1,0 +1,17 @@
+[package]
+name = "tama-build"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+camino.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tama-common = { path = "../tama-common" }
+tama-config = { path = "../tama-config" }
+tama-manifest = { path = "../tama-manifest" }
+tama-toolchain = { path = "../tama-toolchain" }
+thiserror.workspace = true

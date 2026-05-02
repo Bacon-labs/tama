@@ -1,0 +1,7 @@
+/target/
+/.lake/
+/artifacts/
+/out/
+/cache/
+*.tmp
+.DS_Store
