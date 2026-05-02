@@ -740,7 +740,7 @@ fn storage(
 
 fn storage_entries(manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
     for manifest in manifests {
-        let mut fixed = Vec::<(&tama_manifest::StorageEntry, u32)>::new();
+        let mut seen = Vec::<&tama_manifest::StorageEntry>::new();
         for entry in &manifest.storage {
             if !valid_storage_slot(&entry.slot) {
                 issues.push(issue(
@@ -766,24 +766,21 @@ fn storage_entries(manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
                     None,
                 ));
             }
-            if entry.encoding != "mapping" {
-                let end = entry.offset.saturating_add(entry.width_bytes);
-                for (prev, prev_end) in &fixed {
-                    if prev.slot == entry.slot && entry.offset < *prev_end && prev.offset < end {
-                        issues.push(issue(
-                            "storage-layout",
-                            Some(&manifest.contract),
-                            "TAMA_STORAGE_DUPLICATE",
-                            format!(
-                                "storage entries `{}` and `{}` overlap",
-                                prev.name, entry.name
-                            ),
-                            None,
-                        ));
-                    }
+            for prev in &seen {
+                if prev.slot == entry.slot && !can_share_storage_slot(prev, entry) {
+                    issues.push(issue(
+                        "storage-layout",
+                        Some(&manifest.contract),
+                        "TAMA_STORAGE_DUPLICATE",
+                        format!(
+                            "storage entries `{}` and `{}` share slot `{}`",
+                            prev.name, entry.name, entry.slot
+                        ),
+                        None,
+                    ));
                 }
-                fixed.push((entry, end));
             }
+            seen.push(entry);
             if entry.offset >= 32
                 || entry.width_bytes == 0
                 || entry.width_bytes > 32
@@ -799,6 +796,18 @@ fn storage_entries(manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
             }
         }
     }
+}
+
+fn can_share_storage_slot(
+    left: &tama_manifest::StorageEntry,
+    right: &tama_manifest::StorageEntry,
+) -> bool {
+    if left.encoding != "value" || right.encoding != "value" {
+        return false;
+    }
+    let left_end = left.offset.saturating_add(left.width_bytes);
+    let right_end = right.offset.saturating_add(right.width_bytes);
+    left_end <= right.offset || right_end <= left.offset
 }
 
 fn load_layout_report(
@@ -2907,6 +2916,56 @@ interface CounterIface {
         assert!(codes.contains("TAMA_STORAGE_ENCODING"));
         assert!(codes.contains("TAMA_STORAGE_DUPLICATE"));
         assert!(codes.contains("TAMA_STORAGE_WIDTH"));
+
+        let mut packed = counter_manifest();
+        packed.storage = vec![
+            tama_manifest::StorageEntry {
+                name: "low".to_string(),
+                ty: "uint128".to_string(),
+                slot: "0x00".to_string(),
+                offset: 0,
+                width_bytes: 16,
+                encoding: "value".to_string(),
+            },
+            tama_manifest::StorageEntry {
+                name: "high".to_string(),
+                ty: "uint128".to_string(),
+                slot: "0x00".to_string(),
+                offset: 16,
+                width_bytes: 16,
+                encoding: "value".to_string(),
+            },
+        ];
+        let mut packed_issues = Vec::new();
+        storage_entries(&[packed], &mut packed_issues);
+        assert!(!packed_issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_STORAGE_DUPLICATE"));
+
+        let mut mapping_collision = counter_manifest();
+        mapping_collision.storage = vec![
+            tama_manifest::StorageEntry {
+                name: "owner".to_string(),
+                ty: "address".to_string(),
+                slot: "0x00".to_string(),
+                offset: 0,
+                width_bytes: 20,
+                encoding: "value".to_string(),
+            },
+            tama_manifest::StorageEntry {
+                name: "balances".to_string(),
+                ty: "mapping(address => uint256)".to_string(),
+                slot: "0x00".to_string(),
+                offset: 0,
+                width_bytes: 32,
+                encoding: "mapping".to_string(),
+            },
+        ];
+        let mut mapping_issues = Vec::new();
+        storage_entries(&[mapping_collision], &mut mapping_issues);
+        assert!(mapping_issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_STORAGE_DUPLICATE"));
     }
 
     #[test]
