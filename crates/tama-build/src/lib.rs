@@ -197,10 +197,8 @@ pub fn adapt_verity_outputs(
         {
             continue;
         }
-        let contract = path
-            .file_stem()
-            .ok_or_else(|| Error::Adapter(path.to_string()))?
-            .to_string();
+        let contract =
+            contract_name_from_abi_path(&path).ok_or_else(|| Error::Adapter(path.to_string()))?;
         if contract_filter.is_some_and(|filter| filter != contract) {
             continue;
         }
@@ -266,6 +264,15 @@ pub fn adapt_verity_outputs(
         return Err(Error::Adapter("no ABI/Yul outputs found".to_string()));
     }
     Ok(manifests)
+}
+
+fn contract_name_from_abi_path(path: &Utf8Path) -> Option<String> {
+    let file_name = path.file_name()?;
+    file_name
+        .strip_suffix(".abi.json")
+        .or_else(|| file_name.strip_suffix(".json"))
+        .filter(|contract| !contract.is_empty())
+        .map(str::to_string)
 }
 
 pub fn compile_yul_standard_json(
@@ -1329,6 +1336,22 @@ end proof.CounterProof
             obligations[2].coverage.reason.as_deref(),
             Some("Symbolic state only.")
         );
+    }
+
+    #[test]
+    fn adapter_accepts_upstream_abi_file_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(&root.join("artifacts/abi/Counter.abi.json"), "[]\n").unwrap();
+        tama_common::write_string(&root.join("artifacts/yul/Counter.yul"), "{ }\n").unwrap();
+        let manifests = adapt_verity_outputs(&root, &test_config(), None).unwrap();
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0].contract, "Counter");
+        assert_eq!(
+            manifests[0].artifacts.yul,
+            Utf8PathBuf::from("artifacts/yul/Counter.yul")
+        );
+        assert!(root.join("artifacts/manifest/Counter.json").is_file());
     }
 
     #[test]
