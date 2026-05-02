@@ -1303,16 +1303,35 @@ fn copy_package_dirs(
             continue;
         }
         let target = destination.join(&name);
-        if path_exists(&target)? && !replace_existing {
+        let target_exists = path_exists(&target)?;
+        if target_exists && !replace_existing {
             continue;
         }
         if replace_existing {
+            if target_exists && !should_replace_cached_package(&source, &target)? {
+                continue;
+            }
             replace_dir_recursively(&source, &target)?;
         } else {
             copy_dir_recursively_into_new(&source, &target)?;
         }
     }
     Ok(())
+}
+
+fn should_replace_cached_package(source: &Utf8Path, target: &Utf8Path) -> Result<bool, String> {
+    if !path_exists(target)? {
+        return Ok(true);
+    }
+    if !target.join(".git").is_dir() {
+        return Ok(true);
+    }
+    if !git_worktree_clean(target).unwrap_or(false) {
+        return Ok(true);
+    }
+    let source_rev = git_head_rev(source).ok();
+    let target_rev = git_head_rev(target).ok();
+    Ok(source_rev.is_none() || source_rev != target_rev)
 }
 
 fn copy_dir_recursively_into_new(source: &Utf8Path, target: &Utf8Path) -> Result<(), String> {
@@ -2097,6 +2116,22 @@ mod tests {
 
         let package = std::fs::read_to_string(cache.join("verity/package.txt")).unwrap();
         assert_eq!(package, "new");
+    }
+
+    #[test]
+    fn lake_package_cache_refresh_skips_clean_matching_revisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
+        let package = root.join(".lake/packages/verity");
+
+        init_git_package(&package, "same").unwrap();
+        sync_lake_package_cache(&root, &cache).unwrap();
+
+        assert!(!should_replace_cached_package(&package, &cache.join("verity")).unwrap());
+
+        tama_common::write_string(&cache.join("verity/untracked.lean"), "local change\n").unwrap();
+        assert!(should_replace_cached_package(&package, &cache.join("verity")).unwrap());
     }
 
     #[test]
