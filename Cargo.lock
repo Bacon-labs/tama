@@ -1125,6 +1125,7 @@ dependencies = [
  "regex",
  "semver",
  "serde",
+ "serde_json",
  "tama-common",
  "tempfile",
  "thiserror",

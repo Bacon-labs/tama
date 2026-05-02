@@ -37,6 +37,7 @@ pub struct Tool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", content = "details", rename_all = "snake_case")]
 pub enum ToolStatus {
     Ok(Tool),
     Missing {
@@ -383,6 +384,63 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(root.join("args.txt")).unwrap(),
             "test\n--match-test\nCounterTest\n-vvv\n"
+        );
+    }
+
+    #[test]
+    fn doctor_report_json_uses_stable_status_tags() {
+        let report = DoctorReport {
+            tools: vec![
+                ToolStatus::Ok(Tool {
+                    name: "tama".to_string(),
+                    path: Utf8PathBuf::from("/usr/local/bin/tama"),
+                    version: Some("0.1.0".to_string()),
+                }),
+                ToolStatus::Missing {
+                    name: "forge".to_string(),
+                    remediation: "install Foundry".to_string(),
+                },
+                ToolStatus::Incompatible {
+                    name: "solc".to_string(),
+                    found: "0.8.32".to_string(),
+                    expected: "0.8.33".to_string(),
+                },
+            ],
+            lock_current: Some(false),
+            notes: vec!["run `tama doctor --fix`".to_string()],
+        };
+
+        assert_eq!(
+            serde_json::to_value(&report).unwrap(),
+            serde_json::json!({
+                "tools": [
+                    {
+                        "status": "ok",
+                        "details": {
+                            "name": "tama",
+                            "path": "/usr/local/bin/tama",
+                            "version": "0.1.0"
+                        }
+                    },
+                    {
+                        "status": "missing",
+                        "details": {
+                            "name": "forge",
+                            "remediation": "install Foundry"
+                        }
+                    },
+                    {
+                        "status": "incompatible",
+                        "details": {
+                            "name": "solc",
+                            "found": "0.8.32",
+                            "expected": "0.8.33"
+                        }
+                    }
+                ],
+                "lock_current": false,
+                "notes": ["run `tama doctor --fix`"]
+            })
         );
     }
 
