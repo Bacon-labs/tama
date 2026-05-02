@@ -22,13 +22,10 @@ authors = ["Zefram (Foglight)"]
 repository = "https://github.com/foglight-labs/tama"
 
 [workspace.dependencies]
-assert_cmd = "2.0"
 camino = { version = "1.1", features = ["serde1"] }
 clap = { version = "4.5", features = ["derive"] }
 flate2 = "1.0"
 hex = "0.4"
-insta = { version = "1.41", features = ["json"] }
-miette = { version = "7.2", features = ["fancy"] }
 minisign-verify = "0.2.5"
 regex = "1.11"
 semver = "1.0"
@@ -42,8 +39,6 @@ tabled = "0.16"
 tiny-keccak = { version = "2.0", features = ["keccak"] }
 toml = "0.8"
 toml_edit = { version = "0.22", features = ["serde"] }
-tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 ureq = { version = "2.10", features = ["json"] }
 which = "6.0"
-xshell = "0.2"

@@ -13,7 +13,6 @@ path = "src/main.rs"
 [dependencies]
 camino.workspace = true
 clap.workspace = true
-miette.workspace = true
 semver.workspace = true
 serde_json.workspace = true
 tama-audit = { path = "../tama-audit" }
@@ -25,4 +24,3 @@ tama-project = { path = "../tama-project" }
 tama-toolchain = { path = "../tama-toolchain" }
 tempfile.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
