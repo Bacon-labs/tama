@@ -408,11 +408,12 @@ fn finalize_init(root: &Utf8PathBuf, offline: bool) -> Result<(), String> {
         return Ok(());
     }
     run_tool(root, "lake", &["update"])?;
-    run_tool(
-        root,
-        "forge",
-        &["install", "foundry-rs/forge-std", "--no-commit"],
-    )?;
+    ensure_git_worktree(root)?;
+    let mut forge_args = vec!["install", "foundry-rs/forge-std"];
+    if let Some(flag) = forge_install_no_commit_flag()? {
+        forge_args.push(flag);
+    }
+    run_tool(root, "forge", &forge_args)?;
     refresh_lock(root)
 }
 
@@ -565,12 +566,51 @@ fn looks_like_git_rev(value: &str) -> bool {
     value.len() >= 7 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
-fn offline_init_instructions() -> [&'static str; 4] {
+fn ensure_git_worktree(root: &Utf8PathBuf) -> Result<(), String> {
+    if is_git_worktree(root)? {
+        Ok(())
+    } else {
+        run_tool(root, "git", &["init"])
+    }
+}
+
+fn is_git_worktree(root: &Utf8PathBuf) -> Result<bool, String> {
+    let output = ProcessCommand::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(root)
+        .output()
+        .map_err(|err| format!("failed to inspect git worktree: {err}"))?;
+    Ok(output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true")
+}
+
+fn forge_install_no_commit_flag() -> Result<Option<&'static str>, String> {
+    let output = ProcessCommand::new("forge")
+        .args(["install", "--help"])
+        .output()
+        .map_err(|err| format!("failed to inspect `forge install --help`: {err}"))?;
+    let help = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(select_forge_install_no_commit_flag(&help))
+}
+
+fn select_forge_install_no_commit_flag(help: &str) -> Option<&'static str> {
+    if help.contains("--no-commit") {
+        Some("--no-commit")
+    } else {
+        None
+    }
+}
+
+fn offline_init_instructions() -> [&'static str; 5] {
     [
-        "offline init: skipped `lake update` and `forge install foundry-rs/forge-std --no-commit`.",
+        "offline init: skipped `lake update`, `git init` if needed, and `forge install foundry-rs/forge-std`.",
         "when network access is available, run:",
         "  lake update",
-        "  forge install foundry-rs/forge-std --no-commit",
+        "  git init  # if this project is not already inside a Git worktree",
+        "  forge install foundry-rs/forge-std",
     ]
 }
 
@@ -648,7 +688,32 @@ mod tests {
     fn offline_init_instructions_are_actionable() {
         let instructions = offline_init_instructions().join("\n");
         assert!(instructions.contains("lake update"));
-        assert!(instructions.contains("forge install foundry-rs/forge-std --no-commit"));
+        assert!(instructions.contains("git init"));
+        assert!(instructions.contains("forge install foundry-rs/forge-std"));
+        assert!(!instructions.contains("--no-git"));
+    }
+
+    #[test]
+    fn forge_install_flag_preserves_submodule_installs() {
+        assert_eq!(
+            select_forge_install_no_commit_flag("Options:\n      --no-git\n      --commit\n"),
+            None
+        );
+        assert_eq!(
+            select_forge_install_no_commit_flag("Options:\n      --no-commit\n"),
+            Some("--no-commit")
+        );
+        assert_eq!(select_forge_install_no_commit_flag("Options:\n"), None);
+    }
+
+    #[test]
+    fn ensure_git_worktree_initializes_fresh_project_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        assert!(!is_git_worktree(&root).unwrap());
+        ensure_git_worktree(&root).unwrap();
+        assert!(is_git_worktree(&root).unwrap());
+        assert!(root.join(".git").is_dir());
     }
 
     #[test]
