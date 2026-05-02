@@ -783,14 +783,21 @@ fn offline_init_instructions() -> [&'static str; 5] {
 }
 
 fn project_root(root: Option<Utf8PathBuf>) -> Result<Utf8PathBuf, String> {
-    match root {
-        Some(root) => Ok(root),
+    let start = match root {
+        Some(root) => root,
         None => {
             let cwd = std::env::current_dir().map_err(|err| err.to_string())?;
-            let cwd = Utf8PathBuf::from_path_buf(cwd).map_err(|path| path.display().to_string())?;
-            tama_common::find_project_root(&cwd).map_err(|err| err.to_string())
+            Utf8PathBuf::from_path_buf(cwd).map_err(|path| path.display().to_string())?
         }
-    }
+    };
+    let root = tama_common::find_project_root(&start).map_err(|err| err.to_string())?;
+    canonicalize_utf8(&root)
+}
+
+fn canonicalize_utf8(path: &Utf8Path) -> Result<Utf8PathBuf, String> {
+    let path = std::fs::canonicalize(path)
+        .map_err(|err| format!("failed to canonicalize `{path}`: {err}"))?;
+    Utf8PathBuf::from_path_buf(path).map_err(|path| path.display().to_string())
 }
 
 fn prefixed_test_args(args: Vec<String>) -> Vec<String> {
@@ -872,6 +879,21 @@ mod tests {
             Some("--no-commit")
         );
         assert_eq!(select_forge_install_no_commit_flag("Options:\n"), None);
+    }
+
+    #[test]
+    fn provided_project_root_is_canonicalized() {
+        let cwd = std::env::current_dir().unwrap();
+        let dir = tempfile::tempdir_in(&cwd).unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            "[project]\nname='x'\nverity='v'\n[yul]\nsolc='0.8.33'\n",
+        )
+        .unwrap();
+        let relative = root.as_std_path().strip_prefix(&cwd).unwrap().to_path_buf();
+        let relative = Utf8PathBuf::from_path_buf(relative).unwrap();
+        assert!(project_root(Some(relative)).unwrap().is_absolute());
     }
 
     #[test]
