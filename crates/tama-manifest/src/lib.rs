@@ -630,6 +630,12 @@ fn validate_params(params: &[Param], label: &str, owner: &str) -> std::result::R
                 "{label} {index} for `{owner}` type cannot be empty"
             ));
         }
+        if !is_supported_abi_type(&param.ty) {
+            return Err(format!(
+                "{label} {index} for `{owner}` has unsupported ABI type `{}`",
+                param.ty
+            ));
+        }
     }
     Ok(())
 }
@@ -641,8 +647,18 @@ fn validate_event_fields(fields: &[EventField], event: &str) -> std::result::Res
                 "event field {index} for `{event}` type cannot be empty"
             ));
         }
+        if !is_supported_abi_type(&field.ty) {
+            return Err(format!(
+                "event field {index} for `{event}` has unsupported ABI type `{}`",
+                field.ty
+            ));
+        }
     }
     Ok(())
+}
+
+pub fn is_supported_abi_type(ty: &str) -> bool {
+    matches!(ty, "address" | "bool" | "uint256")
 }
 
 #[cfg(test)]
@@ -837,6 +853,22 @@ mod tests {
             empty_event_field.validate(),
             Err(Error::Invalid { message, .. }) if message.contains("event field")
                 && message.contains("type cannot be empty")
+        ));
+
+        let mut unsupported_function_param = manifest();
+        unsupported_function_param.abi.functions[0].inputs[0].ty = "bytes32".to_string();
+        assert!(matches!(
+            unsupported_function_param.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("function input")
+                && message.contains("unsupported ABI type `bytes32`")
+        ));
+
+        let mut unsupported_event_field = manifest();
+        unsupported_event_field.abi.events[0].fields[0].ty = "uint8".to_string();
+        assert!(matches!(
+            unsupported_event_field.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("event field")
+                && message.contains("unsupported ABI type `uint8`")
         ));
 
         let mut empty_storage_type = manifest();

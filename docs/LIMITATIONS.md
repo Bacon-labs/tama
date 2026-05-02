@@ -36,6 +36,7 @@ Counter is a compatibility fixture, not the starter template.
 
 - Windows artifacts and installer behavior.
 - Full Solidity feature parity.
+- ABI types outside the v0.1 supported subset: `uint256`, `address`, and `bool`.
 - Direct execution of arbitrary Verity monorepo Python scripts on Tama projects.
 - Automatic support for nested mappings unless the pinned Verity compiler and Tama manifest adapter expose the required metadata.
 - Arbitrary Yul semantic storage proofs.

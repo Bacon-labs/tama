@@ -923,12 +923,15 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
     for entry in entries {
         match entry.kind.as_str() {
             "constructor" => {
+                validate_abi_params(path, "constructor input", &entry.inputs)?;
                 abi.constructor = Some(Constructor {
                     inputs: entry.inputs.into_iter().map(Param::from).collect(),
                 });
             }
             "function" => {
                 let name = abi_entry_name(path, "function", entry.name)?;
+                validate_abi_params(path, &format!("function `{name}` input"), &entry.inputs)?;
+                validate_abi_params(path, &format!("function `{name}` output"), &entry.outputs)?;
                 let signature = format!(
                     "{}({})",
                     name,
@@ -959,6 +962,7 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
                     )));
                 }
                 let name = abi_entry_name(path, "event", entry.name)?;
+                validate_abi_params(path, &format!("event `{name}` field"), &entry.inputs)?;
                 let signature = format!(
                     "{}({})",
                     name,
@@ -986,6 +990,7 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
             }
             "error" => {
                 let name = abi_entry_name(path, "error", entry.name)?;
+                validate_abi_params(path, &format!("error `{name}` input"), &entry.inputs)?;
                 let signature = format!(
                     "{}({})",
                     name,
@@ -1011,6 +1016,23 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
         }
     }
     Ok(abi)
+}
+
+fn validate_abi_params(path: &Utf8Path, label: &str, params: &[AbiParam]) -> Result<()> {
+    for (index, param) in params.iter().enumerate() {
+        if param.ty.trim().is_empty() {
+            return Err(Error::Adapter(format!(
+                "{label} {index} type cannot be empty in {path}"
+            )));
+        }
+        if !tama_manifest::is_supported_abi_type(&param.ty) {
+            return Err(Error::Adapter(format!(
+                "{label} {index} has unsupported ABI type `{}` in {path}",
+                param.ty
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn abi_entry_name(path: &Utf8Path, kind: &str, name: Option<String>) -> Result<String> {
@@ -2220,6 +2242,17 @@ end proof.CounterProof
         assert!(matches!(
             err,
             Error::Adapter(message) if message.contains("anonymous event")
+        ));
+
+        tama_common::write_string(
+            &path,
+            r#"[{"type":"function","name":"setHash","inputs":[{"name":"hash","type":"bytes32"}],"outputs":[]}]"#,
+        )
+        .unwrap();
+        let err = parse_abi(&path).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Adapter(message) if message.contains("unsupported ABI type `bytes32`")
         ));
     }
 
