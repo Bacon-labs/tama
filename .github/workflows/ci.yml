@@ -633,7 +633,7 @@ jobs:
           test -x "$tmp/home/versions/0.1.0/bin/tamaup"
           test -L "$tmp/home/bin/tama"
           test -L "$tmp/home/bin/tamaup"
-      - name: Shell installer installs from local HTTP server
+      - name: Shell installer installs remote manifest with local artifact
         shell: bash
         run: |
           set -euxo pipefail
@@ -656,7 +656,7 @@ jobs:
                 "artifacts": [
                   {
                     "platform": "linux-x86_64",
-                    "url": "http://127.0.0.1:8765/releases/tama-0.1.0-linux-x86_64.tar.gz",
+                    "url": "file://$tmp/server/releases/tama-0.1.0-linux-x86_64.tar.gz",
                     "sha256": "$sha"
                   }
                 ]
