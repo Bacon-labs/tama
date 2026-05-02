@@ -143,22 +143,18 @@ pub fn scaffold_contract(root: &Utf8Path, name: &str) -> Result<()> {
     ensure_project_relative(&paths.proof)?;
     ensure_project_relative(&paths.test)?;
     let src = root.join(paths.src.join(format!("{name}.lean")));
-    if src.exists() {
-        return Err(Error::AlreadyExists(src));
+    let spec = root.join(paths.spec.join(format!("{name}Spec.lean")));
+    let proof = root.join(paths.proof.join(format!("{name}Proof.lean")));
+    let test = root.join(paths.test.join(format!("{name}.t.sol")));
+    for path in [&src, &spec, &proof, &test] {
+        if path.exists() {
+            return Err(Error::AlreadyExists(path.clone()));
+        }
     }
     write_string(&src, &contract_template(name))?;
-    write_string(
-        &root.join(paths.spec.join(format!("{name}Spec.lean"))),
-        &spec_template(name),
-    )?;
-    write_string(
-        &root.join(paths.proof.join(format!("{name}Proof.lean"))),
-        &proof_template(name),
-    )?;
-    write_string(
-        &root.join(paths.test.join(format!("{name}.t.sol"))),
-        &test_template(name),
-    )?;
+    write_string(&spec, &spec_template(name))?;
+    write_string(&proof, &proof_template(name))?;
+    write_string(&test, &test_template(name))?;
     update_aggregate(root, "TamaSrc.lean", &format!("import src.{name}"))?;
     update_aggregate(root, "TamaSpec.lean", &format!("import spec.{name}Spec"))?;
     update_aggregate(root, "TamaProof.lean", &format!("import proof.{name}Proof"))?;
@@ -712,6 +708,24 @@ mod tests {
             .contains("import src.TipJar"));
         let lock = tama_config::load_lock(&root).unwrap();
         assert!(tama_config::lock_drift(&root, &lock).unwrap().is_empty());
+    }
+
+    #[test]
+    fn new_refuses_to_overwrite_any_existing_scaffold_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        init(&root, InitOptions::default()).unwrap();
+        let existing = root.join("verity/spec/TipJarSpec.lean");
+        write_string(&existing, "user spec\n").unwrap();
+
+        let err = scaffold_contract(&root, "TipJar").unwrap_err();
+
+        assert!(matches!(err, Error::AlreadyExists(path) if path == existing));
+        assert_eq!(read_to_string(&existing).unwrap(), "user spec\n");
+        assert!(!root.join("verity/src/TipJar.lean").exists());
+        assert!(!read_to_string(&root.join("TamaSrc.lean"))
+            .unwrap()
+            .contains("import src.TipJar"));
     }
 
     #[test]
