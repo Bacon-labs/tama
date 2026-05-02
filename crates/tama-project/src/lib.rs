@@ -150,6 +150,9 @@ pub fn scaffold_contract(root: &Utf8Path, name: &str) -> Result<()> {
     update_aggregate(root, "TamaSrc.lean", &format!("import src.{name}"))?;
     update_aggregate(root, "TamaSpec.lean", &format!("import spec.{name}Spec"))?;
     update_aggregate(root, "TamaProof.lean", &format!("import proof.{name}Proof"))?;
+    let mut lock = tama_config::load_lock(root)?;
+    tama_config::update_lock_inputs(root, &mut lock)?;
+    tama_config::write_lock(root, &lock)?;
     Ok(())
 }
 
@@ -672,6 +675,8 @@ mod tests {
         assert!(read_to_string(&root.join("TamaSrc.lean"))
             .unwrap()
             .contains("import src.TipJar"));
+        let lock = tama_config::load_lock(&root).unwrap();
+        assert!(tama_config::lock_drift(&root, &lock).unwrap().is_empty());
     }
 
     #[test]
