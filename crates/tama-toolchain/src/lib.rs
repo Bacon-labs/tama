@@ -163,6 +163,11 @@ pub fn parse_lean_version(output: &str) -> Result<Version> {
     parse_version_with(output, "lean", &re)
 }
 
+pub fn parse_lake_lean_version(output: &str) -> Result<Version> {
+    let re = Regex::new(r"Lean version\s*([0-9]+\.[0-9]+\.[0-9]+)").expect("valid regex");
+    parse_version_with(output, "lake", &re)
+}
+
 fn parse_version_with(output: &str, tool: &str, re: &Regex) -> Result<Version> {
     let raw = re
         .captures(output)
@@ -245,6 +250,13 @@ mod tests {
     fn parses_forge_version() {
         let version = parse_forge_version("forge Version: 1.6.0-v1.7.0").unwrap();
         assert_eq!(version, Version::new(1, 6, 0));
+    }
+
+    #[test]
+    fn parses_lake_embedded_lean_version() {
+        let version =
+            parse_lake_lean_version("Lake version 5.0.0-src+abc123 (Lean version 4.22.0)").unwrap();
+        assert_eq!(version, Version::new(4, 22, 0));
     }
 
     #[test]

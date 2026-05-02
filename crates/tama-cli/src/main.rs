@@ -354,6 +354,12 @@ fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::Doctor
                     &expected,
                     tama_toolchain::parse_lean_version,
                 );
+                mark_version_mismatch(
+                    &mut report,
+                    "lake",
+                    &expected,
+                    tama_toolchain::parse_lake_lean_version,
+                );
             }
         }
         if let Some(config) = &config {
@@ -1694,11 +1700,20 @@ buildDir = ""
     #[test]
     fn doctor_marks_tool_version_mismatch() {
         let mut report = tama_toolchain::DoctorReport {
-            tools: vec![tama_toolchain::ToolStatus::Ok(tama_toolchain::Tool {
-                name: "solc".to_string(),
-                path: "solc".into(),
-                version: Some("Version: 0.8.32+commit.test".to_string()),
-            })],
+            tools: vec![
+                tama_toolchain::ToolStatus::Ok(tama_toolchain::Tool {
+                    name: "solc".to_string(),
+                    path: "solc".into(),
+                    version: Some("Version: 0.8.32+commit.test".to_string()),
+                }),
+                tama_toolchain::ToolStatus::Ok(tama_toolchain::Tool {
+                    name: "lake".to_string(),
+                    path: "lake".into(),
+                    version: Some(
+                        "Lake version 5.0.0-src+abc123 (Lean version 4.29.1)".to_string(),
+                    ),
+                }),
+            ],
             lock_current: None,
             notes: vec![],
         };
@@ -1712,6 +1727,17 @@ buildDir = ""
             &report.tools[0],
             tama_toolchain::ToolStatus::Incompatible { found, expected, .. }
                 if found == "0.8.32" && expected == "0.8.33"
+        ));
+        mark_version_mismatch(
+            &mut report,
+            "lake",
+            "4.22.0",
+            tama_toolchain::parse_lake_lean_version,
+        );
+        assert!(matches!(
+            &report.tools[1],
+            tama_toolchain::ToolStatus::Incompatible { found, expected, .. }
+                if found == "4.29.1" && expected == "4.22.0"
         ));
     }
 
