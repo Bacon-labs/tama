@@ -1,0 +1,30 @@
+name = "counter_fixture"
+version = "0.1.0"
+defaultTargets = ["TamaProof"]
+buildDir = "artifacts/lean"
+
+[[require]]
+name = "verity"
+git = "https://github.com/lfglabs-dev/verity.git"
+rev = "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e"
+
+[[lean_lib]]
+name = "TamaSrc"
+
+[[lean_lib]]
+name = "TamaSpec"
+
+[[lean_lib]]
+name = "TamaProof"
+
+[[lean_lib]]
+name = "src"
+srcDir = "verity"
+
+[[lean_lib]]
+name = "spec"
+srcDir = "verity"
+
+[[lean_lib]]
+name = "proof"
+srcDir = "verity"

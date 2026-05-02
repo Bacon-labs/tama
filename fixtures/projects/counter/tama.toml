@@ -1,0 +1,23 @@
+[project]
+name = "counter-fixture"
+verity = "0.1.0"
+
+[paths]
+src = "verity/src"
+spec = "verity/spec"
+proof = "verity/proof"
+test = "test/verity"
+out = "artifacts"
+generated = "src/generated/verity"
+
+[yul]
+solc = "0.8.33"
+optimizer = true
+optimizer_runs = 200
+evm_version = "cancun"
+metadata_hash = "none"
+
+[trust.allow_axioms]
+"Classical.choice" = "Lean standard classical reasoning accepted for this fixture"
+"propext" = "Lean standard propositional extensionality accepted for this fixture"
+"Quot.sound" = "Lean quotient soundness accepted for this fixture"

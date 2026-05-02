@@ -1,0 +1,7 @@
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.33"
+fs_permissions = [{ access = "read", path = "./artifacts" }]
