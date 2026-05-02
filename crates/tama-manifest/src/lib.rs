@@ -173,12 +173,17 @@ pub struct ArtifactPaths {
 
 impl ContractManifest {
     pub fn load(path: &Utf8Path) -> Result<Self> {
+        let manifest = Self::load_unvalidated(path)?;
+        manifest.validate()?;
+        Ok(manifest)
+    }
+
+    pub fn load_unvalidated(path: &Utf8Path) -> Result<Self> {
         let text = tama_common::read_to_string(path)?;
         let manifest: Self = serde_json::from_str(&text).map_err(|source| Error::Json {
             path: path.to_owned(),
             source,
         })?;
-        manifest.validate()?;
         Ok(manifest)
     }
 

@@ -112,7 +112,7 @@ fn load_manifests(root: &Utf8Path, manifest_dir: &Utf8Path) -> Result<Vec<Contra
         let path = Utf8PathBuf::from_path_buf(entry.path())
             .map_err(|path| tama_common::Error::NonUtf8Path(path.display().to_string()))?;
         if path.extension() == Some("json") {
-            manifests.push(ContractManifest::load(&path)?);
+            manifests.push(ContractManifest::load_unvalidated(&path)?);
         }
     }
     Ok(manifests)
@@ -730,6 +730,68 @@ interface Example {
         assert!(solidity_declarations(text, "function").contains("set(uint256,bytes32[])"));
         assert!(solidity_declarations(text, "event").contains("Transfer(address,address,uint256)"));
         assert!(solidity_declarations(text, "error").contains("Bad(address)"));
+    }
+
+    #[test]
+    fn audit_reports_corrupt_selector_as_issue_instead_of_load_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        write_project_config(&root);
+        std::fs::create_dir_all(root.join("artifacts/manifest")).unwrap();
+        std::fs::create_dir_all(root.join("src/generated/verity")).unwrap();
+        tama_common::write_generated(
+            &root.join("src/generated/verity/CounterIface.sol"),
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+interface CounterIface {
+    function getCount() external view returns (uint256);
+}
+"#,
+        )
+        .unwrap();
+        let mut manifest = counter_manifest();
+        manifest.abi.functions.push(tama_manifest::Function {
+            name: "getCount".to_string(),
+            signature: "getCount()".to_string(),
+            selector: "0x00000000".to_string(),
+            visibility: "external".to_string(),
+            mutability: "view".to_string(),
+            inputs: vec![],
+            outputs: vec![tama_manifest::Param {
+                name: "".to_string(),
+                ty: "uint256".to_string(),
+            }],
+        });
+        let text = serde_json::to_string_pretty(&manifest).unwrap();
+        tama_common::write_string(&root.join("artifacts/manifest/Counter.json"), &text).unwrap();
+
+        let report = run(
+            &root,
+            AuditOptions {
+                check: Some(Check::Selectors),
+                deny_warnings: false,
+            },
+        )
+        .unwrap();
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_SELECTOR_INVALID"));
+    }
+
+    fn write_project_config(root: &Utf8Path) {
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            r#"[project]
+name = "test"
+verity = "0.1.0"
+
+[yul]
+solc = "0.8.33"
+"#,
+        )
+        .unwrap();
     }
 
     fn test_config() -> tama_config::TamaConfig {
