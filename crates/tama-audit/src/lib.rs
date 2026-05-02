@@ -89,7 +89,7 @@ pub fn run(root: &Utf8Path, opts: AuditOptions) -> Result<AuditReport> {
         match check {
             Check::Structure => structure(root, &config, &manifests, &mut issues),
             Check::Selectors => selectors(root, &manifests, &mut issues),
-            Check::StorageLayout => storage(&manifests, &mut issues),
+            Check::StorageLayout => storage(root, &config, &manifests, &mut issues),
             Check::Coverage => coverage(root, &manifests, &mut issues),
             Check::TrustBoundary => trust(root, &config, &manifests, &mut issues),
         }
@@ -595,7 +595,32 @@ fn canonical_solidity_param_types(params: &str) -> String {
         .join(",")
 }
 
-fn storage(manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
+fn storage(
+    root: &Utf8Path,
+    config: &tama_config::TamaConfig,
+    manifests: &[ContractManifest],
+    issues: &mut Vec<Issue>,
+) {
+    storage_entries(manifests, issues);
+    let layout_path = config.paths.out.join("layout-report.json");
+    let layout_abs = root.join(&layout_path);
+    let layout = if layout_abs.is_file() {
+        load_layout_report(&layout_abs, &layout_path, issues)
+    } else {
+        None
+    };
+    for manifest in manifests {
+        check_layout_report(
+            manifest,
+            &layout_path,
+            layout.as_ref(),
+            !layout_abs.is_file(),
+            issues,
+        );
+    }
+}
+
+fn storage_entries(manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
     for manifest in manifests {
         let mut fixed = Vec::<(&tama_manifest::StorageEntry, u32)>::new();
         for entry in &manifest.storage {
@@ -655,6 +680,206 @@ fn storage(manifests: &[ContractManifest], issues: &mut Vec<Issue>) {
                 ));
             }
         }
+    }
+}
+
+fn load_layout_report(
+    abs: &Utf8Path,
+    rel: &Utf8Path,
+    issues: &mut Vec<Issue>,
+) -> Option<serde_json::Value> {
+    let text = match tama_common::read_to_string(abs) {
+        Ok(text) => text,
+        Err(err) => {
+            issues.push(issue(
+                "storage-layout",
+                None,
+                "TAMA_STORAGE_LAYOUT_REPORT_INVALID",
+                format!("could not read layout report {rel}: {err}"),
+                Some(rel.to_owned()),
+            ));
+            return None;
+        }
+    };
+    match serde_json::from_str(&text) {
+        Ok(value) => Some(value),
+        Err(err) => {
+            issues.push(issue(
+                "storage-layout",
+                None,
+                "TAMA_STORAGE_LAYOUT_REPORT_INVALID",
+                format!("could not parse layout report {rel}: {err}"),
+                Some(rel.to_owned()),
+            ));
+            None
+        }
+    }
+}
+
+fn check_layout_report(
+    manifest: &ContractManifest,
+    layout_path: &Utf8Path,
+    layout: Option<&serde_json::Value>,
+    layout_missing: bool,
+    issues: &mut Vec<Issue>,
+) {
+    if manifest.storage.is_empty() {
+        return;
+    }
+    let Some(layout) = layout else {
+        if layout_missing {
+            issues.push(issue(
+                "storage-layout",
+                Some(&manifest.contract),
+                "TAMA_STORAGE_LAYOUT_REPORT_MISSING",
+                format!("layout report is missing: {layout_path}"),
+                Some(layout_path.to_owned()),
+            ));
+        }
+        return;
+    };
+    let Some(contracts) = layout
+        .get("contracts")
+        .and_then(serde_json::Value::as_array)
+    else {
+        issues.push(issue(
+            "storage-layout",
+            Some(&manifest.contract),
+            "TAMA_STORAGE_LAYOUT_REPORT_INVALID",
+            "layout report is missing contracts array",
+            Some(layout_path.to_owned()),
+        ));
+        return;
+    };
+    let Some(contract) = contracts.iter().find(|entry| {
+        entry.get("contract").and_then(serde_json::Value::as_str) == Some(&manifest.contract)
+    }) else {
+        issues.push(issue(
+            "storage-layout",
+            Some(&manifest.contract),
+            "TAMA_STORAGE_LAYOUT_REPORT_CONTRACT",
+            format!(
+                "layout report does not contain contract `{}`",
+                manifest.contract
+            ),
+            Some(layout_path.to_owned()),
+        ));
+        return;
+    };
+    let Some(fields) = contract.get("fields").and_then(serde_json::Value::as_array) else {
+        issues.push(issue(
+            "storage-layout",
+            Some(&manifest.contract),
+            "TAMA_STORAGE_LAYOUT_REPORT_INVALID",
+            format!(
+                "layout report entry for `{}` is missing fields array",
+                manifest.contract
+            ),
+            Some(layout_path.to_owned()),
+        ));
+        return;
+    };
+    let fields = fields
+        .iter()
+        .filter_map(|field| {
+            field
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(|name| (name, field))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for entry in &manifest.storage {
+        let Some(field) = fields.get(entry.name.as_str()) else {
+            issues.push(issue(
+                "storage-layout",
+                Some(&manifest.contract),
+                "TAMA_STORAGE_LAYOUT_REPORT_FIELD",
+                format!("layout report is missing storage field `{}`", entry.name),
+                Some(layout_path.to_owned()),
+            ));
+            continue;
+        };
+        if let Some(expected) = parse_hex_slot_u64(&entry.slot) {
+            match field
+                .get("canonicalSlot")
+                .and_then(serde_json::Value::as_u64)
+            {
+                Some(actual) if expected == actual => {}
+                Some(actual) => issues.push(issue(
+                    "storage-layout",
+                    Some(&manifest.contract),
+                    "TAMA_STORAGE_LAYOUT_REPORT_SLOT",
+                    format!(
+                        "layout report field `{}` slot mismatch: manifest has {}, report has {}",
+                        entry.name, entry.slot, actual
+                    ),
+                    Some(layout_path.to_owned()),
+                )),
+                None => issues.push(issue(
+                    "storage-layout",
+                    Some(&manifest.contract),
+                    "TAMA_STORAGE_LAYOUT_REPORT_SLOT",
+                    format!(
+                        "layout report field `{}` is missing canonicalSlot",
+                        entry.name
+                    ),
+                    Some(layout_path.to_owned()),
+                )),
+            }
+        }
+        let Some((layout_ty, layout_encoding)) = layout_field_shape(field.get("type")) else {
+            issues.push(issue(
+                "storage-layout",
+                Some(&manifest.contract),
+                "TAMA_STORAGE_LAYOUT_REPORT_TYPE",
+                format!(
+                    "layout report field `{}` has unsupported type shape",
+                    entry.name
+                ),
+                Some(layout_path.to_owned()),
+            ));
+            continue;
+        };
+        if !storage_shape_matches(entry, layout_ty, layout_encoding) {
+            issues.push(issue(
+                "storage-layout",
+                Some(&manifest.contract),
+                "TAMA_STORAGE_LAYOUT_REPORT_TYPE",
+                format!(
+                    "layout report field `{}` type mismatch: manifest has {} ({}) report has {} ({})",
+                    entry.name, entry.ty, entry.encoding, layout_ty, layout_encoding
+                ),
+                Some(layout_path.to_owned()),
+            ));
+        }
+    }
+}
+
+fn parse_hex_slot_u64(slot: &str) -> Option<u64> {
+    u64::from_str_radix(slot.strip_prefix("0x")?, 16).ok()
+}
+
+fn layout_field_shape(value: Option<&serde_json::Value>) -> Option<(&str, &str)> {
+    match value?.get("kind").and_then(serde_json::Value::as_str)? {
+        "address" => Some(("address", "value")),
+        "uint256" => Some(("uint256", "value")),
+        "mapping" => Some(("mapping", "mapping")),
+        kind => Some((kind, kind)),
+    }
+}
+
+fn storage_shape_matches(
+    entry: &tama_manifest::StorageEntry,
+    layout_ty: &str,
+    layout_encoding: &str,
+) -> bool {
+    if entry.encoding != layout_encoding {
+        return false;
+    }
+    if layout_encoding == "mapping" {
+        entry.ty.starts_with("mapping(")
+    } else {
+        entry.ty == layout_ty
     }
 }
 
@@ -2240,7 +2465,7 @@ interface CounterIface {
             },
         ];
         let mut issues = Vec::new();
-        storage(&[manifest], &mut issues);
+        storage_entries(&[manifest], &mut issues);
         let codes = issues
             .iter()
             .map(|issue| issue.code.as_str())
@@ -2249,6 +2474,71 @@ interface CounterIface {
         assert!(codes.contains("TAMA_STORAGE_ENCODING"));
         assert!(codes.contains("TAMA_STORAGE_DUPLICATE"));
         assert!(codes.contains("TAMA_STORAGE_WIDTH"));
+    }
+
+    #[test]
+    fn storage_reports_layout_report_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        let mut manifest = counter_manifest();
+        manifest.storage = vec![tama_manifest::StorageEntry {
+            name: "count".to_string(),
+            ty: "uint256".to_string(),
+            slot: "0x00".to_string(),
+            offset: 0,
+            width_bytes: 32,
+            encoding: "value".to_string(),
+        }];
+        tama_common::write_string(
+            &root.join("artifacts/layout-report.json"),
+            r#"{"contracts":[{"contract":"Counter","fields":[{"name":"count","canonicalSlot":1,"type":{"kind":"address"}}]}]}"#,
+        )
+        .unwrap();
+
+        let mut issues = Vec::new();
+        storage(&root, &config, &[manifest.clone()], &mut issues);
+        let codes = issues
+            .iter()
+            .map(|issue| issue.code.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(codes.contains("TAMA_STORAGE_LAYOUT_REPORT_SLOT"));
+        assert!(codes.contains("TAMA_STORAGE_LAYOUT_REPORT_TYPE"));
+
+        tama_common::write_string(
+            &root.join("artifacts/layout-report.json"),
+            r#"{"contracts":[{"contract":"Counter","fields":[{"name":"count","canonicalSlot":0,"type":{"kind":"uint256"}}]}]}"#,
+        )
+        .unwrap();
+
+        let mut clean_issues = Vec::new();
+        storage(&root, &config, &[manifest], &mut clean_issues);
+        assert!(!clean_issues
+            .iter()
+            .any(|issue| issue.code.starts_with("TAMA_STORAGE_LAYOUT_REPORT_")));
+    }
+
+    #[test]
+    fn storage_requires_layout_report_for_storage_contracts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        let mut manifest = counter_manifest();
+        manifest.storage = vec![tama_manifest::StorageEntry {
+            name: "count".to_string(),
+            ty: "uint256".to_string(),
+            slot: "0x00".to_string(),
+            offset: 0,
+            width_bytes: 32,
+            encoding: "value".to_string(),
+        }];
+
+        let mut issues = Vec::new();
+        storage(&root, &config, &[manifest], &mut issues);
+
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_STORAGE_LAYOUT_REPORT_MISSING"));
     }
 
     fn write_project_config(root: &Utf8Path) {

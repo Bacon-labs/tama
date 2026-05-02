@@ -6,7 +6,7 @@ Checks:
 
 - `structure`: required files, aggregate imports, generated bridge headers, manifest artifact paths, and bytecode hash drift.
 - `selectors`: function selectors, error selectors, event topic0, generated interface signatures, and generated Yul dispatcher cases.
-- `storage-layout`: manifest storage declarations, duplicate slots, fixed-slot overlap, valid encodings, and available compiler layout reports.
+- `storage-layout`: manifest storage declarations, duplicate slots, fixed-slot overlap, valid encodings, and compiler layout report drift for contracts with storage.
 - `coverage`: every public invariant and postcondition has mirror or proof-only coverage; proof-only entries require a reason.
 - Mirror coverage must point to a property-shaped Foundry symbol: `testFuzz*` or `invariant_*`.
 - Mirror coverage files must live under Foundry's configured test directory.

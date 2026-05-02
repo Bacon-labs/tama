@@ -246,6 +246,17 @@ jobs:
           PY
           expect_audit_failure "$project" storage-layout
 
+          project="$(copy_case layout-report-drift)"
+          python3 - "$project/artifacts/layout-report.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["contracts"][0]["fields"][0]["canonicalSlot"] += 1
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" storage-layout
+
           project="$(copy_case missing-mirror)"
           python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
           import json
