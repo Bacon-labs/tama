@@ -16,12 +16,26 @@ env:
 
 jobs:
   verify:
-    name: Verify release
-    runs-on: ubuntu-22.04
+    name: Verify release ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: msrv
+            os: ubuntu-22.04
+            toolchain: 1.81.0
+          - name: stable-linux
+            os: ubuntu-22.04
+            toolchain: stable
+          - name: stable-macos-arm64
+            os: macos-14
+            toolchain: stable
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ matrix.toolchain }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
