@@ -103,7 +103,6 @@ jobs:
           counter="$PWD/fixtures/projects/counter"
           git -C "$counter" init
           (cd "$counter" && lake update)
-          (cd "$counter" && forge install foundry-rs/forge-std@v1.16.1 --shallow)
           tama --root "$counter" doctor --fix
           tama --root "$counter" doctor
           tama --root "$counter" check

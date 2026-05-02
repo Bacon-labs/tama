@@ -3,9 +3,25 @@ pragma solidity ^0.8.20;
 
 import {CounterDeployer} from "../../src/generated/verity/CounterDeployer.sol";
 import {CounterIface} from "../../src/generated/verity/CounterIface.sol";
-import {StdInvariant} from "forge-std/StdInvariant.sol";
 
-contract CounterTest is StdInvariant {
+abstract contract InvariantTargets {
+    struct FuzzSelector {
+        address addr;
+        bytes4[] selectors;
+    }
+
+    FuzzSelector[] private targetedSelectors;
+
+    function targetSelector(FuzzSelector memory selector) internal {
+        targetedSelectors.push(selector);
+    }
+
+    function targetSelectors() public view returns (FuzzSelector[] memory selectors) {
+        selectors = targetedSelectors;
+    }
+}
+
+contract CounterTest is InvariantTargets {
     CounterIface internal invariantCounter;
     uint256 internal invariantModel;
 
