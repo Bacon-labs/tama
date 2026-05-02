@@ -60,7 +60,7 @@ Useful flags:
 --contract <Name>
 ```
 
-`--no-solc` and `--no-forge` are local development escape hatches and are not release gates.
+`--no-solc` and `--no-forge` are local development escape hatches and are not release gates. `--no-solc` removes stale downstream solc JSON, bytecode, and generated bridge files for the selected contracts while leaving fresh Yul and manifests.
 
 ## `tama test [forge-args...]`
 

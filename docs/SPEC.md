@@ -475,6 +475,12 @@ Useful flags:
 --contract <Name>   Build one contract where supported by the compiler
 ```
 
+When `--no-solc` is used, Tama must remove downstream generated artifacts for
+the selected contracts: solc JSON, bytecode files, and generated Solidity
+bridges. The manifest remains, but `bytecode_hash` is `null`, so `inspect
+bytecode`, bridge-dependent audits, and release gates cannot accidentally pass
+using stale outputs from an earlier full build.
+
 ### `tama test [forge-args...]`
 
 Pure syntactic sugar for:

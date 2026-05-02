@@ -141,7 +141,17 @@ impl Pipeline {
         generate_trust_probe(&self.root, &config, &manifests)?;
         for manifest in &mut manifests {
             manifest.validate()?;
+            clear_downstream_artifacts(&self.root, manifest)?;
             if opts.no_solc {
+                manifest.write_pretty(
+                    &self.root.join(
+                        config
+                            .paths
+                            .out
+                            .join("manifest")
+                            .join(format!("{}.json", manifest.contract)),
+                    ),
+                )?;
                 continue;
             }
             compile_yul_standard_json(&self.root, &config, manifest)?;
@@ -407,6 +417,41 @@ pub fn generate_bridge(root: &Utf8Path, manifest: &ContractManifest) -> Result<(
         &deployer_sol(manifest, &bytecode),
     )?;
     Ok(())
+}
+
+fn clear_downstream_artifacts(root: &Utf8Path, manifest: &mut ContractManifest) -> Result<()> {
+    for path in [
+        &manifest.artifacts.creation_bytecode,
+        &manifest.artifacts.runtime_bytecode,
+        &manifest.artifacts.solc_input,
+        &manifest.artifacts.solc_output,
+    ] {
+        remove_file_if_exists(&root.join(path))?;
+    }
+    for path in [&manifest.artifacts.interface, &manifest.artifacts.deployer] {
+        remove_generated_file_if_exists(&root.join(path))?;
+    }
+    manifest.artifacts.bytecode_hash = None;
+    Ok(())
+}
+
+fn remove_file_if_exists(path: &Utf8Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(tama_common::io_error(path.to_owned(), source).into()),
+    }
+}
+
+fn remove_generated_file_if_exists(path: &Utf8Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if tama_common::has_generated_header(path)? {
+        remove_file_if_exists(path)
+    } else {
+        Err(tama_common::Error::GeneratedFileModified(path.to_owned()).into())
+    }
 }
 
 fn interface_sol(manifest: &ContractManifest) -> String {
@@ -1301,6 +1346,58 @@ mod tests {
     }
 
     #[test]
+    fn downstream_artifact_cleanup_removes_stale_generated_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut manifest = test_manifest("Counter");
+        manifest.artifacts.bytecode_hash = Some("old".to_string());
+
+        tama_common::write_string(&root.join(&manifest.artifacts.yul), "{ }\n").unwrap();
+        tama_common::write_string(&root.join(&manifest.artifacts.creation_bytecode), "old\n")
+            .unwrap();
+        tama_common::write_string(&root.join(&manifest.artifacts.runtime_bytecode), "old\n")
+            .unwrap();
+        tama_common::write_string(&root.join(&manifest.artifacts.solc_input), "{}\n").unwrap();
+        tama_common::write_string(&root.join(&manifest.artifacts.solc_output), "{}\n").unwrap();
+        tama_common::write_generated(
+            &root.join(&manifest.artifacts.interface),
+            "interface Old {}\n",
+        )
+        .unwrap();
+        tama_common::write_generated(&root.join(&manifest.artifacts.deployer), "library Old {}\n")
+            .unwrap();
+
+        clear_downstream_artifacts(&root, &mut manifest).unwrap();
+        assert!(root.join(&manifest.artifacts.yul).is_file());
+        assert!(!root.join(&manifest.artifacts.creation_bytecode).exists());
+        assert!(!root.join(&manifest.artifacts.runtime_bytecode).exists());
+        assert!(!root.join(&manifest.artifacts.solc_input).exists());
+        assert!(!root.join(&manifest.artifacts.solc_output).exists());
+        assert!(!root.join(&manifest.artifacts.interface).exists());
+        assert!(!root.join(&manifest.artifacts.deployer).exists());
+        assert_eq!(manifest.artifacts.bytecode_hash, None);
+    }
+
+    #[test]
+    fn downstream_artifact_cleanup_refuses_hand_edited_bridge() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut manifest = test_manifest("Counter");
+        tama_common::write_string(
+            &root.join(&manifest.artifacts.interface),
+            "interface HandEdited {}\n",
+        )
+        .unwrap();
+
+        let err = clear_downstream_artifacts(&root, &mut manifest).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Common(tama_common::Error::GeneratedFileModified(_))
+        ));
+        assert!(root.join(&manifest.artifacts.interface).is_file());
+    }
+
+    #[test]
     fn obligation_metadata_is_extracted_from_proof_file() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -1520,6 +1617,36 @@ TAMA_AXIOMS_END proof.CounterProof.increment_post
                 metadata_hash: "none".to_string(),
             },
             trust: tama_config::TrustConfig::default(),
+        }
+    }
+
+    fn test_manifest(contract: &str) -> ContractManifest {
+        ContractManifest {
+            schema: SCHEMA.to_string(),
+            contract: contract.to_string(),
+            source: SourcePaths {
+                implementation: format!("verity/src/{contract}.lean").into(),
+                spec: format!("verity/spec/{contract}Spec.lean").into(),
+                proof: format!("verity/proof/{contract}Proof.lean").into(),
+            },
+            lean: LeanModules {
+                implementation_module: format!("src.{contract}"),
+                spec_module: format!("spec.{contract}Spec"),
+                proof_module: format!("proof.{contract}Proof"),
+            },
+            abi: Abi::default(),
+            storage: vec![],
+            obligations: vec![],
+            artifacts: ArtifactPaths {
+                yul: format!("artifacts/yul/{contract}.yul").into(),
+                creation_bytecode: format!("artifacts/bytecode/{contract}.bin").into(),
+                runtime_bytecode: format!("artifacts/bytecode/{contract}.runtime.bin").into(),
+                bytecode_hash: None,
+                solc_input: format!("artifacts/solc-json/{contract}.input.json").into(),
+                solc_output: format!("artifacts/solc-json/{contract}.output.json").into(),
+                interface: format!("src/generated/verity/{contract}Iface.sol").into(),
+                deployer: format!("src/generated/verity/{contract}Deployer.sol").into(),
+            },
         }
     }
 }
