@@ -6,7 +6,7 @@ Network access occurs only when the user runs commands that explicitly need exte
 
 - `tamaup install` and `tamaup self update` download the signed release manifest and selected release archive.
 - `installer/install.sh` downloads the signed release manifest, selected archive, and bootstrap assets unless `--offline --manifest-file` is used.
-- `tama init` runs `lake update` and `forge install foundry-rs/forge-std` unless `--offline` is used.
+- `tama init` runs `lake update` and a pinned `forge install foundry-rs/forge-std@v1.16.1 --shallow` unless `--offline` is used.
 - `tama install` validates remote Tama packages and runs `lake update`.
 - `tama remove` runs `lake update` after editing dependencies.
 - `tama update` runs `lake update` and `forge update` unless `--no-lake` and `--no-forge` are used.

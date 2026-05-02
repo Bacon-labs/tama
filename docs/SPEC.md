@@ -414,7 +414,7 @@ Steps:
 6. Write `lean-toolchain` pinned to the compatible Lean version.
 7. Create `verity/src`, `verity/spec`, `verity/proof`, `test/verity`, `src/generated/verity`.
 8. Generate the `ERC20Lite` starter across implementation, spec, proof, bridge, manifest, and mirror test layers.
-9. Install `forge-std` using Foundry.
+9. Install pinned `forge-std` using Foundry as a git submodule. Tama may pass `--shallow` to reduce download size, but must not pass `--no-git`.
 10. Pin the Verity Lean dependency in `lakefile.toml` and `lake-manifest.json`.
 11. Print next steps.
 

@@ -5,6 +5,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use clap::{ArgAction, Args, Parser, Subcommand};
 
 const LAKE_PACKAGE_CACHE_ENV: &str = "TAMA_LAKE_PACKAGE_CACHE";
+const FORGE_STD_DEPENDENCY: &str = "foundry-rs/forge-std@v1.16.1";
 
 #[derive(Debug, Parser)]
 #[command(name = "tama", version, about = "Verity developer toolchain")]
@@ -428,10 +429,8 @@ fn finalize_init(root: &Utf8PathBuf, offline: bool) -> Result<(), String> {
     }
     run_lake_update(root)?;
     ensure_git_worktree(root)?;
-    let mut forge_args = vec!["install", "foundry-rs/forge-std"];
-    if let Some(flag) = forge_install_no_commit_flag()? {
-        forge_args.push(flag);
-    }
+    let mut forge_args = vec!["install", FORGE_STD_DEPENDENCY];
+    forge_args.extend(forge_install_optional_flags()?);
     run_tool(root, "forge", &forge_args)?;
     refresh_lock(root)
 }
@@ -776,7 +775,7 @@ fn is_git_worktree(root: &Utf8PathBuf) -> Result<bool, String> {
     Ok(output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true")
 }
 
-fn forge_install_no_commit_flag() -> Result<Option<&'static str>, String> {
+fn forge_install_optional_flags() -> Result<Vec<&'static str>, String> {
     let output = ProcessCommand::new("forge")
         .args(["install", "--help"])
         .output()
@@ -786,24 +785,27 @@ fn forge_install_no_commit_flag() -> Result<Option<&'static str>, String> {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    Ok(select_forge_install_no_commit_flag(&help))
+    Ok(select_forge_install_optional_flags(&help))
 }
 
-fn select_forge_install_no_commit_flag(help: &str) -> Option<&'static str> {
-    if help.contains("--no-commit") {
-        Some("--no-commit")
-    } else {
-        None
+fn select_forge_install_optional_flags(help: &str) -> Vec<&'static str> {
+    let mut flags = Vec::new();
+    if help.contains("--shallow") {
+        flags.push("--shallow");
     }
+    if help.contains("--no-commit") {
+        flags.push("--no-commit");
+    }
+    flags
 }
 
 fn offline_init_instructions() -> [&'static str; 5] {
     [
-        "offline init: skipped `lake update`, `git init` if needed, and `forge install foundry-rs/forge-std`.",
+        "offline init: skipped `lake update`, `git init` if needed, and pinned `forge install`.",
         "when network access is available, run:",
         "  lake update",
         "  git init  # if this project is not already inside a Git worktree",
-        "  forge install foundry-rs/forge-std",
+        "  forge install foundry-rs/forge-std@v1.16.1 --shallow",
     ]
 }
 
@@ -967,21 +969,24 @@ mod tests {
         let instructions = offline_init_instructions().join("\n");
         assert!(instructions.contains("lake update"));
         assert!(instructions.contains("git init"));
-        assert!(instructions.contains("forge install foundry-rs/forge-std"));
+        assert!(instructions.contains("forge install foundry-rs/forge-std@v1.16.1 --shallow"));
         assert!(!instructions.contains("--no-git"));
     }
 
     #[test]
     fn forge_install_flag_preserves_submodule_installs() {
         assert_eq!(
-            select_forge_install_no_commit_flag("Options:\n      --no-git\n      --commit\n"),
-            None
+            select_forge_install_optional_flags("Options:\n      --no-git\n      --commit\n"),
+            Vec::<&'static str>::new()
         );
         assert_eq!(
-            select_forge_install_no_commit_flag("Options:\n      --no-commit\n"),
-            Some("--no-commit")
+            select_forge_install_optional_flags("Options:\n      --shallow\n      --no-commit\n"),
+            vec!["--shallow", "--no-commit"]
         );
-        assert_eq!(select_forge_install_no_commit_flag("Options:\n"), None);
+        assert_eq!(
+            select_forge_install_optional_flags("Options:\n      --shallow\n"),
+            vec!["--shallow"]
+        );
     }
 
     #[test]
