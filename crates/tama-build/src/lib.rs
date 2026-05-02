@@ -386,7 +386,7 @@ pub fn compile_yul_standard_json(
     let runtime_path = root.join(&manifest.artifacts.runtime_bytecode);
     tama_common::write_string(&creation_path, &(creation.clone() + "\n"))?;
     tama_common::write_string(&runtime_path, &(runtime + "\n"))?;
-    manifest.artifacts.bytecode_hash = Some(tama_common::sha256_bytes(creation.as_bytes()));
+    manifest.artifacts.bytecode_hash = Some(tama_common::sha256_file(&creation_path)?);
     manifest.write_pretty(
         &root.join(
             config

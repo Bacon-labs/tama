@@ -574,6 +574,9 @@ Checks project layout sanity:
 
 - all contracts have expected implementation/spec/proof/test file names;
 - generated bridge files correspond to manifests;
+- Yul, solc JSON, bytecode, and generated bridge artifacts referenced by each
+  manifest exist;
+- manifest `bytecode_hash` values match the creation bytecode file contents;
 - configured paths exist;
 - mirror test path is under Foundry's test tree;
 - manifests are present and schema-compatible.

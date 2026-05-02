@@ -186,6 +186,10 @@ fn structure(
             &manifest.source.spec,
             &manifest.source.proof,
             &manifest.artifacts.yul,
+            &manifest.artifacts.creation_bytecode,
+            &manifest.artifacts.runtime_bytecode,
+            &manifest.artifacts.solc_input,
+            &manifest.artifacts.solc_output,
             &manifest.artifacts.interface,
             &manifest.artifacts.deployer,
         ] {
@@ -199,6 +203,7 @@ fn structure(
                 ));
             }
         }
+        check_bytecode_hash(root, manifest, issues);
         let test_path = config
             .paths
             .test
@@ -231,6 +236,49 @@ fn structure(
                 ));
             }
         }
+    }
+}
+
+fn check_bytecode_hash(root: &Utf8Path, manifest: &ContractManifest, issues: &mut Vec<Issue>) {
+    let path = root.join(&manifest.artifacts.creation_bytecode);
+    if !path.is_file() {
+        return;
+    }
+    let Some(expected) = &manifest.artifacts.bytecode_hash else {
+        issues.push(issue(
+            "structure",
+            Some(&manifest.contract),
+            "TAMA_STRUCTURE_BYTECODE_HASH",
+            format!(
+                "manifest is missing bytecode_hash for {}",
+                manifest.artifacts.creation_bytecode
+            ),
+            Some(manifest.artifacts.creation_bytecode.clone()),
+        ));
+        return;
+    };
+    match tama_common::sha256_file(&path) {
+        Ok(actual) if actual == *expected => {}
+        Ok(actual) => issues.push(issue(
+            "structure",
+            Some(&manifest.contract),
+            "TAMA_STRUCTURE_BYTECODE_HASH",
+            format!(
+                "bytecode_hash mismatch for {}: manifest has {expected}, file has {actual}",
+                manifest.artifacts.creation_bytecode
+            ),
+            Some(manifest.artifacts.creation_bytecode.clone()),
+        )),
+        Err(err) => issues.push(issue(
+            "structure",
+            Some(&manifest.contract),
+            "TAMA_STRUCTURE_BYTECODE_HASH",
+            format!(
+                "could not hash bytecode file {}: {err}",
+                manifest.artifacts.creation_bytecode
+            ),
+            Some(manifest.artifacts.creation_bytecode.clone()),
+        )),
     }
 }
 
@@ -1425,6 +1473,35 @@ mod tests {
     }
 
     #[test]
+    fn structure_reports_bytecode_hash_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        let mut manifest = counter_manifest();
+        write_complete_structure_fixture(&root, &config, &mut manifest);
+
+        let mut clean_issues = Vec::new();
+        structure(&root, &config, &[manifest.clone()], &mut clean_issues);
+        assert!(!clean_issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_STRUCTURE_BYTECODE_HASH"));
+
+        manifest.artifacts.bytecode_hash = Some("deadbeef".to_string());
+        let mut drift_issues = Vec::new();
+        structure(&root, &config, &[manifest.clone()], &mut drift_issues);
+        assert!(drift_issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_STRUCTURE_BYTECODE_HASH"));
+
+        manifest.artifacts.bytecode_hash = None;
+        let mut missing_issues = Vec::new();
+        structure(&root, &config, &[manifest], &mut missing_issues);
+        assert!(missing_issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_STRUCTURE_BYTECODE_HASH"));
+    }
+
+    #[test]
     fn trust_fails_when_probe_is_missing_for_public_obligation() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -1887,5 +1964,52 @@ solc = "0.8.33"
                 deployer: "src/generated/verity/CounterDeployer.sol".into(),
             },
         }
+    }
+
+    fn write_complete_structure_fixture(
+        root: &Utf8Path,
+        config: &tama_config::TamaConfig,
+        manifest: &mut ContractManifest,
+    ) {
+        for dir in [
+            &config.paths.src,
+            &config.paths.spec,
+            &config.paths.proof,
+            &config.paths.test,
+            &config.paths.generated,
+            &config.paths.out,
+            &config.paths.out.join("yul"),
+            &config.paths.out.join("bytecode"),
+            &config.paths.out.join("solc-json"),
+        ] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        tama_common::write_string(&root.join(&manifest.source.implementation), "").unwrap();
+        tama_common::write_string(&root.join(&manifest.source.spec), "").unwrap();
+        tama_common::write_string(&root.join(&manifest.source.proof), "").unwrap();
+        tama_common::write_string(&root.join("test/verity/Counter.t.sol"), "").unwrap();
+        tama_common::write_string(&root.join(&manifest.artifacts.yul), "{ }\n").unwrap();
+        tama_common::write_string(&root.join(&manifest.artifacts.creation_bytecode), "6000\n")
+            .unwrap();
+        tama_common::write_string(&root.join(&manifest.artifacts.runtime_bytecode), "6000\n")
+            .unwrap();
+        tama_common::write_string(&root.join(&manifest.artifacts.solc_input), "{}\n").unwrap();
+        tama_common::write_string(&root.join(&manifest.artifacts.solc_output), "{}\n").unwrap();
+        tama_common::write_generated(&root.join(&manifest.artifacts.interface), "").unwrap();
+        tama_common::write_generated(&root.join(&manifest.artifacts.deployer), "").unwrap();
+        tama_common::write_string(&root.join("TamaSrc.lean"), "import src.Counter\n").unwrap();
+        tama_common::write_string(
+            &root.join("TamaSpec.lean"),
+            "import TamaSrc\nimport spec.CounterSpec\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("TamaProof.lean"),
+            "import TamaSpec\nimport proof.CounterProof\n",
+        )
+        .unwrap();
+        manifest.artifacts.bytecode_hash = Some(
+            tama_common::sha256_file(&root.join(&manifest.artifacts.creation_bytecode)).unwrap(),
+        );
     }
 }
