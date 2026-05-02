@@ -45,13 +45,43 @@ pub enum Check {
 }
 
 impl Check {
-    fn as_str(self) -> &'static str {
+    pub fn all() -> [Check; 5] {
+        [
+            Check::Structure,
+            Check::Selectors,
+            Check::StorageLayout,
+            Check::Coverage,
+            Check::TrustBoundary,
+        ]
+    }
+
+    pub fn as_str(self) -> &'static str {
         match self {
             Check::Structure => "structure",
             Check::Selectors => "selectors",
             Check::StorageLayout => "storage-layout",
             Check::Coverage => "coverage",
             Check::TrustBoundary => "trust-boundary",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Check::Structure => {
+                "Project layout, generated artifact paths, bridge headers, and bytecode hashes"
+            }
+            Check::Selectors => {
+                "ABI selectors/topics, generated Solidity declarations, and Yul dispatch cases"
+            }
+            Check::StorageLayout => {
+                "Storage declarations, fixed-slot overlap, encodings, and compiler layout drift"
+            }
+            Check::Coverage => {
+                "Public obligations have property-shaped Foundry mirrors or proof-only reasons"
+            }
+            Check::TrustBoundary => {
+                "Lean axioms, sorryAx, unresolved declarations, and Verity trust reports"
+            }
         }
     }
 }
@@ -82,6 +112,25 @@ pub struct AuditOptions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditReport {
     pub issues: Vec<Issue>,
+    #[serde(skip)]
+    pub summary: AuditSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditSummary {
+    pub checks: Vec<Check>,
+    pub contracts: Vec<String>,
+    pub manifest_dir: Utf8PathBuf,
+}
+
+impl Default for AuditSummary {
+    fn default() -> Self {
+        Self {
+            checks: Vec::new(),
+            contracts: Vec::new(),
+            manifest_dir: Utf8PathBuf::new(),
+        }
+    }
 }
 
 impl AuditReport {
@@ -95,16 +144,11 @@ impl AuditReport {
 
 pub fn run(root: &Utf8Path, opts: AuditOptions) -> Result<AuditReport> {
     let config = tama_config::load_config(root)?;
-    let loaded = load_manifests(root, &config.paths.out.join("manifest"))?;
+    let manifest_dir = config.paths.out.join("manifest");
+    let loaded = load_manifests(root, &manifest_dir)?;
     let checks = match opts.check {
         Some(check) => vec![check],
-        None => vec![
-            Check::Structure,
-            Check::Selectors,
-            Check::StorageLayout,
-            Check::Coverage,
-            Check::TrustBoundary,
-        ],
+        None => Check::all().to_vec(),
     };
     let mut issues = Vec::new();
     let manifest_load_check = if checks.contains(&Check::Structure) {
@@ -127,6 +171,14 @@ pub fn run(root: &Utf8Path, opts: AuditOptions) -> Result<AuditReport> {
         )
     }));
     let manifests = loaded.manifests;
+    let summary = AuditSummary {
+        checks: checks.clone(),
+        contracts: manifests
+            .iter()
+            .map(|manifest| manifest.contract.clone())
+            .collect(),
+        manifest_dir,
+    };
     if manifests.is_empty() && !checks.contains(&Check::Structure) {
         if issues.is_empty() {
             issues.push(issue(
@@ -137,7 +189,7 @@ pub fn run(root: &Utf8Path, opts: AuditOptions) -> Result<AuditReport> {
                 None,
             ));
         }
-        return Ok(AuditReport { issues });
+        return Ok(AuditReport { issues, summary });
     }
     for check in checks {
         match check {
@@ -148,7 +200,7 @@ pub fn run(root: &Utf8Path, opts: AuditOptions) -> Result<AuditReport> {
             Check::TrustBoundary => trust(root, &config, &manifests, &mut issues),
         }
     }
-    Ok(AuditReport { issues })
+    Ok(AuditReport { issues, summary })
 }
 
 pub fn parse_check(raw: &str) -> Option<Check> {
@@ -2187,6 +2239,7 @@ mod tests {
                 message: "warn".to_string(),
                 path: None,
             }],
+            summary: AuditSummary::default(),
         };
         assert!(!report.has_failures(false));
         assert!(report.has_failures(true));
@@ -2203,6 +2256,11 @@ mod tests {
                 message: "postcondition has no mirror test".to_string(),
                 path: Some("test/verity/Counter.t.sol".into()),
             }],
+            summary: AuditSummary {
+                checks: vec![Check::Coverage],
+                contracts: vec!["Counter".to_string()],
+                manifest_dir: "artifacts/manifest".into(),
+            },
         };
 
         assert_eq!(

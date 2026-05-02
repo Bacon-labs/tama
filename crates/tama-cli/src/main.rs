@@ -10,6 +10,17 @@ use clap::{ArgAction, Args, Parser, Subcommand};
 const LAKE_PACKAGE_CACHE_ENV: &str = "TAMA_LAKE_PACKAGE_CACHE";
 const FORGE_STD_DEPENDENCY: &str = "foundry-rs/forge-std@v1.16.1";
 const DEFAULT_VERITY_GIT: &str = "https://github.com/lfglabs-dev/verity.git";
+const AUDIT_AFTER_HELP: &str = "\
+Checks:
+  structure        Required files, aggregate imports, generated bridge headers, artifact paths, and bytecode hashes
+  selectors        ABI selectors/topics, generated Solidity declarations, and Yul dispatch cases
+  storage-layout   Storage declarations, slot overlap, encodings, and compiler layout drift
+  coverage         Public obligations have property-shaped Foundry mirrors or proof-only reasons
+  trust-boundary   Lean axioms, sorryAx, unresolved declarations, and Verity trust/assumption reports
+
+Run `tama audit` for the full suite, or `tama audit <check>` for one check.
+Aliases: `storage` for `storage-layout`, `trust` for `trust-boundary`.
+Use `--deny-warnings` to make warning-severity findings fail CI.";
 
 #[derive(Debug, Parser)]
 #[command(name = "tama", version, about = "Verity developer toolchain")]
@@ -42,7 +53,11 @@ enum Command {
     Build(BuildArgs),
     #[command(about = "Pass through directly to forge test")]
     Test(TestArgs),
-    #[command(about = "Run structure, selector, storage, coverage, and trust audits")]
+    #[command(
+        about = "Audit generated Verity artifacts after a build",
+        long_about = "Audit generated Verity artifacts after `tama build`.\n\nTama validates that generated manifests, Yul, bytecode, Solidity bridges, Foundry mirror coverage, and Lean/Verity trust-boundary reports still agree with the project source. The command reports every finding it can collect and exits nonzero for errors.",
+        after_help = AUDIT_AFTER_HELP
+    )]
     Audit(AuditArgs),
     #[command(about = "Inspect generated Verity artifacts")]
     Inspect(InspectArgs),
@@ -89,8 +104,12 @@ struct TestArgs {
 
 #[derive(Debug, Args)]
 struct AuditArgs {
+    #[arg(
+        value_name = "CHECK",
+        help = "Run one audit check instead of the full suite"
+    )]
     check: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Treat warning-severity findings as failures")]
     deny_warnings: bool,
 }
 
@@ -221,12 +240,11 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     "{}",
                     serde_json::to_string_pretty(&report).map_err(|err| err.to_string())?
                 );
-            } else if report.issues.is_empty() {
-                println!("Audit passed");
             } else {
-                for issue in &report.issues {
-                    println!("{} {}: {}", issue.check, issue.code, issue.message);
-                }
+                println!(
+                    "{}",
+                    format_audit_report(&root, &report, args.deny_warnings)
+                );
             }
             Ok(if report.has_failures(args.deny_warnings) {
                 ExitCode::from(1)
@@ -1618,6 +1636,169 @@ fn build_status_json(status: &tama_build::BuildStatus) -> Result<String, String>
     .map_err(|err| err.to_string())
 }
 
+fn format_audit_report(
+    root: &Utf8Path,
+    report: &tama_audit::AuditReport,
+    deny_warnings: bool,
+) -> String {
+    let mut out = String::new();
+    out.push_str("Audit scope:\n");
+    out.push_str(&format!("  project: {root}\n"));
+    out.push_str(&format!("  manifests: {}\n", report.summary.manifest_dir));
+    out.push_str(&format!(
+        "  contracts: {}\n",
+        audit_contracts_summary(&report.summary.contracts)
+    ));
+    out.push_str("\nChecks:\n");
+    for check in &report.summary.checks {
+        let (errors, warnings, infos) = audit_issue_counts(report, *check);
+        let status = audit_check_status(errors, warnings, infos, deny_warnings);
+        out.push_str(&format!(
+            "  {status:<4} {:<15} {}{}\n",
+            check.as_str(),
+            check.description(),
+            audit_count_suffix(errors, warnings, infos)
+        ));
+    }
+
+    if !report.issues.is_empty() {
+        out.push_str(&format!(
+            "\nFindings ({}):\n",
+            format_count(report.issues.len(), "issue", "issues")
+        ));
+        for issue in &report.issues {
+            out.push_str(&format!(
+                "  {} {} {}",
+                severity_label(issue.severity),
+                issue.check,
+                issue.code
+            ));
+            if let Some(contract) = &issue.contract {
+                out.push_str(&format!(" ({contract})"));
+            }
+            out.push_str(&format!(": {}\n", issue.message));
+            if let Some(path) = &issue.path {
+                out.push_str(&format!("    path: {path}\n"));
+            }
+        }
+    }
+
+    let (errors, warnings, infos) = total_audit_issue_counts(report);
+    out.push('\n');
+    if report.has_failures(deny_warnings) {
+        out.push_str("Audit failed: ");
+    } else if warnings > 0 {
+        out.push_str("Audit passed with warnings: ");
+    } else {
+        out.push_str("Audit passed: ");
+    }
+    out.push_str(&format!(
+        "{}, {}, {}",
+        format_count(report.summary.checks.len(), "check", "checks"),
+        format_count(report.summary.contracts.len(), "contract", "contracts"),
+        format_count(report.issues.len(), "issue", "issues")
+    ));
+    if !report.issues.is_empty() {
+        out.push_str(&format!(
+            " ({}, {}, {})",
+            format_count(errors, "error", "errors"),
+            format_count(warnings, "warning", "warnings"),
+            format_count(infos, "info", "info")
+        ));
+    }
+    out
+}
+
+fn audit_contracts_summary(contracts: &[String]) -> String {
+    match contracts {
+        [] => "none (no valid manifests loaded)".to_string(),
+        [one] => one.clone(),
+        many if many.len() <= 4 => many.join(", "),
+        many => format!("{}, ... ({} total)", many[..4].join(", "), many.len()),
+    }
+}
+
+fn audit_issue_counts(
+    report: &tama_audit::AuditReport,
+    check: tama_audit::Check,
+) -> (usize, usize, usize) {
+    let check = check.as_str();
+    report
+        .issues
+        .iter()
+        .filter(|issue| issue.check == check)
+        .fold((0, 0, 0), |(errors, warnings, infos), issue| {
+            match issue.severity {
+                tama_audit::Severity::Error => (errors + 1, warnings, infos),
+                tama_audit::Severity::Warning => (errors, warnings + 1, infos),
+                tama_audit::Severity::Info => (errors, warnings, infos + 1),
+            }
+        })
+}
+
+fn total_audit_issue_counts(report: &tama_audit::AuditReport) -> (usize, usize, usize) {
+    report
+        .issues
+        .iter()
+        .fold((0, 0, 0), |(errors, warnings, infos), issue| {
+            match issue.severity {
+                tama_audit::Severity::Error => (errors + 1, warnings, infos),
+                tama_audit::Severity::Warning => (errors, warnings + 1, infos),
+                tama_audit::Severity::Info => (errors, warnings, infos + 1),
+            }
+        })
+}
+
+fn audit_check_status(
+    errors: usize,
+    warnings: usize,
+    infos: usize,
+    deny_warnings: bool,
+) -> &'static str {
+    if errors > 0 || (deny_warnings && warnings > 0) {
+        "fail"
+    } else if warnings > 0 {
+        "warn"
+    } else if infos > 0 {
+        "info"
+    } else {
+        "ok"
+    }
+}
+
+fn audit_count_suffix(errors: usize, warnings: usize, infos: usize) -> String {
+    let counts = [
+        (errors, "error", "errors"),
+        (warnings, "warning", "warnings"),
+        (infos, "info", "info"),
+    ]
+    .into_iter()
+    .filter(|(count, _, _)| *count > 0)
+    .map(|(count, singular, plural)| format_count(count, singular, plural))
+    .collect::<Vec<_>>();
+    if counts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", counts.join(", "))
+    }
+}
+
+fn format_count(count: usize, singular: &str, plural: &str) -> String {
+    if count == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{count} {plural}")
+    }
+}
+
+fn severity_label(severity: tama_audit::Severity) -> &'static str {
+    match severity {
+        tama_audit::Severity::Error => "error",
+        tama_audit::Severity::Warning => "warning",
+        tama_audit::Severity::Info => "info",
+    }
+}
+
 fn project_root(root: Option<Utf8PathBuf>) -> Result<Utf8PathBuf, String> {
     let start = match root {
         Some(root) => root,
@@ -1918,6 +2099,77 @@ mod tests {
         assert!(help.contains("Run Lean, Verity codegen, solc, bridge generation, and Forge"));
         assert!(help.contains("Pass through directly to forge test"));
         assert!(help.contains("Diagnose toolchain and project drift"));
+    }
+
+    #[test]
+    fn audit_help_explains_checks_and_failure_policy() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("audit")
+            .unwrap()
+            .render_help()
+            .to_string();
+
+        assert!(help.contains("Audit generated Verity artifacts after a build"));
+        assert!(help.contains("Run `tama audit` for the full suite"));
+        assert!(help.contains("structure"));
+        assert!(help.contains("selectors"));
+        assert!(help.contains("storage-layout"));
+        assert!(help.contains("coverage"));
+        assert!(help.contains("trust-boundary"));
+        assert!(help.contains("--deny-warnings"));
+        assert!(help.contains("Aliases: `storage`"));
+    }
+
+    #[test]
+    fn audit_human_output_lists_scope_checks_and_findings() {
+        let report = tama_audit::AuditReport {
+            issues: vec![tama_audit::Issue {
+                check: "coverage".to_string(),
+                contract: Some("Counter".to_string()),
+                severity: tama_audit::Severity::Error,
+                code: "TAMA_COVERAGE_MISSING".to_string(),
+                message: "postcondition has no mirror test".to_string(),
+                path: Some("test/verity/Counter.t.sol".into()),
+            }],
+            summary: tama_audit::AuditSummary {
+                checks: vec![tama_audit::Check::Structure, tama_audit::Check::Coverage],
+                contracts: vec!["Counter".to_string()],
+                manifest_dir: "artifacts/manifest".into(),
+            },
+        };
+
+        let output = format_audit_report(Utf8Path::new("/tmp/project"), &report, false);
+
+        assert!(output.contains("Audit scope:"));
+        assert!(output.contains("project: /tmp/project"));
+        assert!(output.contains("manifests: artifacts/manifest"));
+        assert!(output.contains("contracts: Counter"));
+        assert!(output.contains("ok   structure"));
+        assert!(output.contains("fail coverage"));
+        assert!(output.contains("Findings (1 issue):"));
+        assert!(output.contains("error coverage TAMA_COVERAGE_MISSING (Counter)"));
+        assert!(output.contains("path: test/verity/Counter.t.sol"));
+        assert!(output.contains("Audit failed: 2 checks, 1 contract, 1 issue"));
+    }
+
+    #[test]
+    fn audit_human_output_pass_summary_is_informative() {
+        let report = tama_audit::AuditReport {
+            issues: Vec::new(),
+            summary: tama_audit::AuditSummary {
+                checks: tama_audit::Check::all().to_vec(),
+                contracts: vec!["ERC20Lite".to_string()],
+                manifest_dir: "artifacts/manifest".into(),
+            },
+        };
+
+        let output = format_audit_report(Utf8Path::new("/tmp/project"), &report, false);
+
+        assert!(output.contains("ok   structure"));
+        assert!(output.contains("ok   trust-boundary"));
+        assert!(output.contains("Audit passed: 5 checks, 1 contract, 0 issues"));
+        assert!(!output.trim().eq("Audit passed"));
     }
 
     #[test]

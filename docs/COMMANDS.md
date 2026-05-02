@@ -121,7 +121,19 @@ The Tama global `--offline` flag is translated to Forge's `--offline` flag for t
 
 ## `tama audit [check]`
 
-Runs structure, selector/topic, storage-layout, coverage, and trust-boundary audits. `--json` emits the canonical audit issue format.
+Runs audits over the artifacts produced by `tama build`. Human output lists the project root, manifest directory, loaded contracts, each check that ran, and any findings. `--json` emits the canonical audit issue format for CI consumers.
+
+Without `[check]`, Tama runs the full suite:
+
+```text
+structure        Required files, aggregate imports, generated bridge headers, artifact paths, and bytecode hashes
+selectors        ABI selectors/topics, generated Solidity declarations, and Yul dispatch cases
+storage-layout   Storage declarations, slot overlap, encodings, and compiler layout drift
+coverage         Public obligations have property-shaped Foundry mirrors or proof-only reasons
+trust-boundary   Lean axioms, sorryAx, unresolved declarations, and Verity trust/assumption reports
+```
+
+Use `tama audit <check>` to run one check. `storage` is accepted as an alias for `storage-layout`, and `trust` is accepted as an alias for `trust-boundary`. `--deny-warnings` treats warning-severity findings as failures.
 
 ## `tama inspect <Contract> <field>`
 

@@ -1,6 +1,6 @@
 # Audit
 
-`tama audit` validates the project after a real build. It fails on error-severity issues and reports all findings it can collect.
+`tama audit` validates the project after a real build. Human output shows the project root, manifest directory, loaded contracts, each check that ran, and any findings. The command fails on error-severity issues and reports all findings it can collect.
 
 Checks:
 
@@ -17,3 +17,7 @@ Checks:
 Negative fixture coverage must include deleted files, corrupt selectors/topics, duplicate storage slots, missing mirrors, example-shaped mirror tests, empty proof-only reasons, unresolved Lean declarations, inserted `sorry`, inserted custom axioms, and hand-edited generated bridge files.
 
 `--json` emits stable issue records for CI consumers.
+
+Run one check with `tama audit <check>`. `storage` is accepted as an alias for
+`storage-layout`, and `trust` is accepted as an alias for `trust-boundary`.
+`--deny-warnings` treats warning-severity findings as failures.
