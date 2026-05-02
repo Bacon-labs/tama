@@ -443,11 +443,18 @@ pub fn compile_yul_standard_json(
     let yul_path = root.join(&manifest.artifacts.yul);
     let yul = tama_common::read_to_string(&yul_path)?;
     let input = solc_standard_json_input(&contract, &yul, config);
+    let input_text = serde_json::to_string(&input).map_err(|err| {
+        Error::Adapter(format!(
+            "failed to serialize solc standard JSON input: {err}"
+        ))
+    })?;
+    let input_pretty = serde_json::to_string_pretty(&input).map_err(|err| {
+        Error::Adapter(format!(
+            "failed to serialize solc standard JSON input: {err}"
+        ))
+    })?;
     let input_path = root.join(&manifest.artifacts.solc_input);
-    tama_common::write_string(
-        &input_path,
-        &(serde_json::to_string_pretty(&input).unwrap() + "\n"),
-    )?;
+    tama_common::write_string(&input_path, &(input_pretty + "\n"))?;
 
     let solc = tama_toolchain::resolve_solc(&config.yul.solc, root)?;
     let solc_program = solc.path.to_string();
@@ -462,11 +469,12 @@ pub fn compile_yul_standard_json(
             program: solc_program.clone(),
             message: source.to_string(),
         })?;
-    child
-        .stdin
-        .as_mut()
-        .expect("piped stdin")
-        .write_all(serde_json::to_string(&input).unwrap().as_bytes())
+    let stdin = child.stdin.as_mut().ok_or_else(|| Error::Process {
+        program: solc_program.clone(),
+        message: "failed to open solc stdin".to_string(),
+    })?;
+    stdin
+        .write_all(input_text.as_bytes())
         .map_err(|source| Error::Process {
             program: solc_program.clone(),
             message: source.to_string(),
@@ -1191,7 +1199,12 @@ fn extract_obligations(
         let metadata_line = parse_obligation_metadata(trimmed, &proof_path, &mut pending)?;
         if let Some(captures) = theorem_re.captures(trimmed) {
             if let Some(meta) = pending.take_if_obligation() {
-                let name = captures.get(1).expect("theorem name").as_str();
+                let Some(name_match) = captures.get(1) else {
+                    return Err(Error::Adapter(format!(
+                        "failed to parse theorem name in {proof_path}"
+                    )));
+                };
+                let name = name_match.as_str();
                 obligations.push(Obligation {
                     id: format!("{contract}.{name}"),
                     name: name.to_string(),
@@ -1400,7 +1413,10 @@ fn parse_key_values(raw: &str) -> std::collections::BTreeMap<String, String> {
             .peek()
             .is_some_and(|ch| !ch.is_whitespace() && *ch != '=')
         {
-            key.push(chars.next().expect("peeked char"));
+            let Some(ch) = chars.next() else {
+                break;
+            };
+            key.push(ch);
         }
         if key.is_empty() {
             break;
@@ -1429,7 +1445,10 @@ fn parse_key_values(raw: &str) -> std::collections::BTreeMap<String, String> {
         } else {
             let mut value = String::new();
             while chars.peek().is_some_and(|ch| !ch.is_whitespace()) {
-                value.push(chars.next().expect("peeked char"));
+                let Some(ch) = chars.next() else {
+                    break;
+                };
+                value.push(ch);
             }
             value
         };
@@ -1498,10 +1517,9 @@ fn generate_trust_probe(
             "method": "lean.collectAxioms",
             "obligations": []
         });
-        tama_common::write_string(
-            &output_path,
-            &(serde_json::to_string_pretty(&report).expect("trust report JSON") + "\n"),
-        )?;
+        let report_text = serde_json::to_string_pretty(&report)
+            .map_err(|err| Error::Adapter(format!("failed to serialize trust report: {err}")))?;
+        tama_common::write_string(&output_path, &(report_text + "\n"))?;
         return Ok(());
     }
 
@@ -1510,10 +1528,9 @@ fn generate_trust_probe(
     tama_common::write_string(&source_path, &source)?;
     let output = run_capture("lake", &["env", "lean", source_path.as_str()], root)?;
     let report = parse_collect_axioms_output(&output.stdout, &public_obligations)?;
-    tama_common::write_string(
-        &output_path,
-        &(serde_json::to_string_pretty(&report).expect("trust report JSON") + "\n"),
-    )?;
+    let report_text = serde_json::to_string_pretty(&report)
+        .map_err(|err| Error::Adapter(format!("failed to serialize trust report: {err}")))?;
+    tama_common::write_string(&output_path, &(report_text + "\n"))?;
     Ok(())
 }
 
