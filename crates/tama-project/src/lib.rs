@@ -449,7 +449,7 @@ namespace spec.{name}Spec
 open Verity
 open Verity.EVM.Uint256
 
-def setValue_spec (newValue : Uint256) (s s' : ContractState) : Prop :=
+def setValue_spec (newValue : Uint256) (_s s' : ContractState) : Prop :=
   s'.storage 0 = newValue
 
 def getValue_spec (result : Uint256) (s : ContractState) : Prop :=
