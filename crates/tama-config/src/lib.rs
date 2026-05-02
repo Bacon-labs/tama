@@ -18,6 +18,12 @@ pub enum Error {
         #[source]
         source: toml::de::Error,
     },
+    #[error("failed to parse {path}: {source}")]
+    Json {
+        path: Utf8PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("unsupported lockfile version {0}")]
     UnsupportedLockVersion(u32),
     #[error("lockfile is stale: {0}")]
@@ -224,8 +230,64 @@ pub fn enforce_locked(root: &Utf8Path, lock: &TamaLock) -> Result<()> {
 }
 
 pub fn update_lock_inputs(root: &Utf8Path, lock: &mut TamaLock) -> Result<()> {
+    record_lake_manifest_resolutions(root, lock)?;
     lock.inputs = tracked_input_hashes(root)?;
     Ok(())
+}
+
+pub fn record_lake_manifest_resolutions(root: &Utf8Path, lock: &mut TamaLock) -> Result<()> {
+    let path = root.join("lake-manifest.json");
+    if !path.is_file() {
+        return Ok(());
+    }
+    let text = read_to_string(&path)?;
+    let manifest: serde_json::Value =
+        serde_json::from_str(&text).map_err(|source| Error::Json { path, source })?;
+    lock.resolved.retain(|key, _| !key.starts_with("lake."));
+    let Some(packages) = manifest
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(());
+    };
+    for package in packages {
+        if package
+            .get("inherited")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        {
+            continue;
+        }
+        if package.get("type").and_then(serde_json::Value::as_str) != Some("git") {
+            continue;
+        }
+        let Some(name) = package.get("name").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if !valid_lock_component(name) {
+            continue;
+        }
+        if let Some(url) = package.get("url").and_then(serde_json::Value::as_str) {
+            lock.resolved
+                .insert(format!("lake.{name}.url"), url.to_string());
+        }
+        if let Some(rev) = package.get("rev").and_then(serde_json::Value::as_str) {
+            lock.resolved
+                .insert(format!("lake.{name}.rev"), rev.to_string());
+        }
+        if let Some(input_rev) = package.get("inputRev").and_then(serde_json::Value::as_str) {
+            lock.resolved
+                .insert(format!("lake.{name}.input_rev"), input_rev.to_string());
+        }
+    }
+    Ok(())
+}
+
+fn valid_lock_component(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
 pub fn parse_lake_dependency(root: &Utf8Path, raw: &str) -> Result<LakeDependency> {
@@ -494,6 +556,63 @@ solc = "0.8.33"
             enforce_locked(&root, &lock),
             Err(Error::StaleLock(_))
         ));
+    }
+
+    #[test]
+    fn update_lock_inputs_records_direct_lake_manifest_resolutions() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("lake-manifest.json"),
+            r#"{
+  "packages": [
+    {
+      "name": "directpkg",
+      "type": "git",
+      "url": "https://example.test/direct.git",
+      "rev": "abc123",
+      "inputRev": "main",
+      "inherited": false
+    },
+    {
+      "name": "indirectpkg",
+      "type": "git",
+      "url": "https://example.test/indirect.git",
+      "rev": "def456",
+      "inputRev": "v1",
+      "inherited": true
+    }
+  ]
+}
+"#,
+        )
+        .unwrap();
+        let mut lock = TamaLock {
+            version: 1,
+            resolved: BTreeMap::from([("lake.stale.rev".to_string(), "old".to_string())]),
+            inputs: BTreeMap::new(),
+            yul: BTreeMap::new(),
+        };
+
+        update_lock_inputs(&root, &mut lock).unwrap();
+
+        assert_eq!(
+            lock.resolved.get("lake.directpkg.url").map(String::as_str),
+            Some("https://example.test/direct.git")
+        );
+        assert_eq!(
+            lock.resolved.get("lake.directpkg.rev").map(String::as_str),
+            Some("abc123")
+        );
+        assert_eq!(
+            lock.resolved
+                .get("lake.directpkg.input_rev")
+                .map(String::as_str),
+            Some("main")
+        );
+        assert!(!lock.resolved.contains_key("lake.indirectpkg.rev"));
+        assert!(!lock.resolved.contains_key("lake.stale.rev"));
+        assert!(lock.inputs.contains_key("lake-manifest.json"));
     }
 
     #[test]
