@@ -80,6 +80,9 @@ import sys
 
 manifest_path, platform, version = sys.argv[1:4]
 manifest = json.load(open(manifest_path, encoding="utf-8"))
+schema = manifest.get("schema")
+if schema is not None and schema != "tama.release-manifest.v1":
+    raise SystemExit(f"unsupported release manifest schema: {schema}")
 if manifest.get("releases"):
     selected = manifest.get("stable") if version == "stable" else version
     releases = manifest["releases"]
