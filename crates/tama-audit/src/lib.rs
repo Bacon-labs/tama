@@ -4,7 +4,7 @@ use std::fs;
 use camino::{Utf8Path, Utf8PathBuf};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tama_manifest::{ContractManifest, CoverageDisposition, ObligationKind};
+use tama_manifest::{ContractManifest, CoverageDisposition, ObligationKind, SCHEMA};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -181,6 +181,15 @@ fn structure(
         )),
     }
     for manifest in manifests {
+        if manifest.schema != SCHEMA {
+            issues.push(issue(
+                "structure",
+                Some(&manifest.contract),
+                "TAMA_STRUCTURE_MANIFEST_SCHEMA",
+                format!("unsupported manifest schema `{}`", manifest.schema),
+                None,
+            ));
+        }
         for path in [
             &manifest.source.implementation,
             &manifest.source.spec,
@@ -193,6 +202,16 @@ fn structure(
             &manifest.artifacts.interface,
             &manifest.artifacts.deployer,
         ] {
+            if path_escapes_project(path) {
+                issues.push(issue(
+                    "structure",
+                    Some(&manifest.contract),
+                    "TAMA_STRUCTURE_MANIFEST_PATH",
+                    format!("manifest path escapes project root: {path}"),
+                    Some(path.clone()),
+                ));
+                continue;
+            }
             if !root.join(path).exists() {
                 issues.push(issue(
                     "structure",
@@ -225,6 +244,9 @@ fn structure(
             check_aggregate_import(root, manifest, aggregate, import, issues);
         }
         for path in [&manifest.artifacts.interface, &manifest.artifacts.deployer] {
+            if path_escapes_project(path) {
+                continue;
+            }
             let abs = root.join(path);
             if abs.is_file() && !tama_common::has_generated_header(&abs).unwrap_or(false) {
                 issues.push(issue(
@@ -240,6 +262,9 @@ fn structure(
 }
 
 fn check_bytecode_hash(root: &Utf8Path, manifest: &ContractManifest, issues: &mut Vec<Issue>) {
+    if path_escapes_project(&manifest.artifacts.creation_bytecode) {
+        return;
+    }
     let path = root.join(&manifest.artifacts.creation_bytecode);
     if !path.is_file() {
         return;
@@ -280,6 +305,10 @@ fn check_bytecode_hash(root: &Utf8Path, manifest: &ContractManifest, issues: &mu
             Some(manifest.artifacts.creation_bytecode.clone()),
         )),
     }
+}
+
+fn path_escapes_project(path: &Utf8Path) -> bool {
+    path.is_absolute() || path.components().any(|part| part.as_str() == "..")
 }
 
 fn check_aggregate_import(
@@ -1558,6 +1587,25 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(codes.contains("TAMA_STRUCTURE_MISSING_TEST"));
         assert!(codes.contains("TAMA_STRUCTURE_AGGREGATE_IMPORT"));
+    }
+
+    #[test]
+    fn structure_reports_manifest_schema_and_path_issues() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        let mut manifest = counter_manifest();
+        manifest.schema = "wrong.schema".to_string();
+        manifest.source.implementation = "../Counter.lean".into();
+
+        let mut issues = Vec::new();
+        structure(&root, &config, &[manifest], &mut issues);
+        let codes = issues
+            .iter()
+            .map(|issue| issue.code.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(codes.contains("TAMA_STRUCTURE_MANIFEST_SCHEMA"));
+        assert!(codes.contains("TAMA_STRUCTURE_MANIFEST_PATH"));
     }
 
     #[test]
