@@ -108,10 +108,11 @@ impl Lake {
         let modules = if let Some(contract) = &opts.contract {
             format!("src.{contract}\n")
         } else {
-            discover_modules(&self.root.join(&config.paths.src))?
-                .into_iter()
-                .map(|module| format!("{module}\n"))
-                .collect()
+            let mut modules = discover_modules(&self.root.join(&config.paths.src))?.join("\n");
+            if !modules.is_empty() {
+                modules.push('\n');
+            }
+            modules
         };
         tama_common::write_string(&module_manifest, &modules)?;
 
