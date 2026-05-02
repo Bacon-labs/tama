@@ -67,11 +67,10 @@ fn doctor_with_root_uses_project_lean_toolchain_for_version_probes() {
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    assert!(stdout.contains("ok  lean"));
-    assert!(stdout.contains("Lean (version 4.22.0"));
-    assert!(stdout.contains("ok  lake"));
+    assert!(stdout.contains("ok   lean            4.22.0"));
+    assert!(stdout.contains("ok   lake            5.0.0-src+test"));
     assert!(stdout.contains("Lean version 4.22.0"));
-    assert!(!stdout.contains("err lean"));
-    assert!(!stdout.contains("err lake"));
+    assert!(!stdout.contains("fail lean"));
+    assert!(!stdout.contains("fail lake"));
     assert!(!stdout.contains("4.29.1"));
 }

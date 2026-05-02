@@ -10,13 +10,35 @@ use clap::{ArgAction, Args, Parser, Subcommand};
 const LAKE_PACKAGE_CACHE_ENV: &str = "TAMA_LAKE_PACKAGE_CACHE";
 const FORGE_STD_DEPENDENCY: &str = "foundry-rs/forge-std@v1.16.1";
 const DEFAULT_VERITY_GIT: &str = "https://github.com/lfglabs-dev/verity.git";
+const INIT_AFTER_HELP: &str = "\
+Creates a Foundry-compatible Verity starter. The starter includes commented
+ERC20Lite source/spec/proof files, mirror Foundry tests, generated bridge
+placeholders, and a deploy script that works after `tama build`.
+
+Online init also runs `lake update`, initializes Git when needed, installs the
+pinned forge-std dependency as a submodule, and refreshes tama.lock.
+Use --offline to write files only and do dependency setup later.";
+const NEW_AFTER_HELP: &str = "\
+Adds one Verity contract scaffold under the configured source, spec, proof, and
+mirror-test paths, then updates TamaSrc.lean, TamaSpec.lean, TamaProof.lean, and
+tama.lock.
+
+The scaffold contains TODO proofs marked with `sorry`; `tama check` may pass,
+but `tama audit trust-boundary` will reject them until they are discharged.";
+const CHECK_AFTER_HELP: &str = "\
+Fast Lean check for the implementation and spec aggregate modules:
+  lake build TamaSrc TamaSpec
+
+Proof modules, Verity codegen, solc, bridge generation, Forge, and audit checks
+do not run here. Use `tama build` when proofs and generated artifacts should be
+validated.";
 const AUDIT_AFTER_HELP: &str = "\
 Checks:
-  structure        Required files, aggregate imports, generated bridge headers, artifact paths, and bytecode hashes
-  selectors        ABI selectors/topics, generated Solidity declarations, and Yul dispatch cases
-  storage-layout   Storage declarations, slot overlap, encodings, and compiler layout drift
-  coverage         Public obligations have property-shaped Foundry mirrors or proof-only reasons
-  trust-boundary   Lean axioms, sorryAx, unresolved declarations, and Verity trust/assumption reports
+  structure        Required files, aggregate imports, generated paths, and bytecode hashes
+  selectors        ABI selectors/topics, Solidity declarations, and Yul dispatch
+  storage-layout   Storage slots, overlap, encodings, and compiler layout drift
+  coverage         Public obligations have Foundry mirrors or proof-only reasons
+  trust-boundary   Lean axioms, sorryAx, unresolved declarations, and trust reports
 
 Run `tama audit` for the full suite, or `tama audit <check>` for one check.
 Aliases: `storage` for `storage-layout`, `trust` for `trust-boundary`.
@@ -36,12 +58,63 @@ Proofs are first-class build inputs: a proof module that does not elaborate stop
 the build before bytecode or bridges are produced. Use `tama check` when you only
 want the faster implementation/spec Lean check.
 
-Build options:
-  --contract <Name>   Build one contract instead of every Verity contract
-  --no-solc           Stop after fresh Yul/manifests; skip bytecode, bridges, and Forge
-  --no-forge          Run proof/codegen/solc/bridge steps, but skip `forge build`
-  --locked            Fail if tama.lock or tracked inputs are stale; do not rewrite the lock
-  --offline           Use local Lake packages and pass --offline to Forge";
+Notes:
+  --no-solc stops after fresh Yul/manifests and therefore also skips bridges and Forge.
+  --locked checks tama.lock before the build and does not rewrite it after success.";
+const TEST_AFTER_HELP: &str = "\
+Tama prefixes the command with `forge test` and passes the remaining arguments
+through unchanged. With global --offline, Tama adds Forge's --offline flag unless
+you already supplied it.
+
+Output and exit status are Forge's by design.";
+const INSPECT_AFTER_HELP: &str = "\
+Fields:
+  manifest
+  selectors
+  abi
+  storage-layout
+  yul
+  bytecode
+  runtime-bytecode
+  theorems
+  obligations
+  mirrors
+  trust
+
+Use --json when you want machine-readable output for supported fields.";
+const CLEAN_AFTER_HELP: &str = "\
+Removes generated Tama and Foundry build output, including artifacts/yul,
+artifacts/abi, artifacts/bytecode, artifacts/solc-json, artifacts/manifest,
+artifacts/lean, artifacts/trust-probe, generated Solidity, Foundry out, and
+Foundry cache.
+
+Generated Solidity is removed only when it still has Tama's generated-file
+header. Use --deep to also remove Lake package/build state under .lake.";
+const DOCTOR_AFTER_HELP: &str = "\
+Checks required tools, configured tool versions, project paths, Lake buildDir,
+Verity dependency resolution, generated artifact directories, and tama.lock
+freshness.
+
+With --fix, Tama creates missing generated directories, repairs safe Verity
+dependency drift when possible, and refreshes tama.lock. It does not rewrite
+user-owned source, spec, proof, or test files.";
+const INSTALL_AFTER_HELP: &str = "\
+Adds a Tama package to lakefile.toml, runs `lake update`, and refreshes
+tama.lock. The package must contain tama.toml; pure Lake packages should be added
+to lakefile.toml manually.
+
+Packages may be GitHub shorthand, a full Git URL, or a local path. Add @rev to a
+Git package to pin an explicit revision.";
+const REMOVE_AFTER_HELP: &str = "\
+Removes one Tama/Lake dependency from lakefile.toml, runs `lake update`, and
+refreshes tama.lock. The dependency name must already be present in the Lakefile.";
+const UPDATE_AFTER_HELP: &str = "\
+Refreshes dependency manifests and lock state. Without flags, Tama syncs the
+configured Verity dependency, runs `lake update`, runs `forge update`, and writes
+tama.lock.
+
+Use --package <name> to update one Lake package. Use --no-lake or --no-forge for
+local lock/config refreshes when you intentionally do not want those tools run.";
 
 #[derive(Debug, Parser)]
 #[command(name = "tama", version, about = "Verity developer toolchain")]
@@ -60,7 +133,11 @@ struct Cli {
     locked: bool,
     #[arg(long, global = true, help = "Avoid network access where supported")]
     offline: bool,
-    #[arg(long, global = true, help = "Emit machine-readable Tama-owned JSON")]
+    #[arg(
+        long,
+        global = true,
+        help = "Emit machine-readable Tama-owned JSON where supported"
+    )]
     json: bool,
     #[arg(
         short,
@@ -78,11 +155,32 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    #[command(about = "Create a new ERC20Lite starter project")]
-    Init { path: Option<Utf8PathBuf> },
-    #[command(about = "Scaffold a new Verity contract")]
-    New { name: String },
-    #[command(about = "Lean-check implementation and spec modules")]
+    #[command(
+        about = "Create a new ERC20Lite starter project",
+        long_about = "Create a new Tama/Foundry project with the ERC20Lite starter.",
+        after_help = INIT_AFTER_HELP
+    )]
+    Init {
+        #[arg(
+            value_name = "PATH",
+            help = "Directory to create; defaults to the current directory"
+        )]
+        path: Option<Utf8PathBuf>,
+    },
+    #[command(
+        about = "Scaffold a new Verity contract",
+        long_about = "Scaffold a new Verity contract, spec, proof, mirror test, aggregate imports, and lock state.",
+        after_help = NEW_AFTER_HELP
+    )]
+    New {
+        #[arg(value_name = "Name", help = "UpperCamelCase contract name")]
+        name: String,
+    },
+    #[command(
+        about = "Lean-check implementation and spec modules",
+        long_about = "Run the fast Lean check for implementation and spec aggregate modules.",
+        after_help = CHECK_AFTER_HELP
+    )]
     Check,
     #[command(
         about = "Build proofs, Verity artifacts, bytecode, Solidity bridges, and Forge targets",
@@ -90,7 +188,11 @@ enum Command {
         after_help = BUILD_AFTER_HELP
     )]
     Build(BuildArgs),
-    #[command(about = "Pass through directly to forge test")]
+    #[command(
+        about = "Pass through directly to forge test",
+        long_about = "Run Foundry tests through `forge test`, preserving Forge arguments and exit status.",
+        after_help = TEST_AFTER_HELP
+    )]
     Test(TestArgs),
     #[command(
         about = "Audit generated Verity artifacts after a build",
@@ -98,29 +200,62 @@ enum Command {
         after_help = AUDIT_AFTER_HELP
     )]
     Audit(AuditArgs),
-    #[command(about = "Inspect generated Verity artifacts")]
+    #[command(
+        about = "Inspect generated Verity artifacts",
+        long_about = "Print one generated artifact or manifest-derived view for a built Verity contract.",
+        after_help = INSPECT_AFTER_HELP
+    )]
     Inspect(InspectArgs),
-    #[command(about = "Remove generated build artifacts")]
+    #[command(
+        about = "Remove generated build artifacts",
+        long_about = "Remove generated Tama, Lake, and Foundry build artifacts from a project.",
+        after_help = CLEAN_AFTER_HELP
+    )]
     Clean {
-        #[arg(long)]
+        #[arg(long, help = "Also remove Lake package/build state under .lake")]
         deep: bool,
     },
-    #[command(about = "Diagnose toolchain and project drift")]
+    #[command(
+        about = "Diagnose toolchain and project drift",
+        long_about = "Check the local toolchain, project layout, dependency resolution, generated directories, and lock freshness.",
+        after_help = DOCTOR_AFTER_HELP
+    )]
     Doctor {
-        #[arg(long)]
+        #[arg(long, help = "Apply safe repairs before reporting status")]
         fix: bool,
     },
-    #[command(about = "Add a Tama/Lake dependency")]
-    Install { package: String },
-    #[command(about = "Remove a Tama/Lake dependency")]
-    Remove { package: String },
-    #[command(about = "Refresh dependencies and lock state")]
+    #[command(
+        about = "Add a Tama/Lake dependency",
+        long_about = "Add a Tama package dependency, run Lake update, and refresh tama.lock.",
+        after_help = INSTALL_AFTER_HELP
+    )]
+    Install {
+        #[arg(
+            value_name = "PACKAGE",
+            help = "Package path, Git URL, or GitHub shorthand"
+        )]
+        package: String,
+    },
+    #[command(
+        about = "Remove a Tama/Lake dependency",
+        long_about = "Remove a Tama/Lake dependency, run Lake update, and refresh tama.lock.",
+        after_help = REMOVE_AFTER_HELP
+    )]
+    Remove {
+        #[arg(value_name = "PACKAGE", help = "Lake package name to remove")]
+        package: String,
+    },
+    #[command(
+        about = "Refresh dependencies and lock state",
+        long_about = "Refresh Lake/Forge dependencies and Tama lock state.",
+        after_help = UPDATE_AFTER_HELP
+    )]
     Update {
-        #[arg(long)]
+        #[arg(long, help = "Skip `forge update`")]
         no_forge: bool,
-        #[arg(long)]
+        #[arg(long, help = "Skip `lake update`")]
         no_lake: bool,
-        #[arg(long)]
+        #[arg(long, value_name = "name", help = "Update one Lake package")]
         package: Option<String>,
     },
 }
@@ -144,7 +279,11 @@ struct BuildArgs {
 
 #[derive(Debug, Args)]
 struct TestArgs {
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        help = "Arguments passed after `forge test`"
+    )]
     forge_args: Vec<String>,
 }
 
@@ -161,7 +300,12 @@ struct AuditArgs {
 
 #[derive(Debug, Args)]
 struct InspectArgs {
+    #[arg(
+        value_name = "CONTRACT",
+        help = "Contract name from a generated manifest"
+    )]
     contract: String,
+    #[arg(value_name = "FIELD", help = "Artifact field to print")]
     field: String,
 }
 
@@ -184,6 +328,72 @@ fn main() -> ExitCode {
     }
 }
 
+#[derive(Clone, Copy)]
+struct CommandProgress {
+    enabled: bool,
+}
+
+impl CommandProgress {
+    fn new(enabled: bool) -> Self {
+        Self { enabled }
+    }
+
+    fn scope(&self, title: &str, rows: &[(&str, String)]) {
+        if !self.enabled {
+            return;
+        }
+        println!("{title}:");
+        for (label, value) in rows {
+            println!("  {label}: {value}");
+        }
+        println!();
+        println!("Steps:");
+    }
+
+    fn run<T, F>(&self, name: &str, running: &str, success: &str, f: F) -> Result<T, String>
+    where
+        F: FnOnce() -> Result<T, String>,
+    {
+        self.start(name, running);
+        match f() {
+            Ok(value) => {
+                self.ok(name, success);
+                Ok(value)
+            }
+            Err(err) => {
+                self.fail(name, "failed");
+                Err(err)
+            }
+        }
+    }
+
+    fn start(&self, name: &str, detail: &str) {
+        self.line("run", name, detail);
+    }
+
+    fn ok(&self, name: &str, detail: &str) {
+        self.line("ok", name, detail);
+    }
+
+    fn skip(&self, name: &str, detail: &str) {
+        self.line("skip", name, detail);
+    }
+
+    fn fail(&self, name: &str, detail: &str) {
+        self.line("fail", name, detail);
+    }
+
+    fn line(&self, status: &str, name: &str, detail: &str) {
+        if self.enabled {
+            println!("{}", command_progress_line(status, name, detail));
+        }
+    }
+}
+
+fn command_progress_line(status: &str, name: &str, detail: &str) -> String {
+    format!("  {status:<4} {name:<12} {detail}")
+}
+
 fn run(cli: Cli) -> Result<ExitCode, String> {
     match cli.command {
         Command::Init { path } => {
@@ -193,16 +403,40 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 .filter(|name| !name.is_empty())
                 .unwrap_or("my-protocol")
                 .to_string();
-            tama_project::init(
-                &path,
-                tama_project::InitOptions {
-                    name,
-                    ..Default::default()
+            let progress = CommandProgress::new(!cli.json);
+            progress.scope(
+                "Init scope",
+                &[
+                    ("project", path.to_string()),
+                    ("starter", "ERC20Lite".to_string()),
+                    (
+                        "mode",
+                        if cli.offline { "offline" } else { "online" }.to_string(),
+                    ),
+                ],
+            );
+            progress.run(
+                "files",
+                "write starter project files",
+                "starter project files written",
+                || {
+                    tama_project::init(
+                        &path,
+                        tama_project::InitOptions {
+                            name,
+                            ..Default::default()
+                        },
+                    )
+                    .map_err(|err| err.to_string())
                 },
-            )
-            .map_err(|err| err.to_string())?;
-            finalize_init(&path, cli.offline)?;
+            )?;
+            finalize_init(&path, cli.offline, progress)?;
             println!("Initialized Tama ERC20Lite starter at {path}");
+            if cli.offline {
+                for line in offline_init_instructions() {
+                    println!("{line}");
+                }
+            }
             for line in init_next_steps(&path) {
                 println!("{line}");
             }
@@ -211,20 +445,60 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::New { name } => {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
-            tama_project::scaffold_contract(&root, &name).map_err(|err| err.to_string())?;
+            let progress = CommandProgress::new(!cli.json);
+            progress.scope(
+                "New scope",
+                &[
+                    ("project", root.to_string()),
+                    ("contract", name.clone()),
+                    (
+                        "writes",
+                        "source, spec, proof, mirror test, aggregates, lock".to_string(),
+                    ),
+                ],
+            );
+            progress.run(
+                "scaffold",
+                "write contract files and aggregate imports",
+                "contract scaffold written",
+                || tama_project::scaffold_contract(&root, &name).map_err(|err| err.to_string()),
+            )?;
             println!("Created Verity contract scaffold {name}");
             Ok(ExitCode::SUCCESS)
         }
         Command::Check => {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
-            prepare_lake_packages_for_build(&root, cli.offline)?;
-            tama_build::Lake::new_json(root.clone(), cli.json)
-                .check_src_and_spec()
-                .map_err(|err| err.to_string())?;
+            let progress = CommandProgress::new(!cli.json);
+            progress.scope(
+                "Check scope",
+                &[
+                    ("project", root.to_string()),
+                    ("targets", "TamaSrc, TamaSpec".to_string()),
+                    ("proofs", "not run; use `tama build`".to_string()),
+                ],
+            );
+            progress.run(
+                "cache",
+                "prepare Lake package checkouts",
+                "Lake packages ready",
+                || prepare_lake_packages_for_build(&root, cli.offline),
+            )?;
+            progress.run(
+                "lake",
+                "build TamaSrc and TamaSpec",
+                "implementation/spec targets accepted",
+                || {
+                    tama_build::Lake::new_json(root.clone(), cli.json)
+                        .check_src_and_spec()
+                        .map_err(|err| err.to_string())
+                },
+            )?;
             refresh_lake_package_cache_after_success(&root);
             if cli.json {
                 println!("{}", check_status_json()?);
+            } else {
+                println!("Check completed: TamaSrc and TamaSpec accepted");
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -247,7 +521,10 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             if cli.json {
                 println!("{}", build_status_json(&status)?);
             } else {
-                println!("Build completed for {} manifest(s)", status.manifests.len());
+                println!(
+                    "Build completed: {}",
+                    format_count(status.manifests.len(), "manifest", "manifests")
+                );
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -313,7 +590,31 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Clean { deep } => {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
-            clean(&root, deep)?;
+            let progress = CommandProgress::new(!cli.json);
+            progress.scope(
+                "Clean scope",
+                &[
+                    ("project", root.to_string()),
+                    (
+                        "mode",
+                        if deep {
+                            "generated artifacts and Lake state"
+                        } else {
+                            "generated artifacts"
+                        }
+                        .to_string(),
+                    ),
+                ],
+            );
+            let report = progress.run(
+                "remove",
+                "remove generated Tama, Lake, and Foundry outputs",
+                "clean targets processed",
+                || clean(&root, deep),
+            )?;
+            if !cli.json {
+                println!("{}", format_clean_report(&report));
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::Doctor { fix } => {
@@ -324,8 +625,30 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     enforce_locked_if_requested(project_root, true)?;
                 }
             }
+            let progress = CommandProgress::new(!cli.json);
+            progress.scope(
+                "Doctor scope",
+                &[
+                    (
+                        "project",
+                        project
+                            .as_ref()
+                            .map(|root| root.to_string())
+                            .unwrap_or_else(|| "none found".to_string()),
+                    ),
+                    (
+                        "repair",
+                        if fix { "enabled" } else { "disabled" }.to_string(),
+                    ),
+                ],
+            );
             if fix {
-                apply_doctor_fix(&root, project.as_ref(), cli.offline)?;
+                progress.run(
+                    "repair",
+                    "apply safe repairs",
+                    "safe repairs applied",
+                    || apply_doctor_fix(&root, project.as_ref(), cli.offline),
+                )?;
             }
             let report = doctor_report(project.as_ref())?;
             if cli.json {
@@ -334,42 +657,8 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     serde_json::to_string_pretty(&report).map_err(|err| err.to_string())?
                 );
             } else {
-                for tool in &report.tools {
-                    match tool {
-                        tama_toolchain::ToolStatus::Ok(tool) => {
-                            println!(
-                                "ok  {:<8} {}",
-                                tool.name,
-                                tool.version
-                                    .clone()
-                                    .unwrap_or_else(|| tool.path.to_string())
-                            );
-                        }
-                        tama_toolchain::ToolStatus::Missing { name, remediation } => {
-                            println!("err {:<8} {remediation}", name);
-                        }
-                        tama_toolchain::ToolStatus::Incompatible {
-                            name,
-                            found,
-                            expected,
-                        } => {
-                            println!("err {name:<8} found {found}, expected {expected}");
-                        }
-                    }
-                }
-                if let Some(lock_current) = report.lock_current {
-                    if lock_current {
-                        println!("ok  lock     current");
-                    } else {
-                        println!("err lock     stale or unreadable");
-                    }
-                }
-                for note in &report.notes {
-                    println!("note {note}");
-                }
-                if fix {
-                    println!("Applied safe doctor repairs");
-                }
+                progress.ok("report", "diagnostics collected");
+                println!("{}", format_doctor_report(&report, fix));
             }
             Ok(if doctor_report_has_failures(&report) {
                 ExitCode::from(1)
@@ -379,15 +668,52 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Install { package } => {
             let root = project_root(cli.root)?;
-            install_package(&root, &package, cli.offline, cli.locked)?;
+            let progress = CommandProgress::new(!cli.json);
+            progress.scope(
+                "Install scope",
+                &[
+                    ("project", root.to_string()),
+                    ("package", package.clone()),
+                    (
+                        "updates",
+                        "lakefile.toml, lake-manifest.json, tama.lock".to_string(),
+                    ),
+                ],
+            );
+            progress.run(
+                "install",
+                "resolve package, run Lake update, refresh lock",
+                "dependency installed",
+                || install_package(&root, &package, cli.offline, cli.locked),
+            )?;
             println!("Installed Tama dependency {package}");
             Ok(ExitCode::SUCCESS)
         }
         Command::Remove { package } => {
             let root = project_root(cli.root)?;
-            mutate_dependencies(&root, cli.locked, cli.offline, |root| {
-                tama_config::remove_lake_dependency(root, &package).map_err(|err| err.to_string())
-            })?;
+            let progress = CommandProgress::new(!cli.json);
+            progress.scope(
+                "Remove scope",
+                &[
+                    ("project", root.to_string()),
+                    ("package", package.clone()),
+                    (
+                        "updates",
+                        "lakefile.toml, lake-manifest.json, tama.lock".to_string(),
+                    ),
+                ],
+            );
+            progress.run(
+                "remove",
+                "remove dependency, run Lake update, refresh lock",
+                "dependency removed",
+                || {
+                    mutate_dependencies(&root, cli.locked, cli.offline, |root| {
+                        tama_config::remove_lake_dependency(root, &package)
+                            .map_err(|err| err.to_string())
+                    })
+                },
+            )?;
             println!("Removed Tama dependency {package}");
             Ok(ExitCode::SUCCESS)
         }
@@ -397,13 +723,39 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             package,
         } => {
             let root = project_root(cli.root)?;
-            update_project(
-                &root,
-                cli.locked,
-                cli.offline,
-                no_lake,
-                no_forge,
-                package.as_deref(),
+            let progress = CommandProgress::new(!cli.json);
+            progress.scope(
+                "Update scope",
+                &[
+                    ("project", root.to_string()),
+                    (
+                        "package",
+                        package.clone().unwrap_or_else(|| "all".to_string()),
+                    ),
+                    (
+                        "lake",
+                        if no_lake { "skipped" } else { "enabled" }.to_string(),
+                    ),
+                    (
+                        "forge",
+                        if no_forge { "skipped" } else { "enabled" }.to_string(),
+                    ),
+                ],
+            );
+            progress.run(
+                "update",
+                "refresh dependencies and lock state",
+                "project lock state current",
+                || {
+                    update_project(
+                        &root,
+                        cli.locked,
+                        cli.offline,
+                        no_lake,
+                        no_forge,
+                        package.as_deref(),
+                    )
+                },
             )?;
             println!("Updated Tama project lock state");
             Ok(ExitCode::SUCCESS)
@@ -500,6 +852,100 @@ fn doctor_report_has_failures(report: &tama_toolchain::DoctorReport) -> bool {
                 | tama_toolchain::ToolStatus::Incompatible { .. }
         )
     }) || report.lock_current == Some(false)
+}
+
+fn format_doctor_report(report: &tama_toolchain::DoctorReport, fixed: bool) -> String {
+    let mut out = String::new();
+    out.push_str("Checks:\n");
+    let mut checks = 0usize;
+    let mut failures = 0usize;
+    for tool in &report.tools {
+        checks += 1;
+        match tool {
+            tama_toolchain::ToolStatus::Ok(tool) => {
+                out.push_str(&format!(
+                    "  ok   {:<15} {}\n",
+                    tool.name,
+                    concise_tool_detail(tool)
+                ));
+            }
+            tama_toolchain::ToolStatus::Missing { name, remediation } => {
+                failures += 1;
+                out.push_str(&format!("  fail {name:<15} {remediation}\n"));
+            }
+            tama_toolchain::ToolStatus::Incompatible {
+                name,
+                found,
+                expected,
+            } => {
+                failures += 1;
+                out.push_str(&format!(
+                    "  fail {name:<15} found {found}, expected {expected}\n"
+                ));
+            }
+        }
+    }
+    if let Some(lock_current) = report.lock_current {
+        checks += 1;
+        if lock_current {
+            out.push_str("  ok   lock            current\n");
+        } else {
+            failures += 1;
+            out.push_str("  fail lock            stale or unreadable\n");
+        }
+    }
+    if !report.notes.is_empty() {
+        out.push_str("\nNotes:\n");
+        for note in &report.notes {
+            out.push_str(&format!("  {note}\n"));
+        }
+    }
+    out.push('\n');
+    if failures == 0 {
+        if fixed {
+            out.push_str("Doctor passed after repair: ");
+        } else {
+            out.push_str("Doctor passed: ");
+        }
+    } else {
+        out.push_str("Doctor found issues: ");
+    }
+    out.push_str(&format!(
+        "{}, {}",
+        format_count(checks, "check", "checks"),
+        format_count(failures, "issue", "issues")
+    ));
+    out
+}
+
+fn concise_tool_detail(tool: &tama_toolchain::Tool) -> String {
+    tool.version
+        .as_deref()
+        .map(concise_tool_output)
+        .unwrap_or_else(|| tool.path.to_string())
+}
+
+fn concise_tool_output(raw: &str) -> String {
+    let mut lines = raw.lines().map(str::trim).filter(|line| !line.is_empty());
+    let first = lines.next().unwrap_or(raw.trim());
+    if let Some(version) = first.strip_prefix("Lean (version ") {
+        return version.split(',').next().unwrap_or(version).to_string();
+    }
+    if let Some(version) = first.strip_prefix("Lake version ") {
+        return version.to_string();
+    }
+    if let Some(version) = first.strip_prefix("forge Version: ") {
+        return version.to_string();
+    }
+    if let Some(version) = first.strip_prefix("git version ") {
+        return version.to_string();
+    }
+    if first.starts_with("solc,") {
+        if let Some(version) = lines.find_map(|line| line.strip_prefix("Version:")) {
+            return version.trim().to_string();
+        }
+    }
+    first.to_string()
 }
 
 fn report_lake_build_dir(report: &mut tama_toolchain::DoctorReport, root: &Utf8Path) {
@@ -753,19 +1199,40 @@ fn push_unique_dir(dirs: &mut Vec<Utf8PathBuf>, dir: Utf8PathBuf) {
     }
 }
 
-fn finalize_init(root: &Utf8PathBuf, offline: bool) -> Result<(), String> {
+fn finalize_init(
+    root: &Utf8PathBuf,
+    offline: bool,
+    progress: CommandProgress,
+) -> Result<(), String> {
     if offline {
-        for line in offline_init_instructions() {
-            eprintln!("{line}");
-        }
+        progress.skip("lake", "offline; lake update not run");
+        progress.skip("git", "offline; Git worktree unchanged");
+        progress.skip("forge", "offline; forge-std not installed");
         return Ok(());
     }
-    run_lake_update(root, None)?;
-    ensure_git_worktree(root)?;
+    progress.run(
+        "lake",
+        "resolve Lake dependencies",
+        "Lake manifest updated",
+        || run_lake_update(root, None),
+    )?;
+    progress.run(
+        "git",
+        "ensure project is a Git worktree",
+        "Git ready",
+        || ensure_git_worktree(root),
+    )?;
     let mut forge_args = vec!["install", FORGE_STD_DEPENDENCY];
     forge_args.extend(forge_install_optional_flags()?);
-    run_tool(root, "forge", &forge_args)?;
-    refresh_lock(root)
+    progress.run(
+        "forge",
+        "install pinned forge-std submodule",
+        "forge-std installed",
+        || run_tool(root, "forge", &forge_args),
+    )?;
+    progress.run("lock", "refresh tama.lock", "tama.lock current", || {
+        refresh_lock(root)
+    })
 }
 
 fn install_package(
@@ -1640,9 +2107,9 @@ fn select_forge_install_optional_flags(help: &str) -> Vec<&'static str> {
 
 fn offline_init_instructions() -> [&'static str; 6] {
     [
-        "offline init: wrote pinned `lake-manifest.json` and skipped `lake update`, `git init` if needed, and pinned `forge install`.",
-        "for offline check/build, ensure `.lake/packages` or `TAMA_LAKE_PACKAGE_CACHE` contains clean Git checkouts at the exact revisions in `lake-manifest.json`.",
-        "when network access is available, run:",
+        "Offline follow-up:",
+        "  for offline check/build, `.lake/packages` or `TAMA_LAKE_PACKAGE_CACHE` must contain clean Git checkouts at the revisions in `lake-manifest.json`.",
+        "  when network access is available, run:",
         "  lake update",
         "  git init  # if this project is not already inside a Git worktree",
         "  forge install foundry-rs/forge-std@v1.16.1 --shallow",
@@ -1694,6 +2161,10 @@ fn format_audit_report(
     out.push_str(&format!(
         "  contracts: {}\n",
         audit_contracts_summary(&report.summary.contracts)
+    ));
+    out.push_str(&format!(
+        "  warnings: {}\n",
+        if deny_warnings { "fail" } else { "report" }
     ));
     out.push_str("\nChecks:\n");
     for check in &report.summary.checks {
@@ -1874,12 +2345,32 @@ fn prefixed_test_args(args: Vec<String>, offline: bool) -> Vec<String> {
     out
 }
 
-fn clean(root: &Utf8PathBuf, deep: bool) -> Result<(), String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CleanReport {
+    entries: Vec<CleanEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CleanEntry {
+    path: Utf8PathBuf,
+    action: CleanAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CleanAction {
+    Removed,
+    AlreadyClean,
+}
+
+fn clean(root: &Utf8PathBuf, deep: bool) -> Result<CleanReport, String> {
     let (paths, foundry) = clean_paths(root)?;
     let configured_lake_build_dir = match tama_config::parse_lake_build_dir(root) {
         Ok(path) => path,
         Err(tama_config::Error::UnsupportedLakefile(_)) => None,
         Err(err) => return Err(err.to_string()),
+    };
+    let mut report = CleanReport {
+        entries: Vec::new(),
     };
     for rel in [
         paths.out.join("yul"),
@@ -1892,24 +2383,72 @@ fn clean(root: &Utf8PathBuf, deep: bool) -> Result<(), String> {
         foundry.out,
         foundry.cache,
     ] {
-        remove_project_dir(root, &rel)?;
+        let removed = remove_project_dir(root, &rel)?;
+        record_clean_entry(&mut report, rel, removed);
     }
     if let Some(rel) = configured_lake_build_dir {
-        remove_project_dir(root, &rel)?;
+        let removed = remove_project_dir(root, &rel)?;
+        record_clean_entry(&mut report, rel, removed);
     }
-    remove_generated_dir(root, &paths.generated)?;
+    let removed = remove_generated_dir(root, &paths.generated)?;
+    record_clean_entry(&mut report, paths.generated, removed);
     for rel in [
         paths.out.join("verity-modules.txt"),
         paths.out.join("trust-report.json"),
         paths.out.join("layout-report.json"),
         paths.out.join("assumption-report.json"),
     ] {
-        remove_project_file(root, &rel)?;
+        let removed = remove_project_file(root, &rel)?;
+        record_clean_entry(&mut report, rel, removed);
     }
     if deep {
-        remove_project_dir(root, Utf8Path::new(".lake"))?;
+        let rel = Utf8PathBuf::from(".lake");
+        let removed = remove_project_dir(root, &rel)?;
+        record_clean_entry(&mut report, rel, removed);
     }
-    Ok(())
+    Ok(report)
+}
+
+fn record_clean_entry(report: &mut CleanReport, path: Utf8PathBuf, removed: bool) {
+    if report.entries.iter().any(|entry| entry.path == path) {
+        return;
+    }
+    report.entries.push(CleanEntry {
+        path,
+        action: if removed {
+            CleanAction::Removed
+        } else {
+            CleanAction::AlreadyClean
+        },
+    });
+}
+
+fn format_clean_report(report: &CleanReport) -> String {
+    let removed = report
+        .entries
+        .iter()
+        .filter(|entry| entry.action == CleanAction::Removed)
+        .count();
+    let clean = report.entries.len().saturating_sub(removed);
+    let mut out = String::new();
+    out.push_str("Cleaned:\n");
+    for entry in &report.entries {
+        let status = match entry.action {
+            CleanAction::Removed => "ok",
+            CleanAction::AlreadyClean => "skip",
+        };
+        let detail = match entry.action {
+            CleanAction::Removed => "removed",
+            CleanAction::AlreadyClean => "already clean",
+        };
+        out.push_str(&format!("  {status:<4} {:<32} {detail}\n", entry.path));
+    }
+    out.push_str(&format!(
+        "Clean completed: {}, {}",
+        format_count(removed, "target removed", "targets removed"),
+        format_count(clean, "already clean", "already clean")
+    ));
+    out
 }
 
 fn clean_paths(
@@ -1932,14 +2471,15 @@ fn is_missing_config_error(err: &tama_config::Error) -> bool {
     )
 }
 
-fn remove_generated_dir(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
+fn remove_generated_dir(root: &Utf8Path, rel: &Utf8Path) -> Result<bool, String> {
     ensure_project_relative(rel, "clean")?;
     let path = root.join(rel);
     if !path.exists() {
-        return Ok(());
+        return Ok(false);
     }
     ensure_generated_tree_cleanable(&path)?;
-    std::fs::remove_dir_all(&path).map_err(|err| format!("failed to remove `{path}`: {err}"))
+    std::fs::remove_dir_all(&path).map_err(|err| format!("failed to remove `{path}`: {err}"))?;
+    Ok(true)
 }
 
 fn ensure_generated_tree_cleanable(path: &Utf8Path) -> Result<(), String> {
@@ -1963,21 +2503,22 @@ fn ensure_generated_tree_cleanable(path: &Utf8Path) -> Result<(), String> {
     Ok(())
 }
 
-fn remove_project_dir(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
+fn remove_project_dir(root: &Utf8Path, rel: &Utf8Path) -> Result<bool, String> {
     ensure_project_relative(rel, "clean")?;
     let path = root.join(rel);
     if !path.exists() {
-        return Ok(());
+        return Ok(false);
     }
-    std::fs::remove_dir_all(&path).map_err(|err| format!("failed to remove `{path}`: {err}"))
+    std::fs::remove_dir_all(&path).map_err(|err| format!("failed to remove `{path}`: {err}"))?;
+    Ok(true)
 }
 
-fn remove_project_file(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
+fn remove_project_file(root: &Utf8Path, rel: &Utf8Path) -> Result<bool, String> {
     ensure_project_relative(rel, "clean")?;
     let path = root.join(rel);
     match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(err) => Err(format!("failed to remove `{path}`: {err}")),
     }
 }
@@ -2169,7 +2710,6 @@ mod tests {
         assert!(help.contains("--no-solc"));
         assert!(help.contains("--no-forge"));
         assert!(help.contains("--locked"));
-        assert!(help.contains("--offline"));
     }
 
     #[test]
@@ -2190,6 +2730,87 @@ mod tests {
         assert!(help.contains("trust-boundary"));
         assert!(help.contains("--deny-warnings"));
         assert!(help.contains("Aliases: `storage`"));
+    }
+
+    #[test]
+    fn other_command_help_explains_purpose_and_shape() {
+        let cases = [
+            (
+                "init",
+                [
+                    "commented",
+                    "deploy script",
+                    "Online init also runs `lake update`",
+                ],
+            ),
+            (
+                "new",
+                [
+                    "source, spec, proof",
+                    "TODO proofs marked with `sorry`",
+                    "TamaProof.lean",
+                ],
+            ),
+            (
+                "check",
+                [
+                    "lake build TamaSrc TamaSpec",
+                    "Proof modules",
+                    "Use `tama build`",
+                ],
+            ),
+            (
+                "test",
+                [
+                    "forge test",
+                    "passes the remaining arguments",
+                    "Forge's by design",
+                ],
+            ),
+            (
+                "inspect",
+                ["Fields:", "runtime-bytecode", "machine-readable output"],
+            ),
+            (
+                "clean",
+                [
+                    "generated Tama and Foundry build output",
+                    "Tama's generated-file",
+                    "--deep",
+                ],
+            ),
+            (
+                "doctor",
+                ["required tools", "With --fix", "user-owned source, spec"],
+            ),
+            (
+                "install",
+                ["lakefile.toml", "pure Lake packages", "Add @rev"],
+            ),
+            (
+                "remove",
+                ["lakefile.toml", "runs `lake update`", "already be present"],
+            ),
+            (
+                "update",
+                ["runs `lake update`", "--package <name>", "--no-lake"],
+            ),
+        ];
+
+        for (subcommand, snippets) in cases {
+            let mut command = Cli::command();
+            let help = command
+                .find_subcommand_mut(subcommand)
+                .unwrap()
+                .render_help()
+                .to_string();
+            for snippet in snippets {
+                assert!(
+                    help.contains(snippet),
+                    "{subcommand} help did not contain {snippet:?}\n{help}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2216,6 +2837,7 @@ mod tests {
         assert!(output.contains("project: /tmp/project"));
         assert!(output.contains("manifests: artifacts/manifest"));
         assert!(output.contains("contracts: Counter"));
+        assert!(output.contains("warnings: report"));
         assert!(output.contains("ok   structure"));
         assert!(output.contains("fail coverage"));
         assert!(output.contains("Findings (1 issue):"));
@@ -2241,6 +2863,72 @@ mod tests {
         assert!(output.contains("ok   trust-boundary"));
         assert!(output.contains("Audit passed: 5 checks, 1 contract, 0 issues"));
         assert!(!output.trim().eq("Audit passed"));
+    }
+
+    #[test]
+    fn command_progress_line_is_scan_friendly() {
+        assert_eq!(
+            command_progress_line("run", "cache", "prepare Lake package checkouts"),
+            "  run  cache        prepare Lake package checkouts"
+        );
+        assert_eq!(
+            command_progress_line("skip", "forge", "offline; forge-std not installed"),
+            "  skip forge        offline; forge-std not installed"
+        );
+    }
+
+    #[test]
+    fn doctor_human_output_keeps_tool_versions_on_one_line() {
+        let report = tama_toolchain::DoctorReport {
+            tools: vec![
+                tama_toolchain::ToolStatus::Ok(tama_toolchain::Tool {
+                    name: "forge".to_string(),
+                    path: "forge".into(),
+                    version: Some(
+                        "forge Version: 1.6.0\nCommit SHA: abc\nBuild Profile: dist".to_string(),
+                    ),
+                }),
+                tama_toolchain::ToolStatus::Ok(tama_toolchain::Tool {
+                    name: "solc".to_string(),
+                    path: "solc".into(),
+                    version: Some(
+                        "solc, the solidity compiler commandline interface\nVersion: 0.8.33"
+                            .to_string(),
+                    ),
+                }),
+            ],
+            lock_current: Some(true),
+            notes: Vec::new(),
+        };
+
+        let output = format_doctor_report(&report, false);
+
+        assert!(output.contains("ok   forge           1.6.0"));
+        assert!(output.contains("ok   solc            0.8.33"));
+        assert!(!output.contains("Commit SHA"));
+        assert!(output.contains("Doctor passed: 3 checks, 0 issues"));
+    }
+
+    #[test]
+    fn clean_report_summarizes_removed_and_clean_targets() {
+        let report = CleanReport {
+            entries: vec![
+                CleanEntry {
+                    path: "artifacts/yul".into(),
+                    action: CleanAction::Removed,
+                },
+                CleanEntry {
+                    path: "cache".into(),
+                    action: CleanAction::AlreadyClean,
+                },
+            ],
+        };
+
+        let output = format_clean_report(&report);
+
+        assert!(output.contains("ok   artifacts/yul"));
+        assert!(output.contains("skip cache"));
+        assert!(output.contains("Clean completed: 1 target removed, 1 already clean"));
     }
 
     #[test]

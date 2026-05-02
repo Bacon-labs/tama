@@ -67,20 +67,12 @@ impl Check {
 
     pub fn description(self) -> &'static str {
         match self {
-            Check::Structure => {
-                "Project layout, generated artifact paths, bridge headers, and bytecode hashes"
-            }
-            Check::Selectors => {
-                "ABI selectors/topics, generated Solidity declarations, and Yul dispatch cases"
-            }
-            Check::StorageLayout => {
-                "Storage declarations, fixed-slot overlap, encodings, and compiler layout drift"
-            }
-            Check::Coverage => {
-                "Public obligations have property-shaped Foundry mirrors or proof-only reasons"
-            }
+            Check::Structure => "Required files, generated paths, and bytecode hashes",
+            Check::Selectors => "ABI selectors/topics, Solidity declarations, and Yul dispatch",
+            Check::StorageLayout => "Storage slots, overlap, encodings, and compiler layout drift",
+            Check::Coverage => "Public obligations have Foundry mirrors or proof-only reasons",
             Check::TrustBoundary => {
-                "Lean axioms, sorryAx, unresolved declarations, and Verity trust reports"
+                "Lean axioms, sorryAx, unresolved declarations, and trust reports"
             }
         }
     }

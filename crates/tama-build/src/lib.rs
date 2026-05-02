@@ -182,8 +182,8 @@ impl Pipeline {
                     progress.ok(
                         "manifest",
                         &format!(
-                            "{} manifest(s): {}",
-                            manifests.len(),
+                            "{}: {}",
+                            format_count(manifests.len(), "manifest", "manifests"),
                             contract_names(&manifests)
                         ),
                     );
@@ -210,15 +210,7 @@ impl Pipeline {
                     Ok(())
                 },
             )?;
-            progress.run(
-                "clean",
-                &format!(
-                    "{} stale downstream bytecode and bridge artifacts",
-                    manifest.contract
-                ),
-                &format!("{} downstream artifacts ready", manifest.contract),
-                || clear_downstream_artifacts(&self.root, manifest),
-            )?;
+            clear_downstream_artifacts(&self.root, manifest)?;
             if opts.no_solc {
                 manifest.write_pretty(
                     &self.root.join(
@@ -410,6 +402,14 @@ fn contract_names(manifests: &[ContractManifest]) -> String {
         .map(|manifest| manifest.contract.as_str())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn format_count(count: usize, singular: &str, plural: &str) -> String {
+    if count == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{count} {plural}")
+    }
 }
 
 fn load_or_initialize_lock(root: &Utf8Path) -> Result<TamaLock> {

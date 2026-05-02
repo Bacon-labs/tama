@@ -73,6 +73,8 @@ lake build TamaSrc TamaSpec
 ```
 
 Proof modules, Verity codegen, solc, and Foundry are not run.
+Human output shows the project root, Lake targets, package-cache preparation,
+and the Lake build step.
 
 `tama check` does not run `lake update`. It seeds manifest-matching package checkouts already present in `TAMA_LAKE_PACKAGE_CACHE` before invoking Lake, including replacement of clean stale package checkouts, and after a successful check it refreshes that cache from clean Git checkouts under `.lake/packages`. With global `--offline`, it fails before invoking Lake if any git package pinned in `lake-manifest.json` is missing, dirty, or at another revision under `.lake/packages`.
 
@@ -108,7 +110,7 @@ Build steps:
   run  verity-codegen  Verity emits Yul, ABI, storage, and trust reports
   ok   verity-codegen  compiler artifacts generated
   run  manifest        Tama adapts Verity outputs into contract manifests
-  ok   manifest        1 manifest(s): ERC20Lite
+  ok   manifest        1 manifest: ERC20Lite
   run  trust-probe     Lean records proof dependencies for audit
   ok   trust-probe     trust-boundary inputs written
   run  validate        ERC20Lite manifest schema and artifact paths
@@ -121,7 +123,7 @@ Build steps:
   ok   forge           forge build completed
   run  lock            Refresh tama.lock inputs after a successful build
   ok   lock            tama.lock current
-Build completed for 1 manifest(s)
+Build completed: 1 manifest
 ```
 
 Proofs are first-class build inputs. `tama build` runs `lake build TamaProof`,
@@ -171,11 +173,11 @@ Runs audits over the artifacts produced by `tama build`. Human output lists the 
 Without `[check]`, Tama runs the full suite:
 
 ```text
-structure        Required files, aggregate imports, generated bridge headers, artifact paths, and bytecode hashes
-selectors        ABI selectors/topics, generated Solidity declarations, and Yul dispatch cases
-storage-layout   Storage declarations, slot overlap, encodings, and compiler layout drift
-coverage         Public obligations have property-shaped Foundry mirrors or proof-only reasons
-trust-boundary   Lean axioms, sorryAx, unresolved declarations, and Verity trust/assumption reports
+structure        Required files, aggregate imports, generated paths, and bytecode hashes
+selectors        ABI selectors/topics, Solidity declarations, and Yul dispatch
+storage-layout   Storage slots, overlap, encodings, and compiler layout drift
+coverage         Public obligations have Foundry mirrors or proof-only reasons
+trust-boundary   Lean axioms, sorryAx, unresolved declarations, and trust reports
 ```
 
 Use `tama audit <check>` to run one check. `storage` is accepted as an alias for `storage-layout`, and `trust` is accepted as an alias for `trust-boundary`. `--deny-warnings` treats warning-severity findings as failures.
@@ -202,11 +204,11 @@ trust
 
 ## `tama clean [--deep]`
 
-Removes generated Tama artifacts, generated Solidity, the configured Lake build directory, and Foundry's configured `out` and `cache_path` directories. `--deep` also removes Lake dependency/cache state.
+Removes generated Tama artifacts, generated Solidity, the configured Lake build directory, and Foundry's configured `out` and `cache_path` directories. Human output lists which targets were removed and which were already clean. `--deep` also removes Lake dependency/cache state.
 
 ## `tama install`, `tama remove`, `tama update`, `tama doctor`
 
-These commands manage Verity/Tama dependencies, refresh lock state, and diagnose toolchain drift. Lakefile edits must preserve unrelated user content.
+These commands manage Verity/Tama dependencies, refresh lock state, and diagnose toolchain drift. Human output starts with a small scope and reports the high-level step that is running. Lakefile edits must preserve unrelated user content.
 
 `tama install` and `tama remove` refuse `--offline` because they must run `lake update` after editing dependencies. `tama install` only manages Tama packages with `tama.toml`; add pure Lake packages manually to `lakefile.toml`. Direct git packages resolved by Lake are recorded in `tama.lock` under `resolved.lake.<package>.*`. `tama update --offline` is allowed only with both `--no-lake` and `--no-forge`, which limits it to local lock/config refreshes. If the Verity dependency would need to change, `tama update --no-lake` refuses before editing `lakefile.toml` because `lake-manifest.json` must be refreshed by Lake at the same time.
 
