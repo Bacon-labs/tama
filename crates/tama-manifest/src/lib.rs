@@ -511,7 +511,21 @@ impl ContractManifest {
                                 obligation.id, path
                             ));
                         }
-                        if !mirror_symbol_is_property(symbol) {
+                        let Some((contract_name, function_name)) =
+                            mirror_symbol_contract_function(symbol)
+                        else {
+                            return self.invalid(format!(
+                                "obligation `{}` mirror symbol `{}` must include a Solidity contract and function",
+                                obligation.id, symbol
+                            ));
+                        };
+                        if !is_identifier(contract_name) || !is_identifier(function_name) {
+                            return self.invalid(format!(
+                                "obligation `{}` mirror symbol `{}` must include valid Solidity contract and function identifiers",
+                                obligation.id, symbol
+                            ));
+                        }
+                        if !mirror_symbol_is_property(function_name) {
                             return self.invalid(format!(
                                 "obligation `{}` mirror symbol `{}` must be a fuzz test or invariant",
                                 obligation.id, symbol
@@ -562,8 +576,18 @@ impl ContractManifest {
     }
 }
 
-fn mirror_symbol_is_property(symbol: &str) -> bool {
-    let name = symbol.rsplit('.').next().unwrap_or(symbol).trim();
+fn mirror_symbol_contract_function(symbol: &str) -> Option<(&str, &str)> {
+    let (contract, function) = symbol.rsplit_once('.')?;
+    let contract = contract.trim();
+    let function = function.trim();
+    if contract.is_empty() || function.is_empty() {
+        None
+    } else {
+        Some((contract, function))
+    }
+}
+
+fn mirror_symbol_is_property(name: &str) -> bool {
     name.starts_with("testFuzz") || name.starts_with("invariant_")
 }
 
@@ -952,6 +976,20 @@ mod tests {
         let mut manifest = manifest();
         manifest.obligations[0].coverage.path = Some("test/verity/ERC20Lite.t.sol".to_string());
         assert!(manifest.validate().is_err());
+
+        manifest.obligations[0].coverage.path =
+            Some("test/verity/ERC20Lite.t.sol:testFuzzTransferPreservesTotalSupply".to_string());
+        assert!(matches!(
+            manifest.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("must include a Solidity contract and function")
+        ));
+
+        manifest.obligations[0].coverage.path =
+            Some("test/verity/ERC20Lite.t.sol:ERC20-Test.testFuzzTransfer".to_string());
+        assert!(matches!(
+            manifest.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("valid Solidity contract and function identifiers")
+        ));
 
         manifest.obligations[0].coverage.path =
             Some("test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransfer".to_string());
