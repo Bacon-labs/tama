@@ -37,7 +37,7 @@ The release workflow writes a cumulative `manifest.json` with `schema = "tama.re
 
 `tamaup` verifies the manifest signature in process and verifies archive SHA-256 before extraction. `installer/install.sh` may require an external signature verifier, but it must hard fail if verification is unavailable.
 
-`tamaup install` also checks Lean/Lake, Foundry, and solc. Missing tools fail closed unless the user passes the matching `--no-install-*` opt-out, or passes `--yes` to allow bootstrap installation. Bootstrap installation is disabled in `--offline` mode.
+`tamaup install` also checks Lean/Lake, Foundry, and solc. Missing or incompatible tools fail closed unless the user passes the matching `--no-install-*` opt-out, or passes `--yes` to allow bootstrap installation. Bootstrap installation is disabled in `--offline` mode.
 
 The release workflow lives in `.github/workflows/release.yml`. Configure these repository secrets before tagging a release:
 

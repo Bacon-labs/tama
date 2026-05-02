@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 const DEFAULT_BASE_URL: &str = "https://tama.tools";
 const EMBEDDED_PUBLIC_KEY: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
 const DEFAULT_LEAN_TOOLCHAIN: &str = "leanprover/lean4:v4.22.0";
+const DEFAULT_LEAN_VERSION: &str = "4.22.0";
 const DEFAULT_SOLC_VERSION: &str = "0.8.33";
 
 #[derive(Debug, Parser)]
@@ -363,21 +364,46 @@ fn bootstrap_toolchain(opts: BootstrapOptions) -> Result<(), String> {
 
 fn detect_toolchain_presence() -> ToolchainPresence {
     ToolchainPresence {
-        lean: command_exists("lean"),
+        lean: command_version_matches("lean", DEFAULT_LEAN_VERSION),
         lake: command_exists("lake"),
         forge: command_exists("forge"),
-        solc: command_exists("solc"),
+        solc: command_version_matches("solc", DEFAULT_SOLC_VERSION),
     }
 }
 
 fn command_exists(name: &str) -> bool {
-    ProcessCommand::new(name)
+    command_version(name).is_some()
+}
+
+fn command_version_matches(name: &str, expected: &str) -> bool {
+    command_version(name).is_some_and(|output| version_output_matches(&output, expected))
+}
+
+fn command_version(name: &str) -> Option<String> {
+    let output = ProcessCommand::new(name)
         .arg("--version")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let text = if stdout.trim().is_empty() {
+        stderr
+    } else {
+        stdout
+    };
+    Some(text.trim().to_string())
+}
+
+fn version_output_matches(output: &str, expected: &str) -> bool {
+    output
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '.')
+        .any(|token| token == expected)
 }
 
 fn bootstrap_actions(
@@ -403,12 +429,12 @@ fn bootstrap_actions(
 fn require_bootstrap_allowed(opts: BootstrapOptions, tool: &str) -> Result<(), String> {
     if opts.offline {
         return Err(format!(
-            "{tool} is missing and cannot be installed while --offline is set"
+            "{tool} is missing or incompatible and cannot be installed while --offline is set"
         ));
     }
     if !opts.yes {
         return Err(format!(
-            "{tool} is missing; rerun with --yes to install it or pass the matching --no-install-* flag to skip bootstrap"
+            "{tool} is missing or incompatible; rerun with --yes to install it or pass the matching --no-install-* flag to skip bootstrap"
         ));
     }
     Ok(())
@@ -669,6 +695,58 @@ mod tests {
         )
         .unwrap();
         assert_eq!(actions, vec![BootstrapAction::Foundry]);
+    }
+
+    #[test]
+    fn bootstrap_treats_incompatible_version_as_missing_tool() {
+        let presence = ToolchainPresence {
+            lean: true,
+            lake: true,
+            forge: true,
+            solc: false,
+        };
+
+        let err = bootstrap_actions(
+            BootstrapOptions {
+                yes: false,
+                offline: false,
+                no_install_lean: false,
+                no_install_foundry: false,
+                no_install_solc: false,
+            },
+            presence,
+        )
+        .unwrap_err();
+        assert!(err.contains("missing or incompatible"));
+
+        let actions = bootstrap_actions(
+            BootstrapOptions {
+                yes: true,
+                offline: false,
+                no_install_lean: false,
+                no_install_foundry: false,
+                no_install_solc: false,
+            },
+            presence,
+        )
+        .unwrap();
+        assert_eq!(actions, vec![BootstrapAction::Solc]);
+    }
+
+    #[test]
+    fn tool_version_matching_uses_exact_version_token() {
+        assert!(version_output_matches(
+            "Lean (version 4.22.0, x86_64-unknown-linux-gnu)",
+            DEFAULT_LEAN_VERSION
+        ));
+        assert!(version_output_matches(
+            "Version: 0.8.33+commit.64118f21",
+            DEFAULT_SOLC_VERSION
+        ));
+        assert!(!version_output_matches(
+            "Version: 0.8.330+commit.64118f21",
+            DEFAULT_SOLC_VERSION
+        ));
     }
 
     #[test]
