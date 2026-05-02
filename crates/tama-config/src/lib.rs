@@ -319,6 +319,15 @@ pub fn lock_drift(root: &Utf8Path, lock: &TamaLock) -> Result<Vec<String>> {
             drift.push("resolved.solc".to_string());
         }
     }
+    let lean_toolchain_current = actual
+        .get("lean-toolchain")
+        .is_some_and(|hash| lock.inputs.get("lean-toolchain") == Some(hash));
+    if lean_toolchain_current {
+        let toolchain = read_lean_toolchain(root)?;
+        if lock.resolved.get("lean_toolchain") != Some(&toolchain) {
+            drift.push("resolved.lean_toolchain".to_string());
+        }
+    }
     Ok(drift)
 }
 
@@ -333,8 +342,19 @@ pub fn enforce_locked(root: &Utf8Path, lock: &TamaLock) -> Result<()> {
 
 pub fn update_lock_inputs(root: &Utf8Path, lock: &mut TamaLock) -> Result<()> {
     record_lake_manifest_resolutions(root, lock)?;
+    record_lean_toolchain(root, lock)?;
     record_yul_config(root, lock)?;
     lock.inputs = tracked_input_hashes(root)?;
+    Ok(())
+}
+
+pub fn record_lean_toolchain(root: &Utf8Path, lock: &mut TamaLock) -> Result<()> {
+    if !root.join("lean-toolchain").is_file() {
+        lock.resolved.remove("lean_toolchain");
+        return Ok(());
+    }
+    lock.resolved
+        .insert("lean_toolchain".to_string(), read_lean_toolchain(root)?);
     Ok(())
 }
 
@@ -943,6 +963,36 @@ metadata_bytecode_hash = "ipfs"
         let drift = lock_drift(&root, &lock).unwrap();
 
         assert!(drift.contains(&"yul".to_string()));
+    }
+
+    #[test]
+    fn update_lock_inputs_records_lean_toolchain_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(&root.join("lean-toolchain"), "leanprover/lean4:v4.22.0\n")
+            .unwrap();
+        let mut lock = TamaLock {
+            version: 1,
+            resolved: BTreeMap::new(),
+            inputs: BTreeMap::new(),
+            yul: BTreeMap::new(),
+        };
+
+        update_lock_inputs(&root, &mut lock).unwrap();
+
+        assert_eq!(
+            lock.resolved.get("lean_toolchain").map(String::as_str),
+            Some("leanprover/lean4:v4.22.0")
+        );
+        assert!(lock_drift(&root, &lock).unwrap().is_empty());
+
+        lock.resolved.insert(
+            "lean_toolchain".to_string(),
+            "leanprover/lean4:v4.21.0".to_string(),
+        );
+        let drift = lock_drift(&root, &lock).unwrap();
+
+        assert!(drift.contains(&"resolved.lean_toolchain".to_string()));
     }
 
     #[test]

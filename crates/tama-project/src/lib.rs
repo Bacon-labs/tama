@@ -862,6 +862,10 @@ metadata_bytecode_hash = "none"
             Some(DEFAULT_VERITY_REV)
         );
         assert_eq!(
+            lock.resolved.get("lean_toolchain").map(String::as_str),
+            Some(DEFAULT_LEAN_TOOLCHAIN)
+        );
+        assert_eq!(
             lock.yul
                 .get("metadata_bytecode_hash")
                 .and_then(|value| value.as_str()),
