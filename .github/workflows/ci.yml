@@ -99,6 +99,11 @@ jobs:
             tama inspect ERC20Lite "$field" >/dev/null
             tama --json inspect ERC20Lite "$field" | python3 -m json.tool >/dev/null
           done
+          printf '%s\n' '# stale lock probe' >> tama.toml
+          if tama build --locked; then
+            echo "expected tama build --locked to fail after stale tama.toml" >&2
+            exit 1
+          fi
           tama new TipJar
           tama check
           printf '%s\n' '#check this_is_not_in_scope_for_tama_check' >> verity/proof/TipJarProof.lean
