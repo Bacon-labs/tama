@@ -127,12 +127,7 @@ impl Pipeline {
 
     pub fn run(&self, opts: BuildOptions) -> Result<BuildStatus> {
         let config = tama_config::load_config(&self.root)?;
-        let mut lock = tama_config::load_lock(&self.root).unwrap_or(TamaLock {
-            version: 1,
-            resolved: Default::default(),
-            inputs: Default::default(),
-            yul: Default::default(),
-        });
+        let mut lock = load_or_initialize_lock(&self.root)?;
         if opts.locked {
             tama_config::enforce_locked(&self.root, &lock)?;
         }
@@ -180,6 +175,31 @@ impl Pipeline {
                 .collect(),
         })
     }
+}
+
+fn load_or_initialize_lock(root: &Utf8Path) -> Result<TamaLock> {
+    match tama_config::load_lock(root) {
+        Ok(lock) => Ok(lock),
+        Err(err) if is_missing_lock_error(&err) => Ok(empty_lock()),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn empty_lock() -> TamaLock {
+    TamaLock {
+        version: 1,
+        resolved: Default::default(),
+        inputs: Default::default(),
+        yul: Default::default(),
+    }
+}
+
+fn is_missing_lock_error(err: &tama_config::Error) -> bool {
+    matches!(
+        err,
+        tama_config::Error::Common(tama_common::Error::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 fn should_run_forge(opts: &BuildOptions) -> bool {
@@ -1479,6 +1499,30 @@ mod tests {
             ..Default::default()
         }));
         assert!(should_run_forge(&BuildOptions::default()));
+    }
+
+    #[test]
+    fn missing_lock_initializes_empty_build_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let lock = load_or_initialize_lock(&root).unwrap();
+
+        assert_eq!(lock, empty_lock());
+    }
+
+    #[test]
+    fn corrupt_lock_fails_instead_of_resetting_to_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(&root.join("tama.lock"), "not = [valid").unwrap();
+
+        let err = load_or_initialize_lock(&root).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::Config(tama_config::Error::Toml { .. })
+        ));
     }
 
     #[test]
