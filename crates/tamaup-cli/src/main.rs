@@ -578,7 +578,13 @@ fn validate_artifact_platform(platform: &str) -> Result<(), String> {
 
 fn validate_artifact_url(url: &str) -> Result<(), String> {
     validate_manifest_string(url, "artifact URL")?;
-    if !(url.starts_with("https://") || url.starts_with("file://")) {
+    if let Some(path) = url.strip_prefix("file://") {
+        if path.is_empty() || !path.starts_with('/') {
+            return Err(format!(
+                "file artifact URL must use an absolute path `{url}`"
+            ));
+        }
+    } else if !url.starts_with("https://") {
         return Err(format!("unsupported artifact URL `{url}`"));
     }
     Ok(())
@@ -1391,6 +1397,12 @@ mod tests {
         assert!(validate_release_manifest(&manifest)
             .unwrap_err()
             .contains("unsafe artifact platform"));
+
+        manifest.releases[0].artifacts[0].platform = "linux-x86_64".to_string();
+        manifest.releases[0].artifacts[0].url = "file://relative/tama.tar.gz".to_string();
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("absolute path"));
     }
 
     #[test]

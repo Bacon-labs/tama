@@ -152,6 +152,8 @@ for release in releases:
             raise SystemExit(f"unsafe artifact platform: {artifact_platform}")
         if not (artifact_url.startswith("https://") or artifact_url.startswith("file://")):
             raise SystemExit(f"unsupported artifact URL: {artifact_url}")
+        if artifact_url.startswith("file://") and not artifact_url.startswith("file:///"):
+            raise SystemExit(f"file artifact URL must use an absolute path: {artifact_url}")
         if not SAFE_SHA256.fullmatch(artifact_sha256):
             raise SystemExit(f"invalid artifact SHA-256 for {artifact_platform} {release_version}")
         if release_version == selected and artifact_platform == platform:

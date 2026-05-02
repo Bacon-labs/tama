@@ -37,9 +37,9 @@ The release workflow writes a cumulative `manifest.json` with `schema = "tama.re
 
 The schema-less legacy `version` plus `artifacts[]` manifest shape is accepted only for local/offline tests. Installers reject cumulative manifests that omit `releases[]`, include release entries without artifacts, or mix the legacy and cumulative shapes.
 
-Published artifact URLs must use `https://`. `file://` artifact URLs are accepted
-only for signed local/offline manifests used by installer tests or manual
-recovery.
+Published artifact URLs must use `https://`. Absolute-path `file://` artifact
+URLs are accepted only for signed local/offline manifests used by installer
+tests or manual recovery.
 
 `tamaup` verifies the manifest signature in process and verifies archive SHA-256 before extraction. `installer/install.sh` may require an external signature verifier, but it must hard fail if verification is unavailable.
 
