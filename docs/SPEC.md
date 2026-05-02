@@ -519,7 +519,8 @@ Verifies selector consistency across:
 1. Verity declarations;
 2. generated manifest entries;
 3. generated Solidity interfaces;
-4. expected keccak-derived function selectors.
+4. generated Yul dispatcher cases;
+5. expected keccak-derived function selectors.
 
 The initial implementation should port the upstream Verity selector-check script semantics into Rust and maintain golden parity tests against the Python script behavior.
 

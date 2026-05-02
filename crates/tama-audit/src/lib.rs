@@ -353,6 +353,7 @@ fn selectors(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<I
             ));
         }
         check_interface_abi(root, manifest, issues);
+        check_yul_dispatch(root, manifest, issues);
     }
 }
 
@@ -413,6 +414,54 @@ fn check_interface_abi(root: &Utf8Path, manifest: &ContractManifest, issues: &mu
                     error.signature
                 ),
                 Some(manifest.artifacts.interface.clone()),
+            ));
+        }
+    }
+}
+
+fn check_yul_dispatch(root: &Utf8Path, manifest: &ContractManifest, issues: &mut Vec<Issue>) {
+    if manifest.abi.functions.is_empty() {
+        return;
+    }
+    if path_escapes_project(&manifest.artifacts.yul) {
+        issues.push(issue(
+            "selectors",
+            Some(&manifest.contract),
+            "TAMA_SELECTOR_YUL_PATH",
+            format!(
+                "Yul artifact path escapes project root: {}",
+                manifest.artifacts.yul
+            ),
+            Some(manifest.artifacts.yul.clone()),
+        ));
+        return;
+    }
+    let yul = root.join(&manifest.artifacts.yul);
+    let Ok(text) = tama_common::read_to_string(&yul) else {
+        issues.push(issue(
+            "selectors",
+            Some(&manifest.contract),
+            "TAMA_SELECTOR_YUL_MISSING",
+            format!("Yul artifact is missing: {}", manifest.artifacts.yul),
+            Some(manifest.artifacts.yul.clone()),
+        ));
+        return;
+    };
+    let code = strip_solidity_non_code(&text).to_ascii_lowercase();
+    for function in &manifest.abi.functions {
+        let selector = function.selector.to_ascii_lowercase();
+        let label = Regex::new(&format!(r"\bcase\s+{}\b", regex::escape(&selector)))
+            .expect("valid selector label regex");
+        if !label.is_match(&code) {
+            issues.push(issue(
+                "selectors",
+                Some(&manifest.contract),
+                "TAMA_SELECTOR_YUL_DRIFT",
+                format!(
+                    "Yul dispatcher does not contain selector case `{}` for `{}`",
+                    function.selector, function.signature
+                ),
+                Some(manifest.artifacts.yul.clone()),
             ));
         }
     }
@@ -1846,6 +1895,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         std::fs::create_dir_all(root.join("src/generated/verity")).unwrap();
+        std::fs::create_dir_all(root.join("artifacts/yul")).unwrap();
         tama_common::write_generated(
             &root.join("src/generated/verity/CounterIface.sol"),
             r#"// SPDX-License-Identifier: MIT
@@ -1857,6 +1907,7 @@ interface CounterIface {
 "#,
         )
         .unwrap();
+        tama_common::write_string(&root.join("artifacts/yul/Counter.yul"), "{ }\n").unwrap();
         let mut manifest = counter_manifest();
         manifest.abi.functions.push(tama_manifest::Function {
             name: "getCount".to_string(),
@@ -1875,6 +1926,71 @@ interface CounterIface {
         assert!(issues
             .iter()
             .any(|issue| issue.code == "TAMA_SELECTOR_INTERFACE_DRIFT"));
+    }
+
+    #[test]
+    fn selectors_report_generated_yul_dispatch_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        std::fs::create_dir_all(root.join("src/generated/verity")).unwrap();
+        std::fs::create_dir_all(root.join("artifacts/yul")).unwrap();
+        tama_common::write_generated(
+            &root.join("src/generated/verity/CounterIface.sol"),
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+interface CounterIface {
+    function increment() external;
+}
+"#,
+        )
+        .unwrap();
+        let mut manifest = counter_manifest();
+        manifest.abi.functions.push(tama_manifest::Function {
+            name: "increment".to_string(),
+            signature: "increment()".to_string(),
+            selector: tama_common::function_selector("increment()"),
+            visibility: "external".to_string(),
+            mutability: "nonpayable".to_string(),
+            inputs: vec![],
+            outputs: vec![],
+        });
+        tama_common::write_string(
+            &root.join("artifacts/yul/Counter.yul"),
+            r#"object "Counter" {
+    code {
+        // case 0xd09de08a is only a stale comment
+        switch shr(224, calldataload(0))
+        case 0x00000000 { revert(0, 0) }
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let mut issues = Vec::new();
+        selectors(&root, &[manifest.clone()], &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_SELECTOR_YUL_DRIFT"));
+
+        tama_common::write_string(
+            &root.join("artifacts/yul/Counter.yul"),
+            r#"object "Counter" {
+    code {
+        switch shr(224, calldataload(0))
+        case 0xd09de08a { stop() }
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let mut clean_issues = Vec::new();
+        selectors(&root, &[manifest], &mut clean_issues);
+        assert!(!clean_issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_SELECTOR_YUL_DRIFT"));
     }
 
     #[test]

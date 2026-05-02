@@ -192,6 +192,19 @@ jobs:
           PY
           expect_audit_failure "$project" selectors
 
+          project="$(copy_case yul-dispatch-drift)"
+          python3 - "$project/artifacts/yul/ERC20Lite.yul" <<'PY'
+          import re
+          import sys
+          path = sys.argv[1]
+          text = open(path, encoding="utf-8").read()
+          text, count = re.subn(r"case 0x[0-9a-fA-F]{8}", "case 0xffffffff", text, count=1)
+          if count != 1:
+              raise SystemExit("fixture needs a Yul selector case")
+          open(path, "w", encoding="utf-8").write(text)
+          PY
+          expect_audit_failure "$project" selectors
+
           project="$(copy_case duplicate-storage)"
           python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
           import json
