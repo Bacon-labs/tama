@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitCode, Stdio};
 
 use camino::{Utf8Path, Utf8PathBuf};
+#[cfg(test)]
+use clap::CommandFactory;
 use clap::{ArgAction, Args, Parser, Subcommand};
 
 const LAKE_PACKAGE_CACHE_ENV: &str = "TAMA_LAKE_PACKAGE_CACHE";
@@ -30,31 +32,35 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Init {
-        path: Option<Utf8PathBuf>,
-    },
-    New {
-        name: String,
-    },
+    #[command(about = "Create a new ERC20Lite starter project")]
+    Init { path: Option<Utf8PathBuf> },
+    #[command(about = "Scaffold a new Verity contract")]
+    New { name: String },
+    #[command(about = "Lean-check implementation and spec modules")]
     Check,
+    #[command(about = "Run Lean, Verity codegen, solc, bridge generation, and Forge")]
     Build(BuildArgs),
+    #[command(about = "Pass through directly to forge test")]
     Test(TestArgs),
+    #[command(about = "Run structure, selector, storage, coverage, and trust audits")]
     Audit(AuditArgs),
+    #[command(about = "Inspect generated Verity artifacts")]
     Inspect(InspectArgs),
+    #[command(about = "Remove generated build artifacts")]
     Clean {
         #[arg(long)]
         deep: bool,
     },
+    #[command(about = "Diagnose toolchain and project drift")]
     Doctor {
         #[arg(long)]
         fix: bool,
     },
-    Install {
-        package: String,
-    },
-    Remove {
-        package: String,
-    },
+    #[command(about = "Add a Tama/Lake dependency")]
+    Install { package: String },
+    #[command(about = "Remove a Tama/Lake dependency")]
+    Remove { package: String },
+    #[command(about = "Refresh dependencies and lock state")]
     Update {
         #[arg(long)]
         no_forge: bool,
@@ -1807,6 +1813,15 @@ mod tests {
         assert!(!init_next_steps(Utf8Path::new("."))
             .iter()
             .any(|line| line == "  cd ."));
+    }
+
+    #[test]
+    fn help_lists_command_descriptions() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("Create a new ERC20Lite starter project"));
+        assert!(help.contains("Run Lean, Verity codegen, solc, bridge generation, and Forge"));
+        assert!(help.contains("Pass through directly to forge test"));
+        assert!(help.contains("Diagnose toolchain and project drift"));
     }
 
     #[test]

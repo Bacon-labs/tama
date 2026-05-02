@@ -5,6 +5,8 @@ use std::os::unix::fs::{symlink, PermissionsExt};
 use std::process::{Command as ProcessCommand, ExitCode, Stdio};
 
 use camino::{Utf8Path, Utf8PathBuf};
+#[cfg(test)]
+use clap::CommandFactory;
 use clap::{Parser, Subcommand};
 use flate2::read::GzDecoder;
 use minisign_verify::{PublicKey, Signature};
@@ -39,24 +41,28 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(about = "Install a signed Tama release")]
     Install {
         version: Option<String>,
         #[arg(long)]
         manifest_file: Option<Utf8PathBuf>,
     },
-    Use {
-        version: String,
-    },
+    #[command(about = "Switch the active Tama version")]
+    Use { version: String },
+    #[command(about = "List installed Tama versions")]
     List,
+    #[command(name = "self", about = "Manage tamaup itself")]
     Self_ {
         #[command(subcommand)]
         command: SelfCommand,
     },
+    #[command(about = "Remove active tama while keeping tamaup")]
     Uninstall,
 }
 
 #[derive(Debug, Subcommand)]
 enum SelfCommand {
+    #[command(about = "Update tamaup to the latest stable release")]
     Update,
 }
 
@@ -1100,6 +1106,15 @@ mod tests {
 
         assert!(spec.contains(install_command));
         assert!(site.contains(install_command));
+    }
+
+    #[test]
+    fn help_lists_command_descriptions() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("Install a signed Tama release"));
+        assert!(help.contains("Switch the active Tama version"));
+        assert!(help.contains("List installed Tama versions"));
+        assert!(help.contains("Remove active tama while keeping tamaup"));
     }
 
     #[test]
