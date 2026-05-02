@@ -274,11 +274,42 @@ jobs:
           tmp="$(mktemp -d)"
           printf '%s\n' '{"version":"0.1.0","artifacts":[]}' > "$tmp/manifest.json"
           printf '%s\n' 'not a minisign signature' > "$tmp/manifest.json.minisig"
-          if TAMAUP_HOME="$tmp/home" installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path; then
+          if TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path; then
             echo "installer accepted a bad signature" >&2
             exit 1
           fi
           test ! -e "$tmp/home"
+      - name: Shell installer installs local fake artifact
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tmp="$(mktemp -d)"
+          mkdir -p "$tmp/archive"
+          printf '%s\n' '#!/bin/sh' 'echo tama' > "$tmp/archive/tama"
+          printf '%s\n' '#!/bin/sh' 'echo tamaup' > "$tmp/archive/tamaup"
+          chmod +x "$tmp/archive/tama" "$tmp/archive/tamaup"
+          tar -C "$tmp/archive" -czf "$tmp/tama.tar.gz" tama tamaup
+          sha="$(sha256sum "$tmp/tama.tar.gz" | awk '{print $1}')"
+          minisign -G -p "$tmp/minisign.pub" -s "$tmp/minisign.sec" -W
+          pubkey="$(tail -n 1 "$tmp/minisign.pub")"
+          cat > "$tmp/manifest.json" <<JSON
+          {
+            "version": "0.1.0",
+            "artifacts": [
+              {
+                "platform": "linux-x86_64",
+                "url": "file://$tmp/tama.tar.gz",
+                "sha256": "$sha"
+              }
+            ]
+          }
+          JSON
+          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
+          TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0
+          test -x "$tmp/home/versions/0.1.0/bin/tama"
+          test -x "$tmp/home/versions/0.1.0/bin/tamaup"
+          test -L "$tmp/home/bin/tama"
+          test -L "$tmp/home/bin/tamaup"
       - name: Shell installer rejects bad SHA before extraction
         shell: bash
         run: |
@@ -304,8 +335,46 @@ jobs:
           }
           JSON
           minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
-          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
+          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
             echo "installer accepted a bad artifact hash" >&2
+            exit 1
+          fi
+          test ! -e "$tmp/home/versions/0.1.0/bin/tama"
+      - name: Shell installer rejects traversal before install
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tmp="$(mktemp -d)"
+          python3 - "$tmp/tama.tar.gz" <<'PY'
+          import tarfile
+          import sys
+
+          with tarfile.open(sys.argv[1], "w:gz") as archive:
+              for name in ("bin/tama", "../evil", "bin/tamaup"):
+                  info = tarfile.TarInfo(name)
+                  data = name.encode()
+                  info.size = len(data)
+                  info.mode = 0o755
+                  archive.addfile(info, fileobj=__import__("io").BytesIO(data))
+          PY
+          sha="$(sha256sum "$tmp/tama.tar.gz" | awk '{print $1}')"
+          minisign -G -p "$tmp/minisign.pub" -s "$tmp/minisign.sec" -W
+          pubkey="$(tail -n 1 "$tmp/minisign.pub")"
+          cat > "$tmp/manifest.json" <<JSON
+          {
+            "version": "0.1.0",
+            "artifacts": [
+              {
+                "platform": "linux-x86_64",
+                "url": "file://$tmp/tama.tar.gz",
+                "sha256": "$sha"
+              }
+            ]
+          }
+          JSON
+          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
+          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
+            echo "installer accepted an archive traversal entry" >&2
             exit 1
           fi
           test ! -e "$tmp/home/versions/0.1.0/bin/tama"

@@ -91,6 +91,10 @@ else:
 PY
 . "$TMPDIR/artifact.env"
 
+case "$VERSION" in
+  ""|*[!A-Za-z0-9._+-]*) echo "unsafe release version: $VERSION" >&2; exit 1 ;;
+esac
+
 case "$URL" in
   file://*) cp "${URL#file://}" "$TMPDIR/tama.tar.gz" ;;
   *) fetch "$URL" "$TMPDIR/tama.tar.gz" ;;
@@ -107,19 +111,75 @@ if [ "$ACTUAL" != "$SHA256" ]; then
   exit 1
 fi
 
-mkdir -p "$TAMAUP_HOME/versions/$VERSION"
-tar -tzf "$TMPDIR/tama.tar.gz" | while IFS= read -r entry; do
+tar -tzf "$TMPDIR/tama.tar.gz" > "$TMPDIR/archive.entries"
+while IFS= read -r entry; do
   case "$entry" in
     /*|*../*|../*) echo "unsafe archive path: $entry" >&2; exit 1 ;;
     bin/tama|bin/tamaup|tama|tamaup) ;;
     *) echo "unexpected archive entry: $entry" >&2; exit 1 ;;
   esac
+done < "$TMPDIR/archive.entries"
+
+ARCHIVE_STAGE="$TMPDIR/archive"
+mkdir -p "$ARCHIVE_STAGE"
+tar -xzf "$TMPDIR/tama.tar.gz" -C "$ARCHIVE_STAGE"
+
+BAD_ENTRY="$(find "$ARCHIVE_STAGE" ! -type d ! -type f -print | sed -n '1p')"
+if [ -n "$BAD_ENTRY" ]; then
+  echo "unexpected archive entry type: $BAD_ENTRY" >&2
+  exit 1
+fi
+
+if [ -f "$ARCHIVE_STAGE/bin/tama" ] && [ -f "$ARCHIVE_STAGE/bin/tamaup" ]; then
+  TAMA_BIN="$ARCHIVE_STAGE/bin/tama"
+  TAMAUP_BIN="$ARCHIVE_STAGE/bin/tamaup"
+elif [ -f "$ARCHIVE_STAGE/tama" ] && [ -f "$ARCHIVE_STAGE/tamaup" ]; then
+  TAMA_BIN="$ARCHIVE_STAGE/tama"
+  TAMAUP_BIN="$ARCHIVE_STAGE/tamaup"
+else
+  echo "archive is missing expected tama or tamaup binary" >&2
+  exit 1
+fi
+
+for binary in "$TAMA_BIN" "$TAMAUP_BIN"; do
+  if [ -L "$binary" ]; then
+    echo "archive binary must be a regular file: $binary" >&2
+    exit 1
+  fi
 done
-tar -xzf "$TMPDIR/tama.tar.gz" -C "$TAMAUP_HOME/versions/$VERSION"
+
+VERSIONS_DIR="$TAMAUP_HOME/versions"
+VERSION_DIR="$VERSIONS_DIR/$VERSION"
+VERSION_TMP="$VERSIONS_DIR/.install-$VERSION.$$"
+VERSION_OLD="$VERSIONS_DIR/.previous-$VERSION.$$"
+rm -rf "$VERSION_TMP" "$VERSION_OLD"
+mkdir -p "$VERSION_TMP/bin"
+cp "$TAMA_BIN" "$VERSION_TMP/bin/tama"
+cp "$TAMAUP_BIN" "$VERSION_TMP/bin/tamaup"
+chmod 755 "$VERSION_TMP/bin/tama" "$VERSION_TMP/bin/tamaup"
+if [ -e "$VERSION_DIR" ]; then
+  mv "$VERSION_DIR" "$VERSION_OLD"
+fi
+if mv "$VERSION_TMP" "$VERSION_DIR"; then
+  rm -rf "$VERSION_OLD"
+else
+  if [ -e "$VERSION_OLD" ]; then
+    mv "$VERSION_OLD" "$VERSION_DIR"
+  fi
+  exit 1
+fi
+
 mkdir -p "$TAMAUP_HOME/bin"
-ln -sfn "$TAMAUP_HOME/versions/$VERSION/bin/tama" "$TAMAUP_HOME/bin/tama"
-ln -sfn "$TAMAUP_HOME/versions/$VERSION/bin/tamaup" "$TAMAUP_HOME/bin/tamaup"
-printf '%s\n' "$VERSION" > "$TAMAUP_HOME/active"
+link_tmp="$TAMAUP_HOME/bin/tama.tmp.$$"
+rm -f "$link_tmp"
+ln -s "$VERSION_DIR/bin/tama" "$link_tmp"
+mv -f "$link_tmp" "$TAMAUP_HOME/bin/tama"
+link_tmp="$TAMAUP_HOME/bin/tamaup.tmp.$$"
+rm -f "$link_tmp"
+ln -s "$VERSION_DIR/bin/tamaup" "$link_tmp"
+mv -f "$link_tmp" "$TAMAUP_HOME/bin/tamaup"
+printf '%s\n' "$VERSION" > "$TAMAUP_HOME/active.tmp.$$"
+mv -f "$TAMAUP_HOME/active.tmp.$$" "$TAMAUP_HOME/active"
 
 if [ "$NO_MODIFY_PATH" -eq 0 ]; then
   echo "Add $TAMAUP_HOME/bin to PATH if it is not already present."
