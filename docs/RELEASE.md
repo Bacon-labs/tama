@@ -56,7 +56,7 @@ The release workflow publishes the static GitHub Pages site at `https://tama.too
 curl -L https://tama.tools/install.sh | sh
 ```
 
-- links to quickstart, command reference, audit guide, limitations, release artifacts, `install.sh`, `manifest.json`, and `manifest.json.minisig`;
+- links to quickstart, command reference, audit guide, generated-artifact rules, Verity compatibility, limitations, release artifacts, `install.sh`, `manifest.json`, and `manifest.json.minisig`;
 - links to the telemetry-free privacy statement;
 - no Windows installation path for v0.1.
 
