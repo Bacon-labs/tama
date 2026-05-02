@@ -26,7 +26,9 @@ test/verity/Foo.t.sol
 
 ## Supported Starter
 
-The default starter is `ERC20Lite`. It covers mappings, an ERC20-like transfer path, event metadata where supported by the pinned Verity compiler, proof obligations, bridge generation, Foundry mirror tests, and audit.
+The default starter is `ERC20Lite`. It covers mappings, an ERC20-like transfer path, proof obligations, bridge generation, Foundry mirror tests, and audit.
+
+The pinned Verity macro syntax used by the starter does not expose event declarations for `verity_contract`, so the generated `ERC20Lite` starter does not emit ERC20 `Transfer` events in v0.1. Event ABI parsing and manifest validation are still supported for compiler outputs that include event metadata.
 
 Counter is a compatibility fixture, not the starter template.
 

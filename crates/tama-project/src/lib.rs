@@ -360,7 +360,6 @@ verity_contract ERC20Lite where
     let newSupply ← requireSomeUint (safeAdd currentSupply amount) "Supply overflow"
     setMapping balancesSlot toAddr newBalance
     setStorage totalSupplySlot newSupply
-    emit "Transfer" [0, addressToWord toAddr, amount]
     return true
 
   function transfer (toAddr : Address, amount : Uint256) : Bool := do
@@ -374,7 +373,6 @@ verity_contract ERC20Lite where
       let newRecipientBalance ← requireSomeUint (safeAdd recipientBalance amount) "Recipient balance overflow"
       setMapping balancesSlot sender (sub senderBalance amount)
       setMapping balancesSlot toAddr newRecipientBalance
-    emit "Transfer" [addressToWord sender, addressToWord toAddr, amount]
     return true
 
   function balanceOf (addr : Address) : Uint256 := do
@@ -450,8 +448,6 @@ interface ERC20LiteIface {
     function balanceOf(address account) external view returns (uint256);
     function totalSupply() external view returns (uint256);
     function owner() external view returns (address);
-
-    event Transfer(address indexed from, address indexed to, uint256 amount);
 }
 "#;
 
@@ -500,6 +496,8 @@ mod tests {
         assert!(!proof.contains("sorry"));
         assert!(proof.contains("tama: obligation kind=postcondition function=transfer"));
         assert!(proof.contains("coverage=proof_only"));
+        let source = read_to_string(&root.join("verity/src/ERC20Lite.lean")).unwrap();
+        assert!(!source.contains(r#"emit "Transfer""#));
     }
 
     #[test]
