@@ -498,6 +498,8 @@ mod tests {
         assert!(!root.join("test/Counter.t.sol").exists());
         let proof = read_to_string(&root.join("verity/proof/ERC20LiteProof.lean")).unwrap();
         assert!(!proof.contains("sorry"));
+        assert!(proof.contains("tama: obligation kind=postcondition function=transfer"));
+        assert!(proof.contains("coverage=proof_only"));
     }
 
     #[test]
