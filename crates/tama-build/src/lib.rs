@@ -286,7 +286,9 @@ pub fn compile_yul_standard_json(
         &(serde_json::to_string_pretty(&input).unwrap() + "\n"),
     )?;
 
-    let mut child = Command::new("solc")
+    let solc = tama_toolchain::resolve_solc(&config.yul.solc, root)?;
+    let solc_program = solc.path.to_string();
+    let mut child = Command::new(solc.path.as_std_path())
         .arg("--standard-json")
         .current_dir(root)
         .stdin(Stdio::piped())
@@ -294,7 +296,7 @@ pub fn compile_yul_standard_json(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|source| Error::Process {
-            program: "solc".to_string(),
+            program: solc_program.clone(),
             message: source.to_string(),
         })?;
     child
@@ -303,18 +305,18 @@ pub fn compile_yul_standard_json(
         .expect("piped stdin")
         .write_all(serde_json::to_string(&input).unwrap().as_bytes())
         .map_err(|source| Error::Process {
-            program: "solc".to_string(),
+            program: solc_program.clone(),
             message: source.to_string(),
         })?;
     let output = child.wait_with_output().map_err(|source| Error::Process {
-        program: "solc".to_string(),
+        program: solc_program.clone(),
         message: source.to_string(),
     })?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr);
     if stdout.trim().is_empty() && !output.status.success() {
         return Err(Error::Process {
-            program: "solc".to_string(),
+            program: solc_program,
             message: stderr.to_string(),
         });
     }

@@ -15,6 +15,10 @@ pub enum Error {
     MissingTool(String),
     #[error("could not parse {tool} version from `{output}`")]
     VersionParse { tool: String, output: String },
+    #[error("invalid expected {tool} version `{version}`")]
+    InvalidExpectedVersion { tool: String, version: String },
+    #[error("{0}")]
+    ToolVersionMismatch(String),
     #[error("failed to run {program}: {source}")]
     Process {
         program: String,
@@ -102,9 +106,56 @@ pub fn parse_solc_version(output: &str) -> Result<Version> {
     parse_version_with(output, "solc", &re)
 }
 
+pub fn resolve_solc(expected: &str, root: &Utf8Path) -> Result<Tool> {
+    let expected_version = parse_expected_version("solc", expected)?;
+    let path = resolve_solc_path(root, expected)?;
+    let version_text = tool_version("solc", &path)?;
+    let found = parse_solc_version(&version_text)?;
+    if found != expected_version {
+        return Err(Error::ToolVersionMismatch(format!(
+            "solc at {path} has version {found}, expected {expected_version}"
+        )));
+    }
+    Ok(Tool {
+        name: "solc".to_string(),
+        path,
+        version: Some(version_text),
+    })
+}
+
 pub fn parse_forge_version(output: &str) -> Result<Version> {
     let re = Regex::new(r"forge Version:\s*([0-9]+\.[0-9]+\.[0-9]+)").expect("valid regex");
     parse_version_with(output, "forge", &re)
+}
+
+fn parse_expected_version(tool: &str, version: &str) -> Result<Version> {
+    Version::parse(version.trim_start_matches('v')).map_err(|_| Error::InvalidExpectedVersion {
+        tool: tool.to_string(),
+        version: version.to_string(),
+    })
+}
+
+fn resolve_solc_path(root: &Utf8Path, expected: &str) -> Result<Utf8PathBuf> {
+    if let Ok(path) = std::env::var("TAMA_SOLC") {
+        return Ok(Utf8PathBuf::from(path));
+    }
+    let project_managed = root.join(".tama/bin/solc");
+    if project_managed.is_file() {
+        return Ok(project_managed);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let home_managed = Utf8PathBuf::from(home)
+            .join(".tama")
+            .join("solc")
+            .join(expected.trim_start_matches('v'))
+            .join("solc");
+        if home_managed.is_file() {
+            return Ok(home_managed);
+        }
+    }
+    let path = which::which("solc").map_err(|_| Error::MissingTool("solc".to_string()))?;
+    Utf8PathBuf::from_path_buf(path)
+        .map_err(|path| tama_common::Error::NonUtf8Path(path.display().to_string()).into())
 }
 
 pub fn parse_lean_version(output: &str) -> Result<Version> {
@@ -180,6 +231,14 @@ mod tests {
     fn parses_solc_version() {
         let version = parse_solc_version("Version: 0.8.33+commit.64118f21").unwrap();
         assert_eq!(version, Version::new(0, 8, 33));
+    }
+
+    #[test]
+    fn parses_expected_solc_version_with_optional_v_prefix() {
+        assert_eq!(
+            parse_expected_version("solc", "v0.8.33").unwrap(),
+            Version::new(0, 8, 33)
+        );
     }
 
     #[test]
