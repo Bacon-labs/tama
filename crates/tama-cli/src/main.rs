@@ -1976,6 +1976,24 @@ mod tests {
     }
 
     #[test]
+    fn lake_package_cache_sync_skips_dirty_packages() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
+
+        init_git_package(&root.join(".lake/packages/verity"), "resolved").unwrap();
+        tama_common::write_string(
+            &root.join(".lake/packages/verity/untracked.lean"),
+            "local change\n",
+        )
+        .unwrap();
+
+        sync_lake_package_cache(&root, &cache).unwrap();
+
+        assert!(!cache.join("verity").exists());
+    }
+
+    #[test]
     fn lake_package_cache_for_build_seeds_only_manifest_matching_revisions() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
