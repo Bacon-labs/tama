@@ -60,11 +60,22 @@ struct CommandOutput {
 
 pub struct Lake {
     root: Utf8PathBuf,
+    json_output: bool,
 }
 
 impl Lake {
     pub fn new(root: impl Into<Utf8PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            json_output: false,
+        }
+    }
+
+    pub fn new_json(root: impl Into<Utf8PathBuf>, json_output: bool) -> Self {
+        Self {
+            root: root.into(),
+            json_output,
+        }
     }
 
     pub fn check_src_and_spec(&self) -> Result<()> {
@@ -72,11 +83,17 @@ impl Lake {
             "lake",
             &lake_build_args(&["TamaSrc", "TamaSpec"]),
             &self.root,
+            self.json_output,
         )
     }
 
     pub fn build_proofs(&self) -> Result<()> {
-        run_owned("lake", &lake_build_args(&["TamaProof"]), &self.root)
+        run_owned(
+            "lake",
+            &lake_build_args(&["TamaProof"]),
+            &self.root,
+            self.json_output,
+        )
     }
 
     pub fn verity_codegen(&self, config: &TamaConfig, opts: &BuildOptions) -> Result<()> {
@@ -115,7 +132,7 @@ impl Lake {
             config.paths.out.join("assumption-report.json").to_string(),
         ];
         let _evmyul_guard = EvmyulConformanceGuard::prepare(&self.root)?;
-        run_owned("lake", &args, &self.root)
+        run_owned("lake", &args, &self.root, self.json_output)
     }
 }
 
@@ -138,7 +155,7 @@ impl Pipeline {
             tama_config::enforce_locked(&self.root, &lock)?;
         }
 
-        let lake = Lake::new(self.root.clone());
+        let lake = Lake::new_json(self.root.clone(), opts.json);
         lake.build_proofs()?;
         lake.verity_codegen(&config, &opts)?;
         let mut manifests = adapt_verity_outputs(&self.root, &config, opts.contract.as_deref())?;
@@ -162,7 +179,12 @@ impl Pipeline {
             generate_bridge(&self.root, manifest)?;
         }
         if should_run_forge(&opts) {
-            run_owned("forge", &forge_build_args(opts.offline), &self.root)?;
+            run_owned(
+                "forge",
+                &forge_build_args(opts.offline),
+                &self.root,
+                opts.json,
+            )?;
         }
         if !opts.locked {
             tama_config::update_lock_inputs(&self.root, &mut lock)?;
@@ -743,7 +765,10 @@ fn solidity_params(params: &[Param]) -> String {
         .join(", ")
 }
 
-fn run_owned(program: &str, args: &[String], cwd: &Utf8Path) -> Result<()> {
+fn run_owned(program: &str, args: &[String], cwd: &Utf8Path, json_output: bool) -> Result<()> {
+    if json_output {
+        return run_owned_json_safe(program, args, cwd);
+    }
     let status = Command::new(program)
         .args(args)
         .current_dir(cwd)
@@ -758,6 +783,33 @@ fn run_owned(program: &str, args: &[String], cwd: &Utf8Path) -> Result<()> {
         Err(Error::Process {
             program: program.to_string(),
             message: format!("exited with status {status}"),
+        })
+    }
+}
+
+fn run_owned_json_safe(program: &str, args: &[String], cwd: &Utf8Path) -> Result<()> {
+    let output = Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .map_err(|source| Error::Process {
+            program: program.to_string(),
+            message: source.to_string(),
+        })?;
+    let mut stderr = std::io::stderr().lock();
+    stderr
+        .write_all(&output.stdout)
+        .and_then(|()| stderr.write_all(&output.stderr))
+        .map_err(|source| Error::Process {
+            program: program.to_string(),
+            message: source.to_string(),
+        })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(Error::Process {
+            program: program.to_string(),
+            message: format!("exited with status {}", output.status),
         })
     }
 }
@@ -1795,6 +1847,18 @@ mod tests {
         assert_eq!(lake_build_args(&["TamaProof"]), vec!["build", "TamaProof"]);
         assert_eq!(forge_build_args(true), vec!["build", "--offline"]);
         assert_eq!(forge_build_args(false), vec!["build"]);
+    }
+
+    #[test]
+    fn json_safe_process_mode_keeps_stdout_available_for_tama_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let args = vec![
+            "-c".to_string(),
+            "printf subprocess-stdout; printf subprocess-stderr >&2".to_string(),
+        ];
+
+        run_owned("sh", &args, &root, true).unwrap();
     }
 
     #[test]
