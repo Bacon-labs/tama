@@ -1727,6 +1727,18 @@ mod tests {
         assert!(!dest.join("evil").exists());
     }
 
+    #[test]
+    fn extract_archive_rejects_absolute_path_before_writing() {
+        let tarball = test_archive_with_raw_name(b"/evil", b"evil");
+        let dir = tempfile::tempdir().unwrap();
+        let dest = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let err = extract_archive(&tarball, &dest).unwrap_err();
+
+        assert!(err.contains("escapes install dir"));
+        assert!(!dest.join("evil").exists());
+    }
+
     fn test_archive(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
         let mut tarball = Vec::new();
         {
