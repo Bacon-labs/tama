@@ -23,9 +23,12 @@ TAMA_LAKE_PACKAGE_CACHE
                     to a different directory, or to `off` to disable caching.
 
                     Tama copies missing packages into `.lake/packages` before
-                    `lake update` and records newly fetched packages after a
-                    successful update. This is a performance optimization only;
-                    locked builds must also work from an empty cache.
+                    `lake update` and refreshes cached packages after a
+                    successful update. Before `tama check` or `tama build`, Tama
+                    may also seed missing packages when the cached checkout's
+                    Git HEAD exactly matches `lake-manifest.json`. This is a
+                    performance optimization only; locked builds must also work
+                    from an empty cache.
 ```
 
 ## `tama init [path]`
@@ -46,7 +49,7 @@ lake build TamaSrc TamaSpec
 
 Proof modules, Verity codegen, solc, and Foundry are not run.
 
-`tama check` does not run `lake update`; with global `--offline`, it uses the project's existing local Lake state.
+`tama check` does not run `lake update`; with global `--offline`, it uses the project's existing local Lake state plus any manifest-matching package checkouts already present in `TAMA_LAKE_PACKAGE_CACHE`.
 
 ## `tama build`
 
@@ -64,7 +67,7 @@ Useful flags:
 
 `--no-solc` and `--no-forge` are local development escape hatches and are not release gates. `--no-solc` removes stale downstream solc JSON, bytecode, and generated bridge files for the selected contracts while leaving fresh Yul and manifests.
 
-`tama build` does not run `lake update`; with global `--offline`, it uses the project's existing local Lake state and passes `--offline` to `forge build`.
+`tama build` does not run `lake update`; with global `--offline`, it uses the project's existing local Lake state plus manifest-matching cached Lake package checkouts, and passes `--offline` to `forge build`.
 
 ## `tama test [forge-args...]`
 

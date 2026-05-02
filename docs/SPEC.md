@@ -421,10 +421,12 @@ TAMA_LAKE_PACKAGE_CACHE
                     to a different directory, or to `off` to disable caching.
 
                     Tama may seed `.lake/packages` from this directory before
-                    `lake update` and copy newly fetched packages back
-                    afterward. The cache is a performance optimization only;
-                    release and locked builds must remain reproducible from an
-                    empty cache.
+                    `lake update` and copy resolved packages back afterward.
+                    Before `tama check` or `tama build`, Tama may also seed
+                    missing packages from this cache when the cached checkout's
+                    Git HEAD exactly matches the revision in `lake-manifest.json`.
+                    The cache is a performance optimization only; release and
+                    locked builds must remain reproducible from an empty cache.
 ```
 
 ### `tama init [path]`

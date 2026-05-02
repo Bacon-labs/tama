@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitCode, Stdio};
 
@@ -142,6 +143,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Check => {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
+            seed_lake_package_cache_for_build(&root)?;
             tama_build::Lake::new(root)
                 .check_src_and_spec()
                 .map_err(|err| err.to_string())?;
@@ -149,6 +151,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Build(args) => {
             let root = project_root(cli.root)?;
+            seed_lake_package_cache_for_build(&root)?;
             let status = tama_build::Pipeline::new(root)
                 .run(tama_build::BuildOptions {
                     locked: cli.locked,
@@ -835,6 +838,56 @@ fn default_lake_package_cache() -> Result<Utf8PathBuf, String> {
     utf8_path_from_path_buf(base.join("tama/lake-packages"), "default cache directory")
 }
 
+fn seed_lake_package_cache_for_build(root: &Utf8Path) -> Result<(), String> {
+    let Some(cache) = lake_package_cache()? else {
+        return Ok(());
+    };
+    seed_lake_package_cache_from_manifest(root, &cache)
+}
+
+fn seed_lake_package_cache_from_manifest(root: &Utf8Path, cache: &Utf8Path) -> Result<(), String> {
+    if !cache.exists() {
+        return Ok(());
+    }
+    let package_revs = lake_manifest_git_revs(root)?;
+    if package_revs.is_empty() {
+        return Ok(());
+    }
+    let packages = root.join(".lake/packages");
+    copy_matching_package_dirs(cache, &packages, &package_revs)
+}
+
+fn lake_manifest_git_revs(root: &Utf8Path) -> Result<BTreeMap<String, String>, String> {
+    let path = root.join("lake-manifest.json");
+    if !path.is_file() {
+        return Ok(BTreeMap::new());
+    }
+    let text =
+        std::fs::read_to_string(&path).map_err(|err| format!("failed to read `{path}`: {err}"))?;
+    let manifest: serde_json::Value =
+        serde_json::from_str(&text).map_err(|err| format!("failed to parse `{path}`: {err}"))?;
+    let mut package_revs = BTreeMap::new();
+    let Some(packages) = manifest
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(package_revs);
+    };
+    for package in packages {
+        if package.get("type").and_then(serde_json::Value::as_str) != Some("git") {
+            continue;
+        }
+        let Some(name) = package.get("name").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(rev) = package.get("rev").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        package_revs.insert(name.to_string(), rev.to_string());
+    }
+    Ok(package_revs)
+}
+
 fn home_dir(name: &str) -> Result<PathBuf, String> {
     std::env::var_os(name)
         .map(PathBuf::from)
@@ -869,6 +922,50 @@ fn copy_missing_package_dirs(source: &Utf8Path, destination: &Utf8Path) -> Resul
 
 fn refresh_package_dirs(source: &Utf8Path, destination: &Utf8Path) -> Result<(), String> {
     copy_package_dirs(source, destination, true)
+}
+
+fn copy_matching_package_dirs(
+    source: &Utf8Path,
+    destination: &Utf8Path,
+    package_revs: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    if same_existing_path(source, destination) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(destination)
+        .map_err(|err| format!("failed to create `{destination}`: {err}"))?;
+    for entry in
+        std::fs::read_dir(source).map_err(|err| format!("failed to read `{source}`: {err}"))?
+    {
+        let entry = entry.map_err(|err| format!("failed to read `{source}` entry: {err}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("failed to inspect `{}`: {err}", entry.path().display()))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let source = Utf8PathBuf::from_path_buf(entry.path())
+            .map_err(|path| format!("package path `{}` is not UTF-8", path.display()))?;
+        if !source.join(".git").exists() {
+            continue;
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|name| format!("package cache entry `{name:?}` is not UTF-8"))?;
+        let Some(expected_rev) = package_revs.get(&name) else {
+            continue;
+        };
+        if git_head_rev(&source).ok().as_deref() != Some(expected_rev.as_str()) {
+            continue;
+        }
+        let target = destination.join(&name);
+        if path_exists(&target)? {
+            continue;
+        }
+        copy_dir_recursively(&source, &target)?;
+    }
+    Ok(())
 }
 
 fn copy_package_dirs(
@@ -1484,6 +1581,35 @@ mod tests {
     }
 
     #[test]
+    fn lake_package_cache_for_build_seeds_only_manifest_matching_revisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
+        let verity_rev = init_git_package(&cache.join("verity"), "matching").unwrap();
+        init_git_package(&cache.join("mathlib"), "stale").unwrap();
+
+        tama_common::write_string(
+            &root.join("lake-manifest.json"),
+            &format!(
+                r#"{{
+  "version": "1.1.0",
+  "packages": [
+    {{"type": "git", "name": "verity", "rev": "{verity_rev}"}},
+    {{"type": "git", "name": "mathlib", "rev": "0000000000000000000000000000000000000000"}}
+  ]
+}}
+"#
+            ),
+        )
+        .unwrap();
+
+        seed_lake_package_cache_from_manifest(&root, &cache).unwrap();
+
+        assert!(root.join(".lake/packages/verity/package.txt").is_file());
+        assert!(!root.join(".lake/packages/mathlib").exists());
+    }
+
+    #[test]
     fn lake_package_cache_override_can_disable_default_cache() {
         assert_eq!(lake_package_cache_from_override("").unwrap(), None);
         assert_eq!(lake_package_cache_from_override("off").unwrap(), None);
@@ -1494,6 +1620,29 @@ mod tests {
                 .as_deref(),
             Some(Utf8Path::new("/tmp/tama-cache"))
         );
+    }
+
+    fn init_git_package(path: &Utf8Path, text: &str) -> Result<String, String> {
+        std::fs::create_dir_all(path).map_err(|err| err.to_string())?;
+        let cwd = path.to_owned();
+        run_process("git", &["init"], Some(&cwd))?;
+        tama_common::write_string(&path.join("package.txt"), text)
+            .map_err(|err| err.to_string())?;
+        run_process("git", &["add", "package.txt"], Some(&cwd))?;
+        run_process(
+            "git",
+            &[
+                "-c",
+                "user.name=Tama Test",
+                "-c",
+                "user.email=tama@example.test",
+                "commit",
+                "-m",
+                "init",
+            ],
+            Some(&cwd),
+        )?;
+        git_head_rev(path)
     }
 
     #[test]
