@@ -580,9 +580,12 @@ fn check_interface_declarations<'a>(
 }
 
 fn check_yul_dispatch(root: &Utf8Path, manifest: &ContractManifest, issues: &mut Vec<Issue>) {
-    if manifest.abi.functions.is_empty() {
-        return;
-    }
+    let expected_selectors = manifest
+        .abi
+        .functions
+        .iter()
+        .map(|function| function.selector.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
     if path_escapes_project(&manifest.artifacts.yul) {
         issues.push(issue(
             "selectors",
@@ -598,6 +601,9 @@ fn check_yul_dispatch(root: &Utf8Path, manifest: &ContractManifest, issues: &mut
     }
     let yul = root.join(&manifest.artifacts.yul);
     let Ok(text) = tama_common::read_to_string(&yul) else {
+        if expected_selectors.is_empty() {
+            return;
+        }
         issues.push(issue(
             "selectors",
             Some(&manifest.contract),
@@ -608,12 +614,6 @@ fn check_yul_dispatch(root: &Utf8Path, manifest: &ContractManifest, issues: &mut
         return;
     };
     let code = strip_solidity_non_code(&text).to_ascii_lowercase();
-    let expected_selectors = manifest
-        .abi
-        .functions
-        .iter()
-        .map(|function| function.selector.to_ascii_lowercase())
-        .collect::<BTreeSet<_>>();
     let actual_selectors = yul_dispatch_cases(&code);
     for function in &manifest.abi.functions {
         let selector = function.selector.to_ascii_lowercase();
@@ -2703,6 +2703,44 @@ interface CounterIface {
         assert!(!clean_issues
             .iter()
             .any(|issue| issue.code == "TAMA_SELECTOR_YUL_DRIFT"));
+    }
+
+    #[test]
+    fn selectors_reject_yul_cases_when_manifest_has_no_functions() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        std::fs::create_dir_all(root.join("src/generated/verity")).unwrap();
+        std::fs::create_dir_all(root.join("artifacts/yul")).unwrap();
+        tama_common::write_generated(
+            &root.join("src/generated/verity/CounterIface.sol"),
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+interface CounterIface {}
+"#,
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("artifacts/yul/Counter.yul"),
+            r#"object "Counter" {
+    code {
+        switch shr(224, calldataload(0))
+        case 0xd09de08a { stop() }
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let mut issues = Vec::new();
+        selectors(&root, &[counter_manifest()], &mut issues);
+
+        assert!(issues.iter().any(|issue| {
+            issue.code == "TAMA_SELECTOR_YUL_DRIFT"
+                && issue
+                    .message
+                    .contains("unexpected selector case `0xd09de08a`")
+        }));
     }
 
     #[test]
