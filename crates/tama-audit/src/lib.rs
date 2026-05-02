@@ -44,6 +44,18 @@ pub enum Check {
     TrustBoundary,
 }
 
+impl Check {
+    fn as_str(self) -> &'static str {
+        match self {
+            Check::Structure => "structure",
+            Check::Selectors => "selectors",
+            Check::StorageLayout => "storage-layout",
+            Check::Coverage => "coverage",
+            Check::TrustBoundary => "trust-boundary",
+        }
+    }
+}
+
 struct TrustContext<'a> {
     root: &'a Utf8Path,
     path: &'a Utf8Path,
@@ -85,6 +97,16 @@ pub fn run(root: &Utf8Path, opts: AuditOptions) -> Result<AuditReport> {
         ],
     };
     let mut issues = Vec::new();
+    if manifests.is_empty() && !checks.contains(&Check::Structure) {
+        issues.push(issue(
+            checks[0].as_str(),
+            None,
+            "TAMA_AUDIT_NO_MANIFEST",
+            "no contract manifests found; run `tama build` first",
+            None,
+        ));
+        return Ok(AuditReport { issues });
+    }
     for check in checks {
         match check {
             Check::Structure => structure(root, &config, &manifests, &mut issues),
@@ -1948,6 +1970,30 @@ mod tests {
         };
         assert!(!report.has_failures(false));
         assert!(report.has_failures(true));
+    }
+
+    #[test]
+    fn targeted_checks_fail_closed_without_manifests() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            "[project]\nname='x'\nverity='v'\n[yul]\nsolc='0.8.33'\n",
+        )
+        .unwrap();
+
+        let report = run(
+            &root,
+            AuditOptions {
+                check: Some(Check::TrustBoundary),
+                deny_warnings: false,
+            },
+        )
+        .unwrap();
+
+        assert!(report.has_failures(false));
+        assert_eq!(report.issues[0].check, "trust-boundary");
+        assert_eq!(report.issues[0].code, "TAMA_AUDIT_NO_MANIFEST");
     }
 
     #[test]
