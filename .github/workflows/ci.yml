@@ -362,6 +362,25 @@ jobs:
       - run: shellcheck installer/install.sh
       - run: sh -n installer/install.sh
       - run: cargo test -p tamaup-cli
+      - name: Shell installer rejects unsupported platform
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tmp="$(mktemp -d)"
+          mkdir -p "$tmp/bin"
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'case "$1" in' \
+            '  -s) printf "%s\n" FreeBSD ;;' \
+            '  -m) printf "%s\n" riscv64 ;;' \
+            '  *) printf "%s\n" FreeBSD ;;' \
+            'esac' > "$tmp/bin/uname"
+          chmod +x "$tmp/bin/uname"
+          if PATH="$tmp/bin:$PATH" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path; then
+            echo "installer accepted an unsupported platform" >&2
+            exit 1
+          fi
+          test ! -e "$tmp/home"
       - name: Shell installer rejects bad signature
         shell: bash
         run: |
