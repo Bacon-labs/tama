@@ -633,7 +633,7 @@ jobs:
           test -x "$tmp/home/versions/0.1.0/bin/tamaup"
           test -L "$tmp/home/bin/tama"
           test -L "$tmp/home/bin/tamaup"
-      - name: Shell installer installs remote manifest with local artifact
+      - name: Shell installer rejects remote manifest with local artifact
         shell: bash
         run: |
           set -euxo pipefail
@@ -672,9 +672,12 @@ jobs:
             curl -fsS http://127.0.0.1:8765/manifest.json >/dev/null && break
             sleep 1
           done
-          TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMA_BASE_URL="http://127.0.0.1:8765" TAMAUP_HOME="$tmp/home" sh installer/install.sh --no-modify-path --version 0.1.0
-          test -x "$tmp/home/versions/0.1.0/bin/tama"
-          test -x "$tmp/home/versions/0.1.0/bin/tamaup"
+          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMA_BASE_URL="http://127.0.0.1:8765" TAMAUP_HOME="$tmp/home" sh installer/install.sh --no-modify-path --version 0.1.0 2>"$tmp/stderr"; then
+            echo "installer accepted a remote manifest with a file artifact URL" >&2
+            exit 1
+          fi
+          grep -Fq "published artifact URL must use https://" "$tmp/stderr"
+          test ! -e "$tmp/home"
       - name: Shell installer rejects bad SHA before extraction
         shell: bash
         run: |

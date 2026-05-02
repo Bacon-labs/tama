@@ -200,6 +200,7 @@ fn install_with_hooks(
     bootstrap_toolchain: impl FnOnce(BootstrapOptions) -> Result<(), String>,
     verify_signature: impl FnOnce(&[u8], &[u8]) -> Result<(), String>,
 ) -> Result<(), String> {
+    let local_manifest = manifest_file.is_some();
     let (manifest_bytes, signature_bytes) = if let Some(path) = manifest_file {
         let sig = manifest_signature_path(&path);
         (
@@ -219,6 +220,9 @@ fn install_with_hooks(
     let manifest: ReleaseManifest =
         serde_json::from_slice(&manifest_bytes).map_err(|err| err.to_string())?;
     validate_release_manifest(&manifest)?;
+    if !local_manifest {
+        validate_published_release_manifest(&manifest)?;
+    }
     let platform = platform()?;
     let (selected_version, artifact) = select_artifact(&manifest, &platform, version)?;
     let archive = if artifact.url.starts_with("file://") {
@@ -374,6 +378,29 @@ fn validate_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
             .map_or(true, |artifacts| artifacts.is_empty())
         {
             return Err("legacy release manifest is missing artifacts".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn validate_published_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
+    if manifest.schema.as_deref() != Some(RELEASE_MANIFEST_SCHEMA)
+        || manifest.version.is_some()
+        || manifest.artifacts.is_some()
+        || manifest.releases.is_empty()
+    {
+        return Err(
+            "published release manifest must be cumulative `tama.release-manifest.v1`".to_string(),
+        );
+    }
+    for release in &manifest.releases {
+        for artifact in &release.artifacts {
+            if !artifact.url.starts_with("https://") {
+                return Err(format!(
+                    "published artifact URL must use https:// with a host for {} {}",
+                    release.version, artifact.platform
+                ));
+            }
         }
     }
     Ok(())
@@ -1496,6 +1523,45 @@ mod tests {
         assert!(validate_release_manifest(&manifest)
             .unwrap_err()
             .contains("absolute path"));
+    }
+
+    #[test]
+    fn published_release_manifest_rejects_local_artifact_urls() {
+        let manifest = ReleaseManifest {
+            schema: Some(RELEASE_MANIFEST_SCHEMA.to_string()),
+            stable: Some("0.1.0".to_string()),
+            nightly: None,
+            version: None,
+            artifacts: None,
+            releases: vec![valid_release("0.1.0")],
+        };
+
+        validate_release_manifest(&manifest).unwrap();
+        assert!(validate_published_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("published artifact URL must use https://"));
+    }
+
+    #[test]
+    fn published_release_manifest_rejects_legacy_shape() {
+        let manifest = ReleaseManifest {
+            schema: None,
+            stable: None,
+            nightly: None,
+            version: Some("0.1.0".to_string()),
+            artifacts: Some(vec![Artifact {
+                platform: "linux-x86_64".to_string(),
+                url: "https://tama.tools/releases/tama-0.1.0-linux-x86_64.tar.gz".to_string(),
+                sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_string(),
+            }]),
+            releases: vec![],
+        };
+
+        validate_release_manifest(&manifest).unwrap();
+        assert!(validate_published_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("must be cumulative"));
     }
 
     #[test]

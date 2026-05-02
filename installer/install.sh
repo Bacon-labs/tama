@@ -60,9 +60,11 @@ fetch() {
 if [ -n "$MANIFEST_FILE" ]; then
   cp "$MANIFEST_FILE" "$INSTALL_TMPDIR/manifest.json"
   cp "$MANIFEST_FILE.minisig" "$INSTALL_TMPDIR/manifest.json.minisig"
+  ALLOW_FILE_URLS=1
 else
   fetch "$BASE_URL/manifest.json" "$INSTALL_TMPDIR/manifest.json"
   fetch "$BASE_URL/manifest.json.minisig" "$INSTALL_TMPDIR/manifest.json.minisig"
+  ALLOW_FILE_URLS=0
 fi
 
 PUBLIC_KEY="${TAMA_MINISIGN_PUBLIC_KEY:-RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3}"
@@ -73,7 +75,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-python3 - "$INSTALL_TMPDIR/manifest.json" "$PLATFORM" "$VERSION" > "$INSTALL_TMPDIR/artifact.env" <<'PY'
+python3 - "$INSTALL_TMPDIR/manifest.json" "$PLATFORM" "$VERSION" "$ALLOW_FILE_URLS" > "$INSTALL_TMPDIR/artifact.env" <<'PY'
 import json
 import re
 import shlex
@@ -101,7 +103,8 @@ def reject_unknown_keys(obj, allowed, label):
     if unknown:
         raise SystemExit(f"unknown release manifest field in {label}: {unknown[0]}")
 
-manifest_path, platform, version = sys.argv[1:4]
+manifest_path, platform, version, allow_file_urls = sys.argv[1:5]
+allow_file_urls = allow_file_urls == "1"
 manifest = json.load(open(manifest_path, encoding="utf-8"))
 reject_unknown_keys(manifest, {"schema", "stable", "nightly", "version", "artifacts", "releases"}, "manifest")
 schema = manifest.get("schema")
@@ -127,6 +130,8 @@ if is_cumulative:
         selected_from_channel = False
     releases = manifest["releases"]
 else:
+    if not allow_file_urls:
+        raise SystemExit("published release manifest must be cumulative tama.release-manifest.v1")
     if "version" not in manifest:
         raise SystemExit("legacy release manifest is missing version")
     if not isinstance(manifest.get("artifacts"), list) or not manifest["artifacts"]:
@@ -167,8 +172,11 @@ for release in releases:
             raise SystemExit(f"unsupported artifact URL: {artifact_url}")
         if artifact_url.startswith("https://") and not HTTPS_URL.match(artifact_url):
             raise SystemExit(f"https artifact URL must include a host: {artifact_url}")
-        if artifact_url.startswith("file://") and not artifact_url.startswith("file:///"):
-            raise SystemExit(f"file artifact URL must use an absolute path: {artifact_url}")
+        if artifact_url.startswith("file://"):
+            if not allow_file_urls:
+                raise SystemExit(f"published artifact URL must use https:// with a host: {artifact_url}")
+            if not artifact_url.startswith("file:///"):
+                raise SystemExit(f"file artifact URL must use an absolute path: {artifact_url}")
         if not SAFE_SHA256.fullmatch(artifact_sha256):
             raise SystemExit(f"invalid artifact SHA-256 for {artifact_platform} {release_version}")
         if release_version == selected and artifact_platform == platform:
