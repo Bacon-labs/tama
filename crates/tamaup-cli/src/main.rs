@@ -1092,6 +1092,17 @@ mod tests {
     }
 
     #[test]
+    fn website_install_command_matches_spec() {
+        let root = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let spec = fs::read_to_string(root.join("docs/SPEC.md").as_std_path()).unwrap();
+        let site = fs::read_to_string(root.join("site/index.html").as_std_path()).unwrap();
+        let install_command = "curl -L https://tama.tools/install.sh | sh";
+
+        assert!(spec.contains(install_command));
+        assert!(site.contains(install_command));
+    }
+
+    #[test]
     fn release_manifest_selects_stable_and_specific_versions() {
         let manifest = ReleaseManifest {
             schema: Some(RELEASE_MANIFEST_SCHEMA.to_string()),
