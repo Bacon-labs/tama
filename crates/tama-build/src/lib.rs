@@ -156,14 +156,69 @@ impl Pipeline {
             tama_config::enforce_locked(&self.root, &lock)?;
         }
 
+        let progress = BuildProgress::new(!opts.json);
+        progress.scope(&self.root, &config, &opts);
+
         let lake = Lake::new_json(self.root.clone(), opts.json);
-        lake.build_proofs()?;
-        lake.verity_codegen(&config, &opts)?;
-        let mut manifests = adapt_verity_outputs(&self.root, &config, opts.contract.as_deref())?;
-        generate_trust_probe(&self.root, &config, &manifests)?;
+        progress.run(
+            "proof-check",
+            "Lean elaborates implementations, specs, and proofs",
+            "proof modules accepted by Lake",
+            || lake.build_proofs(),
+        )?;
+        progress.run(
+            "verity-codegen",
+            "Verity emits Yul, ABI, storage, and trust reports",
+            "compiler artifacts generated",
+            || lake.verity_codegen(&config, &opts),
+        )?;
+        progress.start(
+            "manifest",
+            "Tama adapts Verity outputs into contract manifests",
+        );
+        let mut manifests =
+            match adapt_verity_outputs(&self.root, &config, opts.contract.as_deref()) {
+                Ok(manifests) => {
+                    progress.ok(
+                        "manifest",
+                        &format!(
+                            "{} manifest(s): {}",
+                            manifests.len(),
+                            contract_names(&manifests)
+                        ),
+                    );
+                    manifests
+                }
+                Err(err) => {
+                    progress.fail("manifest", "could not adapt Verity outputs");
+                    return Err(err);
+                }
+            };
+        progress.run(
+            "trust-probe",
+            "Lean records proof dependencies for audit",
+            "trust-boundary inputs written",
+            || generate_trust_probe(&self.root, &config, &manifests),
+        )?;
         for manifest in &mut manifests {
-            manifest.validate()?;
-            clear_downstream_artifacts(&self.root, manifest)?;
+            progress.run(
+                "validate",
+                &format!("{} manifest schema and artifact paths", manifest.contract),
+                &format!("{} manifest validated", manifest.contract),
+                || {
+                    manifest.validate()?;
+                    Ok(())
+                },
+            )?;
+            progress.run(
+                "clean",
+                &format!(
+                    "{} stale downstream bytecode and bridge artifacts",
+                    manifest.contract
+                ),
+                &format!("{} downstream artifacts ready", manifest.contract),
+                || clear_downstream_artifacts(&self.root, manifest),
+            )?;
             if opts.no_solc {
                 manifest.write_pretty(
                     &self.root.join(
@@ -174,22 +229,70 @@ impl Pipeline {
                             .join(format!("{}.json", manifest.contract)),
                     ),
                 )?;
+                progress.skip(
+                    "solc",
+                    &format!(
+                        "{} skipped by --no-solc; bytecode remains absent",
+                        manifest.contract
+                    ),
+                );
+                progress.skip(
+                    "bridge",
+                    &format!(
+                        "{} skipped because generated bridges require solc bytecode",
+                        manifest.contract
+                    ),
+                );
                 continue;
             }
-            compile_yul_standard_json(&self.root, &config, manifest)?;
-            generate_bridge(&self.root, manifest)?;
-        }
-        if should_run_forge(&opts) {
-            run_owned(
-                "forge",
-                &forge_build_args(opts.offline),
-                &self.root,
-                opts.json,
+            progress.run(
+                "solc",
+                &format!(
+                    "{} Yul through solc {} standard JSON",
+                    manifest.contract, config.yul.solc
+                ),
+                &format!("{} bytecode and hash written", manifest.contract),
+                || compile_yul_standard_json(&self.root, &config, manifest),
+            )?;
+            progress.run(
+                "bridge",
+                &format!("{} Solidity interface and deployer", manifest.contract),
+                &format!("{} bridge files generated", manifest.contract),
+                || generate_bridge(&self.root, manifest),
             )?;
         }
+        if should_run_forge(&opts) {
+            progress.run(
+                "forge",
+                "Foundry compiles generated Solidity bridges and project tests",
+                "forge build completed",
+                || {
+                    run_owned(
+                        "forge",
+                        &forge_build_args(opts.offline),
+                        &self.root,
+                        opts.json,
+                    )
+                },
+            )?;
+        } else if opts.no_solc {
+            progress.skip("forge", "skipped because --no-solc omits generated bridges");
+        } else {
+            progress.skip("forge", "skipped by --no-forge");
+        }
         if !opts.locked {
-            tama_config::update_lock_inputs(&self.root, &mut lock)?;
-            tama_config::write_lock(&self.root, &lock)?;
+            progress.run(
+                "lock",
+                "Refresh tama.lock inputs after a successful build",
+                "tama.lock current",
+                || {
+                    tama_config::update_lock_inputs(&self.root, &mut lock)?;
+                    tama_config::write_lock(&self.root, &lock)?;
+                    Ok(())
+                },
+            )?;
+        } else {
+            progress.skip("lock", "checked by --locked; tama.lock was not rewritten");
         }
         Ok(BuildStatus {
             manifests: manifests
@@ -204,6 +307,109 @@ impl Pipeline {
                 .collect(),
         })
     }
+}
+
+struct BuildProgress {
+    enabled: bool,
+}
+
+impl BuildProgress {
+    fn new(enabled: bool) -> Self {
+        Self { enabled }
+    }
+
+    fn scope(&self, root: &Utf8Path, config: &TamaConfig, opts: &BuildOptions) {
+        if !self.enabled {
+            return;
+        }
+        println!("Build scope:");
+        println!("  project: {root}");
+        println!(
+            "  contracts: {}",
+            opts.contract.as_deref().unwrap_or("all Verity contracts")
+        );
+        println!("  proofs: Lean proof modules are built and must elaborate before codegen");
+        println!(
+            "  solc: {}{}",
+            config.yul.solc,
+            if opts.no_solc {
+                " (skipped by --no-solc)"
+            } else {
+                ""
+            }
+        );
+        println!(
+            "  forge: {}",
+            if should_run_forge(opts) {
+                "enabled"
+            } else if opts.no_solc {
+                "skipped because --no-solc was set"
+            } else {
+                "skipped by --no-forge"
+            }
+        );
+        println!(
+            "  lock: {}",
+            if opts.locked {
+                "checked only (--locked)"
+            } else {
+                "refreshed after success"
+            }
+        );
+        println!();
+        println!("Build steps:");
+    }
+
+    fn run<T, F>(&self, name: &str, running: &str, success: &str, f: F) -> Result<T>
+    where
+        F: FnOnce() -> Result<T>,
+    {
+        self.start(name, running);
+        match f() {
+            Ok(value) => {
+                self.ok(name, success);
+                Ok(value)
+            }
+            Err(err) => {
+                self.fail(name, "failed");
+                Err(err)
+            }
+        }
+    }
+
+    fn start(&self, name: &str, detail: &str) {
+        self.line("run", name, detail);
+    }
+
+    fn ok(&self, name: &str, detail: &str) {
+        self.line("ok", name, detail);
+    }
+
+    fn skip(&self, name: &str, detail: &str) {
+        self.line("skip", name, detail);
+    }
+
+    fn fail(&self, name: &str, detail: &str) {
+        self.line("fail", name, detail);
+    }
+
+    fn line(&self, status: &str, name: &str, detail: &str) {
+        if self.enabled {
+            println!("{}", build_progress_line(status, name, detail));
+        }
+    }
+}
+
+fn build_progress_line(status: &str, name: &str, detail: &str) -> String {
+    format!("  {status:<4} {name:<15} {detail}")
+}
+
+fn contract_names(manifests: &[ContractManifest]) -> String {
+    manifests
+        .iter()
+        .map(|manifest| manifest.contract.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn load_or_initialize_lock(root: &Utf8Path) -> Result<TamaLock> {
@@ -1888,6 +2094,22 @@ mod tests {
             }
         });
         assert_eq!(extract_solc_bytecode(&malformed_creation, "Counter"), None);
+    }
+
+    #[test]
+    fn build_progress_line_is_scan_friendly() {
+        assert_eq!(
+            build_progress_line(
+                "run",
+                "proof-check",
+                "Lean elaborates implementations, specs, and proofs",
+            ),
+            "  run  proof-check     Lean elaborates implementations, specs, and proofs"
+        );
+        assert_eq!(
+            build_progress_line("skip", "forge", "skipped by --no-forge"),
+            "  skip forge           skipped by --no-forge"
+        );
     }
 
     #[test]

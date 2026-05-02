@@ -87,7 +87,47 @@ With `--json`, Lake output is forwarded to stderr and stdout contains only:
 
 ## `tama build`
 
-Runs proof elaboration, real Verity codegen, Tama manifest adaptation, `solc --standard-json`, Solidity bridge generation, `forge build`, and lockfile update.
+Builds a Tama project from Verity source through proof validation, Verity codegen,
+manifest validation, `solc --standard-json`, generated Solidity bridges,
+`forge build`, and lockfile refresh.
+
+Human output starts with the build scope, then reports each phase as it runs:
+
+```text
+Build scope:
+  project: /path/to/project
+  contracts: all Verity contracts
+  proofs: Lean proof modules are built and must elaborate before codegen
+  solc: 0.8.33
+  forge: enabled
+  lock: refreshed after success
+
+Build steps:
+  run  proof-check     Lean elaborates implementations, specs, and proofs
+  ok   proof-check     proof modules accepted by Lake
+  run  verity-codegen  Verity emits Yul, ABI, storage, and trust reports
+  ok   verity-codegen  compiler artifacts generated
+  run  manifest        Tama adapts Verity outputs into contract manifests
+  ok   manifest        1 manifest(s): ERC20Lite
+  run  trust-probe     Lean records proof dependencies for audit
+  ok   trust-probe     trust-boundary inputs written
+  run  validate        ERC20Lite manifest schema and artifact paths
+  ok   validate        ERC20Lite manifest validated
+  run  solc            ERC20Lite Yul through solc 0.8.33 standard JSON
+  ok   solc            ERC20Lite bytecode and hash written
+  run  bridge          ERC20Lite Solidity interface and deployer
+  ok   bridge          ERC20Lite bridge files generated
+  run  forge           Foundry compiles generated Solidity bridges and project tests
+  ok   forge           forge build completed
+  run  lock            Refresh tama.lock inputs after a successful build
+  ok   lock            tama.lock current
+Build completed for 1 manifest(s)
+```
+
+Proofs are first-class build inputs. `tama build` runs `lake build TamaProof`,
+which makes Lean elaborate implementation, spec, and proof modules before
+bytecode or Solidity bridge files are produced. Use `tama check` when you only
+want the faster implementation/spec Lean check.
 
 Useful flags:
 
@@ -100,6 +140,11 @@ Useful flags:
 ```
 
 `--no-solc` and `--no-forge` are local development escape hatches and are not release gates. `--no-solc` removes stale downstream solc JSON, bytecode, and generated bridge files for the selected contracts while leaving fresh Yul and manifests.
+
+`--contract <Name>` restricts codegen and downstream artifact generation to one
+Verity contract. `--no-solc` also skips generated Solidity bridges and Forge
+because those steps require fresh bytecode. `--locked` checks `tama.lock` before
+the build and does not rewrite it after success.
 
 `tama build` does not run `lake update`. It seeds manifest-matching cached Lake package checkouts before invoking Lake, including replacement of clean stale package checkouts, and after a successful build it refreshes `TAMA_LAKE_PACKAGE_CACHE` from clean Git checkouts under `.lake/packages`. With global `--offline`, it fails before invoking Lake if any pinned git package is missing, dirty, or at another revision under `.lake/packages`, and passes `--offline` to `forge build`.
 

@@ -21,21 +21,56 @@ Checks:
 Run `tama audit` for the full suite, or `tama audit <check>` for one check.
 Aliases: `storage` for `storage-layout`, `trust` for `trust-boundary`.
 Use `--deny-warnings` to make warning-severity findings fail CI.";
+const BUILD_AFTER_HELP: &str = "\
+What gets built:
+  proof-check      Lake builds TamaProof so Lean elaborates implementation, spec, and proof modules
+  verity-codegen   Verity emits Yul, ABI, storage, assumption, and trust reports
+  manifest         Tama adapts and validates generated contract manifests
+  trust-probe      Lean records proof dependencies used by `tama audit trust-boundary`
+  solc             solc compiles generated Yul through standard JSON and records bytecode hashes
+  bridge           Tama generates Solidity interfaces and deployers from the validated manifest
+  forge            Foundry compiles generated Solidity and project tests
+  lock             tama.lock records the exact inputs used for the successful build
+
+Proofs are first-class build inputs: a proof module that does not elaborate stops
+the build before bytecode or bridges are produced. Use `tama check` when you only
+want the faster implementation/spec Lean check.
+
+Build options:
+  --contract <Name>   Build one contract instead of every Verity contract
+  --no-solc           Stop after fresh Yul/manifests; skip bytecode, bridges, and Forge
+  --no-forge          Run proof/codegen/solc/bridge steps, but skip `forge build`
+  --locked            Fail if tama.lock or tracked inputs are stale; do not rewrite the lock
+  --offline           Use local Lake packages and pass --offline to Forge";
 
 #[derive(Debug, Parser)]
 #[command(name = "tama", version, about = "Verity developer toolchain")]
 struct Cli {
-    #[arg(long, global = true)]
+    #[arg(
+        long,
+        global = true,
+        help = "Run as if invoked from another project root"
+    )]
     root: Option<Utf8PathBuf>,
-    #[arg(long, global = true)]
+    #[arg(
+        long,
+        global = true,
+        help = "Fail if tama.lock or tracked inputs are stale"
+    )]
     locked: bool,
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help = "Avoid network access where supported")]
     offline: bool,
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help = "Emit machine-readable Tama-owned JSON")]
     json: bool,
-    #[arg(short, long, global = true, action = ArgAction::Count)]
+    #[arg(
+        short,
+        long,
+        global = true,
+        action = ArgAction::Count,
+        help = "Increase Tama-owned logging verbosity"
+    )]
     verbose: u8,
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help = "Disable colored output")]
     no_color: bool,
     #[command(subcommand)]
     command: Command,
@@ -49,7 +84,11 @@ enum Command {
     New { name: String },
     #[command(about = "Lean-check implementation and spec modules")]
     Check,
-    #[command(about = "Run Lean, Verity codegen, solc, bridge generation, and Forge")]
+    #[command(
+        about = "Build proofs, Verity artifacts, bytecode, Solidity bridges, and Forge targets",
+        long_about = "Build a Tama project from Verity source through proof validation, Verity code generation, manifest adaptation, solc bytecode generation, generated Solidity bridges, and Foundry compilation.",
+        after_help = BUILD_AFTER_HELP
+    )]
     Build(BuildArgs),
     #[command(about = "Pass through directly to forge test")]
     Test(TestArgs),
@@ -88,11 +127,18 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct BuildArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Stop after fresh Yul/manifests; skip solc bytecode, generated bridges, and Forge"
+    )]
     no_solc: bool,
-    #[arg(long)]
+    #[arg(long, help = "Skip the final `forge build` step")]
     no_forge: bool,
-    #[arg(long = "contract")]
+    #[arg(
+        long = "contract",
+        value_name = "Name",
+        help = "Build one Verity contract instead of every discovered contract"
+    )]
     contract_: Option<String>,
 }
 
@@ -2096,9 +2142,34 @@ mod tests {
     fn help_lists_command_descriptions() {
         let help = Cli::command().render_long_help().to_string();
         assert!(help.contains("Create a new ERC20Lite starter project"));
-        assert!(help.contains("Run Lean, Verity codegen, solc, bridge generation, and Forge"));
+        assert!(help.contains(
+            "Build proofs, Verity artifacts, bytecode, Solidity bridges, and Forge targets"
+        ));
         assert!(help.contains("Pass through directly to forge test"));
         assert!(help.contains("Diagnose toolchain and project drift"));
+    }
+
+    #[test]
+    fn build_help_explains_proof_validation_and_options() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("build")
+            .unwrap()
+            .render_help()
+            .to_string();
+
+        assert!(help.contains(
+            "Build proofs, Verity artifacts, bytecode, Solidity bridges, and Forge targets"
+        ));
+        assert!(help.contains("What gets built:"));
+        assert!(help.contains("proof-check"));
+        assert!(help.contains("Verity emits Yul, ABI, storage, assumption, and trust reports"));
+        assert!(help.contains("Proofs are first-class build inputs"));
+        assert!(help.contains("--contract <Name>"));
+        assert!(help.contains("--no-solc"));
+        assert!(help.contains("--no-forge"));
+        assert!(help.contains("--locked"));
+        assert!(help.contains("--offline"));
     }
 
     #[test]
