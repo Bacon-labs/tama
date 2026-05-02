@@ -115,12 +115,123 @@ jobs:
             tama --root "$counter" --json inspect Counter "$field" | python3 -m json.tool >/dev/null
           done
 
+  negative-audit:
+    name: Release negative audit
+    runs-on: ubuntu-22.04
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: .cache/tama
+          key: tama-lake-release-negative-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/lake-manifest.json') }}
+          restore-keys: |
+            tama-lake-release-negative-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install Lean, Foundry, and solc
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          curl -fsSL https://foundry.paradigm.xyz | bash
+          foundryup
+          python3 -m pip install --user --upgrade solc-select
+          solc-select install 0.8.33
+          solc-select use 0.8.33
+      - name: Build baseline
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          cargo build --workspace
+          tmp="$(mktemp -d)"
+          echo "TAMA_RELEASE_NEGATIVE_TMP=$tmp" >> "$GITHUB_ENV"
+          tama init "$tmp/base"
+          tama --root "$tmp/base" build
+          tama --root "$tmp/base" audit
+      - name: Mutated audits fail closed
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          base="$TAMA_RELEASE_NEGATIVE_TMP/base"
+
+          expect_audit_failure() {
+            project="$1"
+            check="$2"
+            if tama --root "$project" audit "$check"; then
+              echo "expected tama audit $check to fail for $project" >&2
+              exit 1
+            fi
+          }
+
+          copy_case() {
+            name="$1"
+            target="$TAMA_RELEASE_NEGATIVE_TMP/$name"
+            cp -R "$base" "$target"
+            printf '%s\n' "$target"
+          }
+
+          project="$(copy_case deleted-source)"
+          rm "$project/verity/src/ERC20Lite.lean"
+          expect_audit_failure "$project" structure
+
+          project="$(copy_case corrupted-selector)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["abi"]["functions"][0]["selector"] = "0x00000000"
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" selectors
+
+          project="$(copy_case duplicate-storage)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["storage"][1]["slot"] = data["storage"][0]["slot"]
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" storage-layout
+
+          project="$(copy_case missing-mirror)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["obligations"][0]["coverage"] = {"disposition": "none", "path": None, "reason": None}
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" coverage
+
+          project="$(copy_case inserted-sorry)"
+          python3 - "$project/artifacts/trust-probe/axioms.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["obligations"][0]["axioms"].append("sorryAx")
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" trust-boundary
+
   build-artifacts:
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
     needs:
       - verify
       - real-e2e
+      - negative-audit
     strategy:
       fail-fast: false
       matrix:
