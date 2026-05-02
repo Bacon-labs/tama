@@ -329,13 +329,13 @@ fn atomic_symlink(target: &Utf8Path, link: &Utf8Path) -> Result<(), String> {
 
 fn list_versions() -> Result<(), String> {
     let home = tama_home();
-    let active = fs::read_to_string(home.join("active")).unwrap_or_default();
+    let active = read_active_version(&home)?;
     let versions = home.join("versions");
     if versions.is_dir() {
         for entry in fs::read_dir(versions).map_err(|err| err.to_string())? {
             let entry = entry.map_err(|err| err.to_string())?;
             let name = entry.file_name().to_string_lossy().to_string();
-            if name == active.trim() {
+            if active.as_deref() == Some(name.as_str()) {
                 println!("* {name}");
             } else {
                 println!("  {name}");
@@ -351,14 +351,27 @@ fn uninstall() -> Result<(), String> {
 }
 
 fn uninstall_at(home: &Utf8Path) -> Result<(), String> {
-    let active = fs::read_to_string(home.join("active")).unwrap_or_default();
-    let active = active.trim();
+    let active = read_active_version(home)?;
     remove_file_if_exists(&home.join("bin/tama"))?;
-    if !active.is_empty() {
-        validate_release_version(active)?;
+    if let Some(active) = active {
         remove_file_if_exists(&home.join("versions").join(active).join("bin/tama"))?;
     }
     remove_file_if_exists(&home.join("active"))
+}
+
+fn read_active_version(home: &Utf8Path) -> Result<Option<String>, String> {
+    let path = home.join("active");
+    let active = match fs::read_to_string(&path) {
+        Ok(active) => active,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(format!("failed to read `{path}`: {err}")),
+    };
+    let active = active.trim();
+    if active.is_empty() {
+        return Ok(None);
+    }
+    validate_release_version(active)?;
+    Ok(Some(active.to_string()))
 }
 
 fn remove_file_if_exists(path: &Utf8Path) -> Result<(), String> {
@@ -1060,6 +1073,21 @@ mod tests {
         assert!(home.join("bin/tamaup").exists());
         assert!(version_bin.join("tamaup").exists());
         assert!(!home.join("active").exists());
+    }
+
+    #[test]
+    fn uninstall_rejects_unsafe_active_version_before_removing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        fs::create_dir_all(home.join("bin")).unwrap();
+        fs::write(home.join("bin/tama"), b"tama").unwrap();
+        fs::write(home.join("active"), b"../evil").unwrap();
+
+        let err = uninstall_at(&home).unwrap_err();
+
+        assert!(err.contains("unsafe release version"));
+        assert!(home.join("bin/tama").exists());
+        assert!(home.join("active").exists());
     }
 
     #[test]
