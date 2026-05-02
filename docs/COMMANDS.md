@@ -86,6 +86,16 @@ Useful flags:
 
 `tama build` does not run `lake update`; with global `--offline`, it uses the project's existing local Lake state plus manifest-matching cached Lake package checkouts, and passes `--offline` to `forge build`.
 
+With `--json`, external tool output is forwarded to stderr and stdout contains only the generated manifest paths:
+
+```json
+{
+  "manifests": [
+    "artifacts/manifest/ERC20Lite.json"
+  ]
+}
+```
+
 ## `tama test [forge-args...]`
 
 Executes `forge test` with arguments unchanged. Forge stdout, stderr, and exit code are preserved. Tama-owned JSON output does not wrap or corrupt Foundry passthrough output.
