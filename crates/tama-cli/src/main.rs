@@ -239,13 +239,15 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     serde_json::to_string_pretty(&report).map_err(|err| err.to_string())?
                 );
             } else {
-                for tool in report.tools {
+                for tool in &report.tools {
                     match tool {
                         tama_toolchain::ToolStatus::Ok(tool) => {
                             println!(
                                 "ok  {:<8} {}",
                                 tool.name,
-                                tool.version.unwrap_or_else(|| tool.path.to_string())
+                                tool.version
+                                    .clone()
+                                    .unwrap_or_else(|| tool.path.to_string())
                             );
                         }
                         tama_toolchain::ToolStatus::Missing { name, remediation } => {
@@ -274,7 +276,11 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     println!("Applied safe directory repairs");
                 }
             }
-            Ok(ExitCode::SUCCESS)
+            Ok(if doctor_report_has_failures(&report) {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            })
         }
         Command::Install { package } => {
             let root = project_root(cli.root)?;
@@ -340,6 +346,16 @@ fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::Doctor
         }
     }
     Ok(report)
+}
+
+fn doctor_report_has_failures(report: &tama_toolchain::DoctorReport) -> bool {
+    report.tools.iter().any(|tool| {
+        matches!(
+            tool,
+            tama_toolchain::ToolStatus::Missing { .. }
+                | tama_toolchain::ToolStatus::Incompatible { .. }
+        )
+    }) || report.lock_current == Some(false)
 }
 
 fn mark_version_mismatch(
@@ -1157,5 +1173,36 @@ solc = "0.8.33"
             tama_toolchain::ToolStatus::Incompatible { found, expected, .. }
                 if found == "0.8.32" && expected == "0.8.33"
         ));
+    }
+
+    #[test]
+    fn doctor_report_failures_drive_exit_status() {
+        let ok = tama_toolchain::DoctorReport {
+            tools: vec![tama_toolchain::ToolStatus::Ok(tama_toolchain::Tool {
+                name: "git".to_string(),
+                path: "git".into(),
+                version: None,
+            })],
+            lock_current: Some(true),
+            notes: vec![],
+        };
+        assert!(!doctor_report_has_failures(&ok));
+
+        let missing_tool = tama_toolchain::DoctorReport {
+            tools: vec![tama_toolchain::ToolStatus::Missing {
+                name: "solc".to_string(),
+                remediation: "install solc".to_string(),
+            }],
+            lock_current: Some(true),
+            notes: vec![],
+        };
+        assert!(doctor_report_has_failures(&missing_tool));
+
+        let stale_lock = tama_toolchain::DoctorReport {
+            tools: vec![],
+            lock_current: Some(false),
+            notes: vec![],
+        };
+        assert!(doctor_report_has_failures(&stale_lock));
     }
 }
