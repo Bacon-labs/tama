@@ -1526,6 +1526,54 @@ mod tests {
     }
 
     #[test]
+    fn install_offline_refuses_remote_artifact_before_bootstrap() {
+        let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let home = root.join("home");
+        let _home_guard = EnvVarGuard::set("TAMAUP_HOME", home.as_std_path().as_os_str());
+        let manifest_path = root.join("manifest.json");
+        let manifest = serde_json::json!({
+            "schema": RELEASE_MANIFEST_SCHEMA,
+            "stable": "0.1.0",
+            "releases": [{
+                "version": "0.1.0",
+                "artifacts": [{
+                    "platform": platform().unwrap(),
+                    "url": "https://example.invalid/tama.tar.gz",
+                    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+                }]
+            }]
+        });
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        fs::write(manifest_path.with_extension("json.minisig"), b"fake").unwrap();
+        let mut bootstrap_called = false;
+
+        let err = install_with_hooks(
+            "stable",
+            Some(manifest_path),
+            BootstrapOptions {
+                yes: true,
+                offline: true,
+                no_modify_path: true,
+                no_install_lean: true,
+                no_install_foundry: true,
+                no_install_solc: true,
+            },
+            |_| {
+                bootstrap_called = true;
+                Ok(())
+            },
+            |_, _| Ok(()),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, "offline install cannot download artifact");
+        assert!(!bootstrap_called);
+        assert!(!home.exists());
+    }
+
+    #[test]
     fn fake_signed_manifest_installs_local_fake_artifact() {
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
