@@ -65,20 +65,16 @@ impl Lake {
         Self { root: root.into() }
     }
 
-    pub fn check_src_and_spec(&self, offline: bool) -> Result<()> {
+    pub fn check_src_and_spec(&self) -> Result<()> {
         run_owned(
             "lake",
-            &lake_build_args(offline, &["TamaSrc", "TamaSpec"]),
+            &lake_build_args(&["TamaSrc", "TamaSpec"]),
             &self.root,
         )
     }
 
-    pub fn build_proofs(&self, offline: bool) -> Result<()> {
-        run_owned(
-            "lake",
-            &lake_build_args(offline, &["TamaProof"]),
-            &self.root,
-        )
+    pub fn build_proofs(&self) -> Result<()> {
+        run_owned("lake", &lake_build_args(&["TamaProof"]), &self.root)
     }
 
     pub fn verity_codegen(&self, config: &TamaConfig, opts: &BuildOptions) -> Result<()> {
@@ -99,8 +95,7 @@ impl Lake {
         };
         tama_common::write_string(&module_manifest, &modules)?;
 
-        let mut args = lake_prefix_args(opts.offline);
-        args.extend([
+        let args = vec![
             "exe".to_string(),
             "verity-compiler".to_string(),
             "--manifest".to_string(),
@@ -115,7 +110,7 @@ impl Lake {
             config.paths.out.join("layout-report.json").to_string(),
             "--assumption-report".to_string(),
             config.paths.out.join("assumption-report.json").to_string(),
-        ]);
+        ];
         let _evmyul_guard = EvmyulConformanceGuard::prepare(&self.root)?;
         run_owned("lake", &args, &self.root)
     }
@@ -143,7 +138,7 @@ impl Pipeline {
         }
 
         let lake = Lake::new(self.root.clone());
-        lake.build_proofs(opts.offline)?;
+        lake.build_proofs()?;
         lake.verity_codegen(&config, &opts)?;
         let mut manifests = adapt_verity_outputs(&self.root, &config, opts.contract.as_deref())?;
         generate_trust_probe(&self.root, &config, &manifests)?;
@@ -191,17 +186,8 @@ fn should_run_forge(opts: &BuildOptions) -> bool {
     !opts.no_forge && !opts.no_solc
 }
 
-fn lake_prefix_args(offline: bool) -> Vec<String> {
-    if offline {
-        vec!["--no-cache".to_string()]
-    } else {
-        Vec::new()
-    }
-}
-
-fn lake_build_args(offline: bool, targets: &[&str]) -> Vec<String> {
-    let mut args = lake_prefix_args(offline);
-    args.push("build".to_string());
+fn lake_build_args(targets: &[&str]) -> Vec<String> {
+    let mut args = vec!["build".to_string()];
     args.extend(targets.iter().map(|target| (*target).to_string()));
     args
 }
@@ -1485,15 +1471,12 @@ mod tests {
     }
 
     #[test]
-    fn offline_build_args_disable_remote_caches() {
+    fn offline_build_args_preserve_lake_cache_and_gate_forge_network() {
         assert_eq!(
-            lake_build_args(true, &["TamaSrc", "TamaSpec"]),
-            vec!["--no-cache", "build", "TamaSrc", "TamaSpec"]
+            lake_build_args(&["TamaSrc", "TamaSpec"]),
+            vec!["build", "TamaSrc", "TamaSpec"]
         );
-        assert_eq!(
-            lake_build_args(false, &["TamaProof"]),
-            vec!["build", "TamaProof"]
-        );
+        assert_eq!(lake_build_args(&["TamaProof"]), vec!["build", "TamaProof"]);
         assert_eq!(forge_build_args(true), vec!["build", "--offline"]);
         assert_eq!(forge_build_args(false), vec!["build"]);
     }
