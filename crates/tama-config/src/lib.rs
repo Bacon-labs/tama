@@ -311,6 +311,15 @@ pub fn lock_drift(root: &Utf8Path, lock: &TamaLock) -> Result<Vec<String>> {
         .is_some_and(|hash| lock.inputs.get("tama.toml") == Some(hash));
     if tama_toml_current {
         let config = load_config(root)?;
+        let verity_rev = verity_rev_from_config(&config.project.verity);
+        if lock.resolved.get("verity_rev") != Some(&verity_rev) {
+            drift.push("resolved.verity_rev".to_string());
+        }
+        if let Some(lake_git) = lock.resolved.get("lake.verity.url") {
+            if lock.resolved.get("verity_git") != Some(lake_git) {
+                drift.push("resolved.verity_git".to_string());
+            }
+        }
         let yul = yul_lock_entries(&config.yul);
         if lock.yul != yul {
             drift.push("yul".to_string());
@@ -342,9 +351,27 @@ pub fn enforce_locked(root: &Utf8Path, lock: &TamaLock) -> Result<()> {
 
 pub fn update_lock_inputs(root: &Utf8Path, lock: &mut TamaLock) -> Result<()> {
     record_lake_manifest_resolutions(root, lock)?;
+    record_project_resolution(root, lock)?;
     record_lean_toolchain(root, lock)?;
     record_yul_config(root, lock)?;
     lock.inputs = tracked_input_hashes(root)?;
+    Ok(())
+}
+
+pub fn record_project_resolution(root: &Utf8Path, lock: &mut TamaLock) -> Result<()> {
+    if !root.join("tama.toml").is_file() {
+        lock.resolved.remove("verity_rev");
+        lock.resolved.remove("verity_git");
+        return Ok(());
+    }
+    let config = load_config(root)?;
+    lock.resolved.insert(
+        "verity_rev".to_string(),
+        verity_rev_from_config(&config.project.verity),
+    );
+    if let Some(url) = lock.resolved.get("lake.verity.url").cloned() {
+        lock.resolved.insert("verity_git".to_string(), url);
+    }
     Ok(())
 }
 
@@ -445,6 +472,18 @@ fn is_safe_dependency_name(name: &str) -> bool {
         && name
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
+fn verity_rev_from_config(version: &str) -> String {
+    if version.starts_with('v') || looks_like_git_rev(version) {
+        version.to_string()
+    } else {
+        format!("v{version}")
+    }
+}
+
+fn looks_like_git_rev(value: &str) -> bool {
+    value.len() >= 7 && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 pub fn parse_lake_dependency(root: &Utf8Path, raw: &str) -> Result<LakeDependency> {
@@ -993,6 +1032,57 @@ metadata_bytecode_hash = "ipfs"
         let drift = lock_drift(&root, &lock).unwrap();
 
         assert!(drift.contains(&"resolved.lean_toolchain".to_string()));
+    }
+
+    #[test]
+    fn update_lock_inputs_records_project_verity_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            "[project]\nname='x'\nverity='0.5.0'\n[yul]\nsolc='0.8.33'\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("lake-manifest.json"),
+            r#"{
+  "packages": [{
+    "name": "verity",
+    "type": "git",
+    "url": "https://github.com/lfglabs-dev/verity.git",
+    "rev": "abc123",
+    "inputRev": "v0.5.0",
+    "inherited": false
+  }]
+}"#,
+        )
+        .unwrap();
+        let mut lock = TamaLock {
+            version: 1,
+            resolved: BTreeMap::new(),
+            inputs: BTreeMap::new(),
+            yul: BTreeMap::new(),
+        };
+
+        update_lock_inputs(&root, &mut lock).unwrap();
+
+        assert_eq!(verity_rev_from_config("9b0114e"), "9b0114e");
+        assert_eq!(verity_rev_from_config("v0.5.0"), "v0.5.0");
+        assert_eq!(
+            lock.resolved.get("verity_rev").map(String::as_str),
+            Some("v0.5.0")
+        );
+        assert_eq!(
+            lock.resolved.get("verity_git").map(String::as_str),
+            Some("https://github.com/lfglabs-dev/verity.git")
+        );
+        assert!(lock_drift(&root, &lock).unwrap().is_empty());
+
+        lock.resolved
+            .insert("verity_rev".to_string(), "v0.4.0".to_string());
+        let drift = lock_drift(&root, &lock).unwrap();
+
+        assert!(drift.contains(&"resolved.verity_rev".to_string()));
     }
 
     #[test]
