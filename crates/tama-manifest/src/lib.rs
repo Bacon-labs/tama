@@ -1,4 +1,4 @@
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -399,10 +399,7 @@ impl ContractManifest {
             &self.artifacts.interface,
             &self.artifacts.deployer,
         ] {
-            if path.as_str().trim().is_empty() {
-                return self.invalid("manifest paths cannot be empty");
-            }
-            if path.is_absolute() || path.components().any(|part| part.as_str() == "..") {
+            if !path_stays_inside_project(path) {
                 return self.invalid(format!("path `{path}` escapes project root"));
             }
         }
@@ -532,8 +529,7 @@ impl ContractManifest {
                             ));
                         }
                         let file = Utf8Path::new(file);
-                        if file.is_absolute() || file.components().any(|part| part.as_str() == "..")
-                        {
+                        if !path_stays_inside_project(file) {
                             return self.invalid(format!(
                                 "obligation `{}` mirror path `{}` escapes project root",
                                 obligation.id, path
@@ -585,6 +581,19 @@ fn mirror_symbol_contract_function(symbol: &str) -> Option<(&str, &str)> {
     } else {
         Some((contract, function))
     }
+}
+
+fn path_stays_inside_project(path: &Utf8Path) -> bool {
+    let has_directory_name = path
+        .components()
+        .any(|component| matches!(component, Utf8Component::Normal(_)));
+    let unsafe_component = path.components().any(|component| {
+        matches!(
+            component,
+            Utf8Component::ParentDir | Utf8Component::RootDir | Utf8Component::Prefix(_)
+        )
+    });
+    !path.as_str().is_empty() && !path.is_absolute() && has_directory_name && !unsafe_component
 }
 
 fn mirror_symbol_is_property(name: &str) -> bool {
@@ -958,7 +967,14 @@ mod tests {
         empty_path.artifacts.yul = "".into();
         assert!(matches!(
             empty_path.validate(),
-            Err(Error::Invalid { message, .. }) if message.contains("paths cannot be empty")
+            Err(Error::Invalid { message, .. }) if message.contains("escapes project root")
+        ));
+
+        let mut root_collapsing_path = manifest();
+        root_collapsing_path.artifacts.yul = ".".into();
+        assert!(matches!(
+            root_collapsing_path.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("escapes project root")
         ));
     }
 
@@ -969,6 +985,13 @@ mod tests {
             "../ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply".to_string(),
         );
         assert!(manifest.validate().is_err());
+
+        manifest.obligations[0].coverage.path =
+            Some(".:ERC20LiteTest.testFuzzTransferPreservesTotalSupply".to_string());
+        assert!(matches!(
+            manifest.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("escapes project root")
+        ));
     }
 
     #[test]
