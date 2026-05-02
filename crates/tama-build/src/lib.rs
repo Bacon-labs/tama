@@ -497,8 +497,11 @@ pub fn compile_yul_standard_json(
         &contract,
         &solc_program,
     )?;
-    let (creation, runtime) = extract_solc_bytecode(&value)
-        .ok_or_else(|| Error::Adapter("solc output did not contain bytecode".to_string()))?;
+    let (creation, runtime) = extract_solc_bytecode(&value, &contract).ok_or_else(|| {
+        Error::Adapter(format!(
+            "solc output did not contain bytecode for {contract}"
+        ))
+    })?;
     let creation_path = root.join(&manifest.artifacts.creation_bytecode);
     let runtime_path = root.join(&manifest.artifacts.runtime_bytecode);
     tama_common::write_string(&creation_path, &(creation.clone() + "\n"))?;
@@ -1678,22 +1681,26 @@ fn parse_axiom_list(raw: &str) -> Vec<String> {
         .collect()
 }
 
-fn extract_solc_bytecode(value: &Value) -> Option<(String, String)> {
+fn extract_solc_bytecode(value: &Value, contract: &str) -> Option<(String, String)> {
     let contracts = value.get("contracts")?.as_object()?;
     for by_file in contracts.values() {
-        if let Some(contract) = by_file.as_object()?.values().next() {
-            let evm = contract.get("evm")?;
-            let creation = evm.get("bytecode")?.get("object")?.as_str()?.to_string();
-            let runtime = evm
-                .get("deployedBytecode")
-                .and_then(|bytecode| bytecode.get("object"))
-                .and_then(Value::as_str)?
-                .to_string();
-            if !valid_bytecode_hex(&creation) || !valid_bytecode_hex(&runtime) {
-                return None;
-            }
-            return Some((creation, runtime));
+        let Some(contract_value) = by_file
+            .as_object()
+            .and_then(|contracts| contracts.get(contract))
+        else {
+            continue;
+        };
+        let evm = contract_value.get("evm")?;
+        let creation = evm.get("bytecode")?.get("object")?.as_str()?.to_string();
+        let runtime = evm
+            .get("deployedBytecode")
+            .and_then(|bytecode| bytecode.get("object"))
+            .and_then(Value::as_str)?
+            .to_string();
+        if !valid_bytecode_hex(&creation) || !valid_bytecode_hex(&runtime) {
+            return None;
         }
+        return Some((creation, runtime));
     }
     None
 }
@@ -1778,7 +1785,7 @@ mod tests {
             }
         });
         assert_eq!(
-            extract_solc_bytecode(&valid),
+            extract_solc_bytecode(&valid, "Counter"),
             Some(("6000".to_string(), "6001".to_string()))
         );
 
@@ -1793,7 +1800,7 @@ mod tests {
                 }
             }
         });
-        assert_eq!(extract_solc_bytecode(&missing_runtime), None);
+        assert_eq!(extract_solc_bytecode(&missing_runtime, "Counter"), None);
 
         let malformed_creation = json!({
             "contracts": {
@@ -1807,7 +1814,37 @@ mod tests {
                 }
             }
         });
-        assert_eq!(extract_solc_bytecode(&malformed_creation), None);
+        assert_eq!(extract_solc_bytecode(&malformed_creation, "Counter"), None);
+    }
+
+    #[test]
+    fn solc_bytecode_selects_expected_contract() {
+        let value = json!({
+            "contracts": {
+                "Other.yul": {
+                    "Other": {
+                        "evm": {
+                            "bytecode": {"object": "6000"},
+                            "deployedBytecode": {"object": "6001"}
+                        }
+                    }
+                },
+                "Counter.yul": {
+                    "Counter": {
+                        "evm": {
+                            "bytecode": {"object": "6002"},
+                            "deployedBytecode": {"object": "6003"}
+                        }
+                    }
+                }
+            }
+        });
+
+        assert_eq!(
+            extract_solc_bytecode(&value, "Counter"),
+            Some(("6002".to_string(), "6003".to_string()))
+        );
+        assert_eq!(extract_solc_bytecode(&value, "Missing"), None);
     }
 
     #[test]
