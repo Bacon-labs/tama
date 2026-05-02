@@ -12,5 +12,9 @@ serde.workspace = true
 serde_json.workspace = true
 tabled.workspace = true
 tama-common = { path = "../tama-common" }
+tama-config = { path = "../tama-config" }
 tama-manifest = { path = "../tama-manifest" }
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

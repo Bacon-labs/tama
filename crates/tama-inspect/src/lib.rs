@@ -3,6 +3,7 @@ use std::fs;
 use camino::{Utf8Path, Utf8PathBuf};
 use serde_json::{json, Value};
 use tabled::{Table, Tabled};
+use tama_config::PathsConfig;
 use tama_manifest::ContractManifest;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -11,6 +12,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     #[error(transparent)]
     Common(#[from] tama_common::Error),
+    #[error(transparent)]
+    Config(#[from] tama_config::Error),
     #[error(transparent)]
     Manifest(#[from] tama_manifest::Error),
     #[error("unknown inspect field `{0}`")]
@@ -52,18 +55,24 @@ pub fn parse_field(raw: &str) -> Option<Field> {
 }
 
 pub fn inspect(root: &Utf8Path, contract: &str, field: Field, json_mode: bool) -> Result<String> {
+    let paths = tama_config::load_config(root)?.paths;
     let manifest_path = root
-        .join("artifacts/manifest")
+        .join(paths.out.join("manifest"))
         .join(format!("{contract}.json"));
     let manifest = ContractManifest::load(&manifest_path)?;
     if json_mode {
-        Ok(serde_json::to_string_pretty(&inspect_json(root, &manifest, field)?)? + "\n")
+        Ok(serde_json::to_string_pretty(&inspect_json(root, &paths, &manifest, field)?)? + "\n")
     } else {
-        inspect_human(root, &manifest, field)
+        inspect_human(root, &paths, &manifest, field)
     }
 }
 
-fn inspect_json(root: &Utf8Path, manifest: &ContractManifest, field: Field) -> Result<Value> {
+fn inspect_json(
+    root: &Utf8Path,
+    paths: &PathsConfig,
+    manifest: &ContractManifest,
+    field: Field,
+) -> Result<Value> {
     Ok(match field {
         Field::Manifest => serde_json::to_value(manifest)?,
         Field::Selectors => json!(manifest
@@ -91,11 +100,16 @@ fn inspect_json(root: &Utf8Path, manifest: &ContractManifest, field: Field) -> R
             .iter()
             .filter_map(|obligation| obligation.coverage.path.as_ref())
             .collect::<Vec<_>>()),
-        Field::Trust => trust_artifacts(root),
+        Field::Trust => trust_artifacts(root, paths),
     })
 }
 
-fn inspect_human(root: &Utf8Path, manifest: &ContractManifest, field: Field) -> Result<String> {
+fn inspect_human(
+    root: &Utf8Path,
+    paths: &PathsConfig,
+    manifest: &ContractManifest,
+    field: Field,
+) -> Result<String> {
     match field {
         Field::Manifest => Ok(serde_json::to_string_pretty(manifest)? + "\n"),
         Field::Selectors => {
@@ -130,16 +144,16 @@ fn inspect_human(root: &Utf8Path, manifest: &ContractManifest, field: Field) -> 
             .collect::<Vec<_>>()
             .join("\n")
             + "\n"),
-        Field::Trust => {
-            Ok(serde_json::to_string_pretty(&trust_artifacts(root)).unwrap_or_default() + "\n")
-        }
+        Field::Trust => Ok(serde_json::to_string_pretty(&trust_artifacts(root, paths))
+            .unwrap_or_default()
+            + "\n"),
     }
 }
 
-fn trust_artifacts(root: &Utf8Path) -> Value {
-    let axiom_probe = read_json(root.join("artifacts/trust-probe/axioms.json"));
-    let trust_report = read_json(root.join("artifacts/trust-report.json"));
-    let assumption_report = read_json(root.join("artifacts/assumption-report.json"));
+fn trust_artifacts(root: &Utf8Path, paths: &PathsConfig) -> Value {
+    let axiom_probe = read_json(root.join(paths.out.join("trust-probe/axioms.json")));
+    let trust_report = read_json(root.join(paths.out.join("trust-report.json")));
+    let assumption_report = read_json(root.join(paths.out.join("assumption-report.json")));
     if axiom_probe.is_none() && trust_report.is_none() && assumption_report.is_none() {
         json!({})
     } else {
@@ -184,5 +198,70 @@ mod tests {
             Some(Field::RuntimeBytecode)
         );
         assert_eq!(parse_field("unknown"), None);
+    }
+
+    #[test]
+    fn inspect_uses_configured_artifact_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            r#"[project]
+name = "custom"
+verity = "0.1.0"
+
+[paths]
+out = "build/tama"
+
+[yul]
+solc = "0.8.33"
+"#,
+        )
+        .unwrap();
+        let manifest = counter_manifest("build/tama");
+        manifest
+            .write_pretty(&root.join("build/tama/manifest/Counter.json"))
+            .unwrap();
+        tama_common::write_string(
+            &root.join("build/tama/trust-probe/axioms.json"),
+            r#"{"obligations":[]}"#,
+        )
+        .unwrap();
+
+        let manifest_out = inspect(&root, "Counter", Field::Manifest, false).unwrap();
+        let trust_out = inspect(&root, "Counter", Field::Trust, true).unwrap();
+
+        assert!(manifest_out.contains(r#""contract": "Counter""#));
+        assert!(trust_out.contains("axiom_probe"));
+    }
+
+    fn counter_manifest(out: &str) -> ContractManifest {
+        ContractManifest {
+            schema: tama_manifest::SCHEMA.to_string(),
+            contract: "Counter".to_string(),
+            source: tama_manifest::SourcePaths {
+                implementation: "verity/src/Counter.lean".into(),
+                spec: "verity/spec/CounterSpec.lean".into(),
+                proof: "verity/proof/CounterProof.lean".into(),
+            },
+            lean: tama_manifest::LeanModules {
+                implementation_module: "src.Counter".to_string(),
+                spec_module: "spec.CounterSpec".to_string(),
+                proof_module: "proof.CounterProof".to_string(),
+            },
+            abi: tama_manifest::Abi::default(),
+            storage: vec![],
+            obligations: vec![],
+            artifacts: tama_manifest::ArtifactPaths {
+                yul: format!("{out}/yul/Counter.yul").into(),
+                creation_bytecode: format!("{out}/bytecode/Counter.bin").into(),
+                runtime_bytecode: format!("{out}/bytecode/Counter.runtime.bin").into(),
+                bytecode_hash: None,
+                solc_input: format!("{out}/solc-json/Counter.input.json").into(),
+                solc_output: format!("{out}/solc-json/Counter.output.json").into(),
+                interface: "src/generated/verity/CounterIface.sol".into(),
+                deployer: "src/generated/verity/CounterDeployer.sol".into(),
+            },
+        }
     }
 }

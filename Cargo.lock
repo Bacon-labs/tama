@@ -1204,7 +1204,9 @@ dependencies = [
  "serde_json",
  "tabled",
  "tama-common",
+ "tama-config",
  "tama-manifest",
+ "tempfile",
  "thiserror",
 ]
 
