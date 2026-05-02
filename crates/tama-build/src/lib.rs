@@ -412,27 +412,13 @@ pub fn compile_yul_standard_json(
             path: output_path.clone(),
             source,
         })?;
-    let errors = value
-        .get("errors")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|entry| entry.get("severity").and_then(Value::as_str) == Some("error"))
-        .map(|entry| {
-            entry
-                .get("formattedMessage")
-                .or_else(|| entry.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown solc error")
-                .to_string()
-        })
-        .collect::<Vec<_>>();
-    if !errors.is_empty() {
-        return Err(Error::SolcErrors {
-            contract,
-            errors: errors.join("\n"),
-        });
-    }
+    ensure_solc_success(
+        output.status.success(),
+        &stderr,
+        &value,
+        &contract,
+        &solc_program,
+    )?;
     let (creation, runtime) = extract_solc_bytecode(&value)
         .ok_or_else(|| Error::Adapter("solc output did not contain bytecode".to_string()))?;
     let creation_path = root.join(&manifest.artifacts.creation_bytecode);
@@ -450,6 +436,47 @@ pub fn compile_yul_standard_json(
         ),
     )?;
     Ok(())
+}
+
+fn ensure_solc_success(
+    status_success: bool,
+    stderr: &str,
+    value: &Value,
+    contract: &str,
+    program: &str,
+) -> Result<()> {
+    let errors = solc_error_messages(value);
+    if !errors.is_empty() {
+        return Err(Error::SolcErrors {
+            contract: contract.to_string(),
+            errors: errors.join("\n"),
+        });
+    }
+    if !status_success {
+        return Err(Error::Process {
+            program: program.to_string(),
+            message: stderr.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn solc_error_messages(value: &Value) -> Vec<String> {
+    value
+        .get("errors")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry.get("severity").and_then(Value::as_str) == Some("error"))
+        .map(|entry| {
+            entry
+                .get("formattedMessage")
+                .or_else(|| entry.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown solc error")
+                .to_string()
+        })
+        .collect()
 }
 
 pub fn generate_bridge(root: &Utf8Path, manifest: &ContractManifest) -> Result<()> {
@@ -1510,14 +1537,22 @@ mod tests {
         let value = json!({
             "errors": [{"severity": "error", "message": "bad yul"}]
         });
-        let errors = value
-            .get("errors")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .filter(|entry| entry.get("severity").and_then(Value::as_str) == Some("error"))
-            .count();
-        assert_eq!(errors, 1);
+        assert_eq!(solc_error_messages(&value), vec!["bad yul"]);
+    }
+
+    #[test]
+    fn solc_nonzero_status_fails_even_without_json_errors() {
+        let value = json!({
+            "errors": [{"severity": "warning", "message": "warning only"}]
+        });
+
+        let err =
+            ensure_solc_success(false, "solc crashed", &value, "Counter", "solc").unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::Process { program, message } if program == "solc" && message == "solc crashed"
+        ));
     }
 
     #[test]
