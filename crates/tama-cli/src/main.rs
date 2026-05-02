@@ -3042,7 +3042,7 @@ buildDir = ""
 
         let err = clean(&root, false).unwrap_err();
 
-        assert!(err.contains("refusing to clean path outside project"));
+        assert!(err.contains("configured path `foundry.out`"));
         assert!(root.join("keep.txt").is_file());
     }
 

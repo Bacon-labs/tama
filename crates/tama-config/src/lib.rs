@@ -297,7 +297,21 @@ pub fn parse_foundry_config(root: &Utf8Path) -> Result<FoundryConfig> {
     let text = read_to_string(&path)?;
     let foundry: FoundryToml =
         toml::from_str(&text).map_err(|source| Error::Toml { path, source })?;
-    Ok(foundry.into_config())
+    let config = foundry.into_config();
+    validate_foundry_config(&config)?;
+    Ok(config)
+}
+
+fn validate_foundry_config(config: &FoundryConfig) -> Result<()> {
+    for (field, path) in [
+        ("foundry.src", &config.src),
+        ("foundry.test", &config.test),
+        ("foundry.out", &config.out),
+        ("foundry.cache_path", &config.cache),
+    ] {
+        validate_project_relative_path(field, path)?;
+    }
+    Ok(())
 }
 
 pub fn parse_lake_build_dir(root: &Utf8Path) -> Result<Option<Utf8PathBuf>> {
@@ -1042,6 +1056,37 @@ cache_path = "profile-cache"
         assert_eq!(foundry.test, Utf8PathBuf::from("profile-test"));
         assert_eq!(foundry.out, Utf8PathBuf::from("root-out"));
         assert_eq!(foundry.cache, Utf8PathBuf::from("profile-cache"));
+    }
+
+    #[test]
+    fn foundry_config_rejects_unsafe_project_paths() {
+        for (path_key, path_value) in [
+            ("src", ""),
+            ("test", "."),
+            ("out", "../out"),
+            ("cache_path", "/tmp/cache"),
+            ("profile.default.out", "build/../out"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+            let config = if let Some(profile_key) = path_key.strip_prefix("profile.default.") {
+                format!(
+                    r#"[profile.default]
+{profile_key} = "{path_value}"
+"#
+                )
+            } else {
+                format!("{path_key} = \"{path_value}\"\n")
+            };
+            tama_common::write_string(&root.join("foundry.toml"), &config).unwrap();
+
+            let err = parse_foundry_config(&root).unwrap_err();
+
+            assert!(matches!(
+                err,
+                Error::InvalidPath { field, .. } if field.starts_with("foundry.")
+            ));
+        }
     }
 
     #[test]

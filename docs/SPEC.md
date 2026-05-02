@@ -160,6 +160,9 @@ before Tama writes or removes files.
 - Verity source/spec/proof paths, generated Verity bridge files, Verity artifact paths, Yul compilation settings, and trust-boundary policy live in `tama.toml`.
 
 Tama does **not** read `foundry.toml` to configure Yul compilation. Tama invokes `solc` for generated Yul using `[yul]`; Foundry continues to handle Solidity compilation using `foundry.toml`.
+When Tama consumes Foundry paths for audit and clean behavior (`src`, `test`,
+`out`, and `cache_path`), those paths must also be non-empty relative paths
+inside the project.
 
 ---
 

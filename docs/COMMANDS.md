@@ -22,6 +22,8 @@ silently changing build behavior. Foundry-specific settings remain in
 
 Tama-owned paths in `tama.toml` must be non-empty relative paths inside the
 project. Absolute paths, `..` components, and `.` are rejected before writes.
+The Foundry `src`, `test`, `out`, and `cache_path` paths that Tama consumes for
+audit and clean behavior must follow the same project-relative rule.
 
 Environment:
 
