@@ -1924,6 +1924,18 @@ mod tests {
     }
 
     #[test]
+    fn project_commands_report_missing_project_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("outside")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+
+        let err = project_root(Some(root.clone())).unwrap_err();
+
+        assert!(err.contains("could not find Tama project root"));
+        assert!(err.contains(root.as_str()));
+    }
+
+    #[test]
     fn ensure_git_worktree_initializes_fresh_project_root() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
