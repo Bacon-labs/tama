@@ -128,12 +128,14 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::New { name } => {
             let root = project_root(cli.root)?;
+            enforce_locked_if_requested(&root, cli.locked)?;
             tama_project::scaffold_contract(&root, &name).map_err(|err| err.to_string())?;
             println!("Created Verity contract scaffold {name}");
             Ok(ExitCode::SUCCESS)
         }
         Command::Check => {
             let root = project_root(cli.root)?;
+            enforce_locked_if_requested(&root, cli.locked)?;
             tama_build::Lake::new(root)
                 .check_src_and_spec()
                 .map_err(|err| err.to_string())?;
@@ -167,6 +169,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Test(args) => {
             let root = project_root(cli.root)?;
+            enforce_locked_if_requested(&root, cli.locked)?;
             let status = tama_toolchain::run_passthrough(
                 "forge",
                 &prefixed_test_args(args.forge_args),
@@ -177,6 +180,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Audit(args) => {
             let root = project_root(cli.root)?;
+            enforce_locked_if_requested(&root, cli.locked)?;
             let check = args
                 .check
                 .as_deref()
@@ -213,6 +217,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Inspect(args) => {
             let root = project_root(cli.root)?;
+            enforce_locked_if_requested(&root, cli.locked)?;
             let field = tama_inspect::parse_field(&args.field)
                 .ok_or_else(|| format!("unknown inspect field `{}`", args.field))?;
             print!(
@@ -224,6 +229,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Clean { deep } => {
             let root = project_root(cli.root)?;
+            enforce_locked_if_requested(&root, cli.locked)?;
             clean(&root, deep)?;
             Ok(ExitCode::SUCCESS)
         }
@@ -357,6 +363,14 @@ fn doctor_report_has_failures(report: &tama_toolchain::DoctorReport) -> bool {
                 | tama_toolchain::ToolStatus::Incompatible { .. }
         )
     }) || report.lock_current == Some(false)
+}
+
+fn enforce_locked_if_requested(root: &Utf8Path, locked: bool) -> Result<(), String> {
+    if !locked {
+        return Ok(());
+    }
+    let lock = tama_config::load_lock(root).map_err(|err| err.to_string())?;
+    tama_config::enforce_locked(root, &lock).map_err(|err| err.to_string())
 }
 
 fn mark_version_mismatch(
@@ -1073,6 +1087,25 @@ mod tests {
         assert!(err.contains("--no-lake"));
 
         update_project(&root, false, true, true, true).unwrap();
+    }
+
+    #[test]
+    fn global_locked_guard_rejects_stale_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+
+        enforce_locked_if_requested(&root, true).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            "[project]\nname = \"starter\"\nverity = \"0.1.0\"\n\n[yul]\nsolc = \"0.8.34\"\n",
+        )
+        .unwrap();
+
+        let err = enforce_locked_if_requested(&root, true).unwrap_err();
+        assert!(err.contains("lockfile is stale"));
+        assert!(err.contains("tama.toml"));
+        enforce_locked_if_requested(&root, false).unwrap();
     }
 
     #[test]
