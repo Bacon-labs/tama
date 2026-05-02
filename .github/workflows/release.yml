@@ -825,6 +825,7 @@ jobs:
           SAFE_VERSION = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?$")
           SAFE_SHA256 = re.compile(r"^[0-9a-f]{64}$")
           SAFE_PLATFORM = re.compile(r"^[A-Za-z0-9._+-]+$")
+          HTTPS_URL = re.compile(r"^https://[A-Za-z0-9]")
 
           def require_string(value, label):
               if not isinstance(value, str) or not value:
@@ -854,8 +855,8 @@ jobs:
                   if not SAFE_PLATFORM.fullmatch(platform):
                       raise SystemExit(f"unsafe artifact platform: {platform}")
                   url = require_string(artifact.get("url"), "artifact.url")
-                  if not url.startswith("https://"):
-                      raise SystemExit(f"release artifact URL must use https:// for {release_version} {platform}")
+                  if not HTTPS_URL.match(url):
+                      raise SystemExit(f"release artifact URL must use https:// with a host for {release_version} {platform}")
                   sha256 = require_string(artifact.get("sha256"), "artifact.sha256")
                   if not SAFE_SHA256.fullmatch(sha256):
                       raise SystemExit(f"invalid artifact SHA-256 for {release_version} {platform}")

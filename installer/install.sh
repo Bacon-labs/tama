@@ -82,6 +82,7 @@ import sys
 SAFE_VERSION = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?$")
 SAFE_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SAFE_PLATFORM = re.compile(r"^[A-Za-z0-9._+-]+$")
+HTTPS_URL = re.compile(r"^https://[A-Za-z0-9]")
 
 def require_string(value, label):
     if not isinstance(value, str) or value == "":
@@ -152,6 +153,8 @@ for release in releases:
             raise SystemExit(f"unsafe artifact platform: {artifact_platform}")
         if not (artifact_url.startswith("https://") or artifact_url.startswith("file://")):
             raise SystemExit(f"unsupported artifact URL: {artifact_url}")
+        if artifact_url.startswith("https://") and not HTTPS_URL.match(artifact_url):
+            raise SystemExit(f"https artifact URL must include a host: {artifact_url}")
         if artifact_url.startswith("file://") and not artifact_url.startswith("file:///"):
             raise SystemExit(f"file artifact URL must use an absolute path: {artifact_url}")
         if not SAFE_SHA256.fullmatch(artifact_sha256):

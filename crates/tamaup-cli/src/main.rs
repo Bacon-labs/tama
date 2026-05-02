@@ -584,7 +584,15 @@ fn validate_artifact_url(url: &str) -> Result<(), String> {
                 "file artifact URL must use an absolute path `{url}`"
             ));
         }
-    } else if !url.starts_with("https://") {
+    } else if let Some(rest) = url.strip_prefix("https://") {
+        if !rest
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric())
+        {
+            return Err(format!("https artifact URL must include a host `{url}`"));
+        }
+    } else {
         return Err(format!("unsupported artifact URL `{url}`"));
     }
     Ok(())
@@ -1391,6 +1399,11 @@ mod tests {
         assert!(validate_release_manifest(&manifest)
             .unwrap_err()
             .contains("unsupported artifact URL"));
+
+        manifest.releases[0].artifacts[0].url = "https:///tama.tar.gz".to_string();
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("include a host"));
 
         manifest.releases[0].artifacts[0].url = "https://example.invalid/tama.tar.gz".to_string();
         manifest.releases[0].artifacts[0].platform = "linux/x86_64".to_string();
