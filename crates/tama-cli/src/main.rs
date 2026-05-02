@@ -756,7 +756,10 @@ fn update_project(
                     .to_string(),
             );
         }
-        run_lake_update(root, package)?;
+        let snapshot = snapshot_dependency_files(root);
+        if let Err(err) = run_lake_update(root, package) {
+            return Err(restore_dependency_files_after_failure(root, snapshot, err));
+        }
     } else {
         let (_, needs_lake_update) = planned_verity_lake_dependency(root, &config, &lock)?;
         if needs_lake_update && no_lake {
@@ -2324,6 +2327,50 @@ mod tests {
                 .get("verity_rev")
                 .map(String::as_str),
             Some(old_rev.as_str())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn targeted_package_update_restores_manifest_when_lake_update_fails() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let lakefile_before = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+        let manifest_before =
+            tama_common::read_to_string(&root.join("lake-manifest.json")).unwrap();
+
+        let bin = Utf8PathBuf::from_path_buf(dir.path().join("bin")).unwrap();
+        let lake = bin.join("lake");
+        tama_common::write_string(
+            &lake,
+            "#!/bin/sh\nprintf '%s\\n' '{\"partial\":true}' > lake-manifest.json\nexit 42\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&lake).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&lake, permissions).unwrap();
+        }
+        let mut path_entries = vec![bin.as_std_path().to_path_buf()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        let _path_guard = EnvVarGuard::set("PATH", std::env::join_paths(path_entries).unwrap());
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, "off");
+
+        let err = update_project(&root, false, false, false, true, Some("mathlib")).unwrap_err();
+
+        assert!(err.contains("lake update mathlib"));
+        assert_eq!(
+            tama_common::read_to_string(&root.join("lakefile.toml")).unwrap(),
+            lakefile_before
+        );
+        assert_eq!(
+            tama_common::read_to_string(&root.join("lake-manifest.json")).unwrap(),
+            manifest_before
         );
     }
 
