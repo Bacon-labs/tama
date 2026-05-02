@@ -51,6 +51,7 @@ my-protocol/
 ├── src/
 │   └── generated/verity/        # Generated Solidity interfaces/deployers for Verity contracts
 ├── script/                      # Foundry deployment scripts
+│   └── ERC20Lite.s.sol
 ├── test/
 │   ├── verity/                  # Foundry tests mirroring Verity obligations
 │   │   └── ERC20Lite.t.sol
@@ -449,7 +450,7 @@ TAMA_LAKE_PACKAGE_CACHE
 
 Scaffolds a new Tama project.
 
-It does **not** keep Foundry's default example contracts. The result should be a Tama-native starter project: a real Verity `ERC20Lite`, its spec, complete starter proofs, generated bridge files, and mirror Foundry tests.
+It does **not** keep Foundry's default example contracts. The result should be a Tama-native starter project: a real Verity `ERC20Lite`, its spec, complete starter proofs, generated bridge files, mirror Foundry tests, and a basic Foundry deployment script.
 
 Steps:
 
@@ -460,7 +461,7 @@ Steps:
 5. Write `lakefile.toml` with Lake build output configured under `artifacts/lean`.
 6. Write `lean-toolchain` pinned to the compatible Lean version.
 7. Create `verity/src`, `verity/spec`, `verity/proof`, `test/verity`, `src/generated/verity`.
-8. Generate the `ERC20Lite` starter across implementation, spec, proof, bridge, manifest, and mirror test layers.
+8. Generate the commented `ERC20Lite` starter across implementation, spec, proof, bridge, deploy script, manifest, and mirror test layers.
 9. Install pinned `forge-std` using Foundry as a git submodule. Tama may pass `--shallow` to reduce download size, but must not pass `--no-git`.
 10. Pin the Verity Lean dependency in `lakefile.toml` and `lake-manifest.json`.
 11. Print next steps.

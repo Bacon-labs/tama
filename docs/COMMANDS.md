@@ -50,7 +50,7 @@ TAMA_LAKE_PACKAGE_CACHE
 
 ## `tama init [path]`
 
-Creates a new Tama/Foundry project with the ERC20Lite starter. It writes `tama.toml`, `tama.lock`, `foundry.toml`, `lakefile.toml`, `lake-manifest.json`, `lean-toolchain`, aggregate Lean modules, Verity source/spec/proof files, generated bridge paths, and Foundry mirror tests.
+Creates a new Tama/Foundry project with the ERC20Lite starter. It writes `tama.toml`, `tama.lock`, `foundry.toml`, `lakefile.toml`, `lake-manifest.json`, `lean-toolchain`, aggregate Lean modules, commented Verity source/spec/proof files, generated bridge paths, Foundry mirror tests, and `script/ERC20Lite.s.sol` for deployment after `tama build`.
 
 ## `tama new <Name>`
 
