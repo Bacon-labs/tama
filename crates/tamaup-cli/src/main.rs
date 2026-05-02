@@ -1327,6 +1327,18 @@ mod tests {
     }
 
     #[test]
+    fn self_update_command_matches_documented_surface() {
+        let cli = Cli::try_parse_from(["tamaup", "self", "update"]).unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::Self_ {
+                command: SelfCommand::Update
+            })
+        ));
+    }
+
+    #[test]
     fn install_verifies_manifest_before_bootstrap() {
         let dir = tempfile::tempdir().unwrap();
         let manifest = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).unwrap();
