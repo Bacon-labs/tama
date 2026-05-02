@@ -65,12 +65,20 @@ impl Lake {
         Self { root: root.into() }
     }
 
-    pub fn check_src_and_spec(&self) -> Result<()> {
-        run("lake", &["build", "TamaSrc", "TamaSpec"], &self.root)
+    pub fn check_src_and_spec(&self, offline: bool) -> Result<()> {
+        run_owned(
+            "lake",
+            &lake_build_args(offline, &["TamaSrc", "TamaSpec"]),
+            &self.root,
+        )
     }
 
-    pub fn build_proofs(&self) -> Result<()> {
-        run("lake", &["build", "TamaProof"], &self.root)
+    pub fn build_proofs(&self, offline: bool) -> Result<()> {
+        run_owned(
+            "lake",
+            &lake_build_args(offline, &["TamaProof"]),
+            &self.root,
+        )
     }
 
     pub fn verity_codegen(&self, config: &TamaConfig, opts: &BuildOptions) -> Result<()> {
@@ -91,7 +99,8 @@ impl Lake {
         };
         tama_common::write_string(&module_manifest, &modules)?;
 
-        let args = vec![
+        let mut args = lake_prefix_args(opts.offline);
+        args.extend([
             "exe".to_string(),
             "verity-compiler".to_string(),
             "--manifest".to_string(),
@@ -106,7 +115,7 @@ impl Lake {
             config.paths.out.join("layout-report.json").to_string(),
             "--assumption-report".to_string(),
             config.paths.out.join("assumption-report.json").to_string(),
-        ];
+        ]);
         let _evmyul_guard = EvmyulConformanceGuard::prepare(&self.root)?;
         run_owned("lake", &args, &self.root)
     }
@@ -134,7 +143,7 @@ impl Pipeline {
         }
 
         let lake = Lake::new(self.root.clone());
-        lake.build_proofs()?;
+        lake.build_proofs(opts.offline)?;
         lake.verity_codegen(&config, &opts)?;
         let mut manifests = adapt_verity_outputs(&self.root, &config, opts.contract.as_deref())?;
         generate_trust_probe(&self.root, &config, &manifests)?;
@@ -157,7 +166,7 @@ impl Pipeline {
             generate_bridge(&self.root, manifest)?;
         }
         if should_run_forge(&opts) {
-            run("forge", &["build"], &self.root)?;
+            run_owned("forge", &forge_build_args(opts.offline), &self.root)?;
         }
         if !opts.locked {
             tama_config::update_lock_inputs(&self.root, &mut lock)?;
@@ -180,6 +189,29 @@ impl Pipeline {
 
 fn should_run_forge(opts: &BuildOptions) -> bool {
     !opts.no_forge && !opts.no_solc
+}
+
+fn lake_prefix_args(offline: bool) -> Vec<String> {
+    if offline {
+        vec!["--no-cache".to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
+fn lake_build_args(offline: bool, targets: &[&str]) -> Vec<String> {
+    let mut args = lake_prefix_args(offline);
+    args.push("build".to_string());
+    args.extend(targets.iter().map(|target| (*target).to_string()));
+    args
+}
+
+fn forge_build_args(offline: bool) -> Vec<String> {
+    let mut args = vec!["build".to_string()];
+    if offline {
+        args.push("--offline".to_string());
+    }
+    args
 }
 
 pub fn adapt_verity_outputs(
@@ -577,14 +609,6 @@ fn solidity_params(params: &[Param]) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn run(program: &str, args: &[&str], cwd: &Utf8Path) -> Result<()> {
-    let owned = args
-        .iter()
-        .map(|arg| (*arg).to_string())
-        .collect::<Vec<_>>();
-    run_owned(program, &owned, cwd)
 }
 
 fn run_owned(program: &str, args: &[String], cwd: &Utf8Path) -> Result<()> {
@@ -1458,6 +1482,20 @@ mod tests {
             ..Default::default()
         }));
         assert!(should_run_forge(&BuildOptions::default()));
+    }
+
+    #[test]
+    fn offline_build_args_disable_remote_caches() {
+        assert_eq!(
+            lake_build_args(true, &["TamaSrc", "TamaSpec"]),
+            vec!["--no-cache", "build", "TamaSrc", "TamaSpec"]
+        );
+        assert_eq!(
+            lake_build_args(false, &["TamaProof"]),
+            vec!["build", "TamaProof"]
+        );
+        assert_eq!(forge_build_args(true), vec!["build", "--offline"]);
+        assert_eq!(forge_build_args(false), vec!["build"]);
     }
 
     #[test]

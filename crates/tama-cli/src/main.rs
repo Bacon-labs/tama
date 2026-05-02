@@ -141,7 +141,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
             tama_build::Lake::new(root)
-                .check_src_and_spec()
+                .check_src_and_spec(cli.offline)
                 .map_err(|err| err.to_string())?;
             Ok(ExitCode::SUCCESS)
         }

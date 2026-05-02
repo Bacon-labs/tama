@@ -46,6 +46,8 @@ lake build TamaSrc TamaSpec
 
 Proof modules, Verity codegen, solc, and Foundry are not run.
 
+With global `--offline`, Tama passes `--no-cache` to Lake.
+
 ## `tama build`
 
 Runs proof elaboration, real Verity codegen, Tama manifest adaptation, `solc --standard-json`, Solidity bridge generation, `forge build`, and lockfile update.
@@ -61,6 +63,8 @@ Useful flags:
 ```
 
 `--no-solc` and `--no-forge` are local development escape hatches and are not release gates. `--no-solc` removes stale downstream solc JSON, bytecode, and generated bridge files for the selected contracts while leaving fresh Yul and manifests.
+
+With global `--offline`, Tama passes `--no-cache` to Lake invocations and `--offline` to `forge build`.
 
 ## `tama test [forge-args...]`
 

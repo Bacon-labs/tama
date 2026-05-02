@@ -13,4 +13,6 @@ Network access occurs only when the user runs commands that explicitly need exte
 
 `TAMA_LAKE_PACKAGE_CACHE` is a local cache only. Tama copies package checkouts between that cache and `.lake/packages` to avoid repeated downloads, but the cache is not uploaded by Tama.
 
+When global `--offline` is used with `tama check` or `tama build`, Tama passes `--no-cache` to Lake. `tama build --offline` also passes `--offline` to `forge build`.
+
 `tama build`, `tama check`, `tama test`, `tama audit`, `tama inspect`, `tama clean`, and `tama doctor` do not intentionally contact Tama-operated services. They may execute external tools such as Lake, Forge, or solc, so their own network behavior depends on how those tools are configured and whether required dependencies are already installed.
