@@ -531,7 +531,7 @@ pub fn parse_lake_dependency(root: &Utf8Path, raw: &str) -> Result<LakeDependenc
         };
         if !resolved.join("tama.toml").is_file() {
             return Err(Error::InvalidDependencySpec(format!(
-                "{raw} does not point to a Tama package with tama.toml"
+                "local dependency `{raw}` does not contain tama.toml; pure Lake packages are outside `tama install`'s scope, so add this dependency manually to lakefile.toml"
             )));
         }
         let name = dependency_name_from_path(&path)?;
@@ -1353,6 +1353,28 @@ rev = "v1"
         assert!(matches!(
             lake_package_name(&root).unwrap_err(),
             Error::UnsupportedLakefile(message) if message.contains("package name")
+        ));
+    }
+
+    #[test]
+    fn path_dependency_without_tama_config_points_to_manual_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        let dependency = Utf8PathBuf::from_path_buf(dir.path().join("pure-lake")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        tama_common::write_string(
+            &dependency.join("lakefile.toml"),
+            "name = \"pure_lake_dep\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let err = parse_lake_dependency(&root, "../pure-lake").unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::InvalidDependencySpec(message)
+                if message.contains("local dependency `../pure-lake` does not contain tama.toml")
+                    && message.contains("add this dependency manually to lakefile.toml")
         ));
     }
 

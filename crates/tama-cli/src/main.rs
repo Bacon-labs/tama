@@ -2256,6 +2256,30 @@ mod tests {
     }
 
     #[test]
+    fn local_pure_lake_dependency_points_to_manual_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let dependency_root = Utf8PathBuf::from_path_buf(dir.path().join("pure-lake")).unwrap();
+        tama_common::write_string(
+            &dependency_root.join("lakefile.toml"),
+            "name = \"pure_lake_dep\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let lakefile_before = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+
+        let err = install_package(&root, "../pure-lake", false, false).unwrap_err();
+
+        assert!(err.contains("local dependency `../pure-lake` does not contain tama.toml"));
+        assert!(err.contains("pure Lake packages are outside `tama install`'s scope"));
+        assert!(err.contains("add this dependency manually to lakefile.toml"));
+        assert_eq!(
+            tama_common::read_to_string(&root.join("lakefile.toml")).unwrap(),
+            lakefile_before
+        );
+    }
+
+    #[test]
     fn offline_dependency_mutations_fail_before_editing() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
