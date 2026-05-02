@@ -3,7 +3,7 @@
 Install Tama, create the ERC20Lite starter, and run the full pipeline:
 
 ```sh
-tamaup install 0.1.0
+curl -L https://tama.tools/install.sh | sh
 tama init my-protocol
 cd my-protocol
 tama doctor
@@ -13,6 +13,8 @@ tama test
 tama audit
 tama inspect ERC20Lite selectors
 ```
+
+Use `tamaup install <version>` later to switch to a specific signed release.
 
 The starter project is a Foundry project with Verity source, spec, proof, generated Solidity bridge files, Yul, bytecode, and manifests. It should pass without hand-editing files on a supported machine with the declared toolchain.
 
