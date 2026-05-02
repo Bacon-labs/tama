@@ -1052,6 +1052,11 @@ fn clean(root: &Utf8PathBuf, deep: bool) -> Result<(), String> {
         .map(|config| config.paths)
         .unwrap_or_default();
     let foundry = tama_config::parse_foundry_config(root).unwrap_or_default();
+    let configured_lake_build_dir = match tama_config::parse_lake_build_dir(root) {
+        Ok(path) => path,
+        Err(tama_config::Error::UnsupportedLakefile(_)) => None,
+        Err(err) => return Err(err.to_string()),
+    };
     for rel in [
         paths.out.join("yul"),
         paths.out.join("abi"),
@@ -1063,6 +1068,9 @@ fn clean(root: &Utf8PathBuf, deep: bool) -> Result<(), String> {
         foundry.out,
         Utf8PathBuf::from("cache"),
     ] {
+        remove_project_dir(root, &rel)?;
+    }
+    if let Some(rel) = configured_lake_build_dir {
         remove_project_dir(root, &rel)?;
     }
     remove_generated_dir(root, &paths.generated)?;
@@ -1131,7 +1139,10 @@ fn remove_project_file(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
 }
 
 fn ensure_project_relative(path: &Utf8Path) -> Result<(), String> {
-    if path.is_absolute() || path.components().any(|part| part.as_str() == "..") {
+    if path.as_str().is_empty()
+        || path.is_absolute()
+        || path.components().any(|part| part.as_str() == "..")
+    {
         Err(format!("refusing to clean path outside project: `{path}`"))
     } else {
         Ok(())
@@ -1528,6 +1539,43 @@ solc = "0.8.33"
         assert!(!root.join("build/tama/trust-report.json").exists());
         assert!(!root.join("gen/verity").exists());
         assert!(root.join("artifacts/yul/Token.yul").exists());
+    }
+
+    #[test]
+    fn clean_removes_configured_lake_build_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("lakefile.toml"),
+            r#"name = "demo"
+buildDir = "build/lean"
+"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("artifacts/lean")).unwrap();
+        std::fs::create_dir_all(root.join("build/lean")).unwrap();
+
+        clean(&root, false).unwrap();
+
+        assert!(!root.join("artifacts/lean").exists());
+        assert!(!root.join("build/lean").exists());
+    }
+
+    #[test]
+    fn clean_refuses_empty_configured_lake_build_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("lakefile.toml"),
+            r#"name = "demo"
+buildDir = ""
+"#,
+        )
+        .unwrap();
+
+        let err = clean(&root, false).unwrap_err();
+
+        assert!(err.contains("refusing to clean path outside project"));
     }
 
     #[test]

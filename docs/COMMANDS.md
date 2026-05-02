@@ -92,7 +92,7 @@ trust
 
 ## `tama clean [--deep]`
 
-Removes generated Tama artifacts and generated Solidity. `--deep` also removes the configured Lake build directory.
+Removes generated Tama artifacts, the configured Lake build directory, and generated Solidity. `--deep` also removes Lake dependency/cache state.
 
 ## `tama install`, `tama remove`, `tama update`, `tama doctor`
 

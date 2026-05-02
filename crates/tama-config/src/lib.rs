@@ -183,6 +183,18 @@ pub fn parse_foundry_config(root: &Utf8Path) -> Result<FoundryConfig> {
     toml::from_str(&text).map_err(|source| Error::Toml { path, source })
 }
 
+pub fn parse_lake_build_dir(root: &Utf8Path) -> Result<Option<Utf8PathBuf>> {
+    let path = lakefile_toml_path(root)?;
+    let text = read_to_string(&path)?;
+    let doc = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|source| Error::StaleLock(format!("failed to parse {path}: {source}")))?;
+    Ok(doc
+        .get("buildDir")
+        .and_then(Item::as_str)
+        .map(Utf8PathBuf::from))
+}
+
 pub fn read_lean_toolchain(root: &Utf8Path) -> Result<String> {
     Ok(read_to_string(&root.join("lean-toolchain"))?
         .trim()
@@ -800,6 +812,32 @@ path = "../localpkg"
             lake_dependency(&root, "missing").unwrap_err(),
             Error::DependencyNotFound(name) if name == "missing"
         ));
+    }
+
+    #[test]
+    fn lake_build_dir_reads_optional_root_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("lakefile.toml"),
+            r#"name = "demo"
+buildDir = "build/lean"
+
+[[require]]
+name = "verity"
+git = "https://github.com/lfglabs-dev/verity.git"
+rev = "v1"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parse_lake_build_dir(&root).unwrap(),
+            Some(Utf8PathBuf::from("build/lean"))
+        );
+
+        tama_common::write_string(&root.join("lakefile.toml"), "name = \"demo\"\n").unwrap();
+        assert_eq!(parse_lake_build_dir(&root).unwrap(), None);
     }
 
     #[test]
