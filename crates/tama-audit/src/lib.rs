@@ -932,10 +932,28 @@ fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Is
                         ));
                         continue;
                     };
-                    let file = path_ref
-                        .split_once(':')
-                        .map(|(file, _)| file)
-                        .unwrap_or(path_ref);
+                    let Some((file, symbol)) = path_ref.split_once(':') else {
+                        issues.push(issue(
+                            "coverage",
+                            Some(&manifest.contract),
+                            "TAMA_COVERAGE_SYMBOL",
+                            format!("mirror path `{path_ref}` must include a Solidity symbol"),
+                            None,
+                        ));
+                        continue;
+                    };
+                    if file.trim().is_empty() || symbol.trim().is_empty() {
+                        issues.push(issue(
+                            "coverage",
+                            Some(&manifest.contract),
+                            "TAMA_COVERAGE_SYMBOL",
+                            format!(
+                                "mirror path `{path_ref}` must include a non-empty file and symbol"
+                            ),
+                            None,
+                        ));
+                        continue;
+                    }
                     if path_escapes_project(Utf8Path::new(file)) {
                         issues.push(issue(
                             "coverage",
@@ -969,29 +987,25 @@ fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Is
                         ));
                         continue;
                     }
-                    if let Some((_, symbol)) = path_ref.split_once(':') {
-                        let text = tama_common::read_to_string(&abs).unwrap_or_default();
-                        let name = symbol.rsplit('.').next().unwrap_or(symbol);
-                        if !mirror_symbol_is_property(name) {
-                            issues.push(issue(
-                                "coverage",
-                                Some(&manifest.contract),
-                                "TAMA_COVERAGE_SHAPE",
-                                format!(
-                                    "mirror symbol `{symbol}` must be a fuzz test or invariant"
-                                ),
-                                Some(file.into()),
-                            ));
-                        }
-                        if !solidity_function_declared(&text, name) {
-                            issues.push(issue(
-                                "coverage",
-                                Some(&manifest.contract),
-                                "TAMA_COVERAGE_MISSING_SYMBOL",
-                                format!("mirror symbol `{symbol}` not found"),
-                                Some(file.into()),
-                            ));
-                        }
+                    let text = tama_common::read_to_string(&abs).unwrap_or_default();
+                    let name = symbol.rsplit('.').next().unwrap_or(symbol);
+                    if !mirror_symbol_is_property(name) {
+                        issues.push(issue(
+                            "coverage",
+                            Some(&manifest.contract),
+                            "TAMA_COVERAGE_SHAPE",
+                            format!("mirror symbol `{symbol}` must be a fuzz test or invariant"),
+                            Some(file.into()),
+                        ));
+                    }
+                    if !solidity_function_declared(&text, name) {
+                        issues.push(issue(
+                            "coverage",
+                            Some(&manifest.contract),
+                            "TAMA_COVERAGE_MISSING_SYMBOL",
+                            format!("mirror symbol `{symbol}` not found"),
+                            Some(file.into()),
+                        ));
                     }
                 }
                 CoverageDisposition::ProofOnly => {
@@ -2335,6 +2349,34 @@ contract CounterTest {
         assert!(issues
             .iter()
             .any(|issue| issue.code == "TAMA_COVERAGE_SHAPE"));
+    }
+
+    #[test]
+    fn coverage_requires_symbol_qualified_mirror_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut manifest = counter_manifest();
+        let mut obligation = public_obligation();
+        obligation.coverage = tama_manifest::Coverage {
+            disposition: CoverageDisposition::Mirror,
+            path: Some("test/verity/Counter.t.sol".to_string()),
+            reason: None,
+        };
+        manifest.obligations.push(obligation);
+        tama_common::write_string(
+            &root.join("test/verity/Counter.t.sol"),
+            r#"contract CounterTest {
+    function testFuzzIncrementUpdatesCount(uint8 initialSteps, uint8 extraSteps) public {}
+}
+"#,
+        )
+        .unwrap();
+
+        let mut issues = Vec::new();
+        coverage(&root, &[manifest], &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_COVERAGE_SYMBOL"));
     }
 
     #[test]

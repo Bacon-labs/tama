@@ -298,7 +298,24 @@ impl ContractManifest {
                                 obligation.id
                             ));
                         }
-                        let file = path.split_once(':').map(|(file, _)| file).unwrap_or(path);
+                        let Some((file, symbol)) = path.split_once(':') else {
+                            return self.invalid(format!(
+                                "obligation `{}` mirror coverage path `{}` must include a Solidity symbol",
+                                obligation.id, path
+                            ));
+                        };
+                        if file.trim().is_empty() || symbol.trim().is_empty() {
+                            return self.invalid(format!(
+                                "obligation `{}` mirror coverage path `{}` must include a non-empty file and symbol",
+                                obligation.id, path
+                            ));
+                        }
+                        if !mirror_symbol_is_property(symbol) {
+                            return self.invalid(format!(
+                                "obligation `{}` mirror symbol `{}` must be a fuzz test or invariant",
+                                obligation.id, symbol
+                            ));
+                        }
                         let file = Utf8Path::new(file);
                         if file.is_absolute() || file.components().any(|part| part.as_str() == "..")
                         {
@@ -342,6 +359,11 @@ impl ContractManifest {
             message: message.into(),
         })
     }
+}
+
+fn mirror_symbol_is_property(symbol: &str) -> bool {
+    let name = symbol.rsplit('.').next().unwrap_or(symbol).trim();
+    name.starts_with("testFuzz") || name.starts_with("invariant_")
 }
 
 fn validate_hex_slot(slot: &str) -> std::result::Result<(), &'static str> {
@@ -459,6 +481,17 @@ mod tests {
         manifest.obligations[0].coverage.path = Some(
             "../ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply".to_string(),
         );
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn mirror_coverage_requires_property_symbol() {
+        let mut manifest = manifest();
+        manifest.obligations[0].coverage.path = Some("test/verity/ERC20Lite.t.sol".to_string());
+        assert!(manifest.validate().is_err());
+
+        manifest.obligations[0].coverage.path =
+            Some("test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransfer".to_string());
         assert!(manifest.validate().is_err());
     }
 
