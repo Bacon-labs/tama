@@ -7,6 +7,11 @@ use tama_config::TamaLock;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+const DEFAULT_VERITY_GIT: &str = "https://github.com/lfglabs-dev/verity.git";
+const DEFAULT_VERITY_REV: &str = "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e";
+const DEFAULT_LEAN_TOOLCHAIN: &str = "leanprover/lean4:v4.22.0";
+const DEFAULT_SOLC: &str = "0.8.33";
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
@@ -33,11 +38,11 @@ impl Default for InitOptions {
     fn default() -> Self {
         Self {
             name: "my-protocol".to_string(),
-            verity_version: "0.1.0".to_string(),
-            verity_git: "https://github.com/lfglabs-dev/verity.git".to_string(),
-            verity_rev: "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e".to_string(),
-            lean_toolchain: "leanprover/lean4:v4.22.0".to_string(),
-            solc: "0.8.33".to_string(),
+            verity_version: DEFAULT_VERITY_REV.to_string(),
+            verity_git: DEFAULT_VERITY_GIT.to_string(),
+            verity_rev: DEFAULT_VERITY_REV.to_string(),
+            lean_toolchain: DEFAULT_LEAN_TOOLCHAIN.to_string(),
+            solc: DEFAULT_SOLC.to_string(),
         }
     }
 }
@@ -672,6 +677,13 @@ mod tests {
         let source = read_to_string(&root.join("verity/src/ERC20Lite.lean")).unwrap();
         assert!(source.contains("function view balanceOf"));
         assert!(!source.contains(r#"emit "Transfer""#));
+        let config = read_to_string(&root.join("tama.toml")).unwrap();
+        assert!(config.contains(&format!("verity = \"{DEFAULT_VERITY_REV}\"")));
+        let lock = tama_config::load_lock(&root).unwrap();
+        assert_eq!(
+            lock.resolved.get("verity_rev").map(String::as_str),
+            Some(DEFAULT_VERITY_REV)
+        );
     }
 
     #[test]

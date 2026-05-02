@@ -9,6 +9,8 @@ Tama v0.1 targets the current Verity smart-contract repository at:
 
 The same commit is also reachable from `https://github.com/th0rgal/verity.git`; Tama records the `lfglabs-dev` URL because that is the URL used by the pinned upstream Lake manifest.
 
+Generated v0.1 projects write this commit SHA in `[project].verity`. When Verity publishes a supported release tag, users may set `verity = "x.y.z"` and `tama update` will normalize it to `v<x.y.z>`.
+
 ## Compatibility Decision
 
 Tama uses Path B from the implementation plan: a Tama-side adapter derives `tama.contract-manifest.v1` from real Verity outputs. Upstream Verity does not currently emit Tama v1 manifests directly.

@@ -126,7 +126,7 @@ end FooSpec
 ```toml
 [project]
 name = "my_protocol"
-verity = "0.5.0"         # desired Verity framework version/tag
+verity = "0.5.0"         # desired Verity framework tag or commit
 
 [paths]
 src = "verity/src"                       # Verity EDSL contracts

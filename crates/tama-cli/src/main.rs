@@ -1086,7 +1086,23 @@ mod tests {
         let err = update_project(&root, false, true, false, true).unwrap_err();
         assert!(err.contains("--no-lake"));
 
+        let before = tama_config::load_lock(&root)
+            .unwrap()
+            .resolved
+            .get("verity_rev")
+            .cloned()
+            .unwrap();
         update_project(&root, false, true, true, true).unwrap();
+        let after = tama_config::load_lock(&root)
+            .unwrap()
+            .resolved
+            .get("verity_rev")
+            .cloned()
+            .unwrap();
+        assert_eq!(after, before);
+        assert!(tama_common::read_to_string(&root.join("lakefile.toml"))
+            .unwrap()
+            .contains(&format!("rev = \"{before}\"")));
     }
 
     #[test]

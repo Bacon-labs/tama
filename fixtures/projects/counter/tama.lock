@@ -1,6 +1,9 @@
 version = 1
 
 [resolved]
+"lake.verity.input_rev" = "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e"
+"lake.verity.rev" = "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e"
+"lake.verity.url" = "https://github.com/lfglabs-dev/verity.git"
 lean_toolchain = "leanprover/lean4:v4.22.0"
 solc = "0.8.33"
 verity_git = "https://github.com/lfglabs-dev/verity.git"
@@ -14,6 +17,6 @@ verity_rev = "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e"
 "lake-manifest.json" = "666514c8a671fd674293a187a8334cf488085a43df1d7e37c35005939c2f50c3"
 "lakefile.toml" = "179a43044d6ccef5a9d733ce6f4f9503fea8f3933ba943d2b021324e0224d986"
 lean-toolchain = "8f6680f8389e8adee06cb2bd44372c6d60dce0e8301630b61a99a5642d1bd71b"
-"tama.toml" = "579d84fa29cabfff9e72a1375eafc274fa4ac900b95939274dd16e3133be52bd"
+"tama.toml" = "9f589fe84ea654160d04a7f440ff53419c5a4d6fb4b301e8be7f2a44632ab7f4"
 
 [yul]

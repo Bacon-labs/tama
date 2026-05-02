@@ -1,6 +1,6 @@
 [project]
 name = "counter-fixture"
-verity = "0.1.0"
+verity = "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e"
 
 [paths]
 src = "verity/src"
