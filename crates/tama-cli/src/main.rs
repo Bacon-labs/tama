@@ -1367,6 +1367,7 @@ fn remove_project_file(root: &Utf8Path, rel: &Utf8Path) -> Result<(), String> {
 
 fn ensure_project_relative(path: &Utf8Path) -> Result<(), String> {
     if path.as_str().is_empty()
+        || path == Utf8Path::new(".")
         || path.is_absolute()
         || path.components().any(|part| part.as_str() == "..")
     {
@@ -1942,6 +1943,27 @@ solc = "0.8.33"
     }
 
     #[test]
+    fn clean_uses_foundry_profile_default_out_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            "[project]\nname='x'\nverity='v'\n[yul]\nsolc='0.8.33'\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("foundry.toml"),
+            "[profile.default]\nout = 'forge-out'\n",
+        )
+        .unwrap();
+        tama_common::write_string(&root.join("forge-out/Counter.json"), "{}\n").unwrap();
+
+        clean(&root, false).unwrap();
+
+        assert!(!root.join("forge-out").exists());
+    }
+
+    #[test]
     fn clean_removes_configured_lake_build_dir() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -1976,6 +1998,25 @@ buildDir = ""
         let err = clean(&root, false).unwrap_err();
 
         assert!(err.contains("refusing to clean path outside project"));
+    }
+
+    #[test]
+    fn clean_refuses_foundry_out_at_project_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            "[project]\nname='x'\nverity='v'\n[yul]\nsolc='0.8.33'\n",
+        )
+        .unwrap();
+        tama_common::write_string(&root.join("foundry.toml"), "[profile.default]\nout = '.'\n")
+            .unwrap();
+        tama_common::write_string(&root.join("keep.txt"), "keep\n").unwrap();
+
+        let err = clean(&root, false).unwrap_err();
+
+        assert!(err.contains("refusing to clean path outside project"));
+        assert!(root.join("keep.txt").is_file());
     }
 
     #[test]

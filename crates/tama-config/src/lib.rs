@@ -143,6 +143,60 @@ impl Default for FoundryConfig {
     }
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct FoundryToml {
+    #[serde(default)]
+    src: Option<Utf8PathBuf>,
+    #[serde(default)]
+    test: Option<Utf8PathBuf>,
+    #[serde(default)]
+    out: Option<Utf8PathBuf>,
+    #[serde(default)]
+    profile: FoundryProfiles,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FoundryProfiles {
+    #[serde(default)]
+    default: FoundryProfileConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FoundryProfileConfig {
+    #[serde(default)]
+    src: Option<Utf8PathBuf>,
+    #[serde(default)]
+    test: Option<Utf8PathBuf>,
+    #[serde(default)]
+    out: Option<Utf8PathBuf>,
+}
+
+impl FoundryToml {
+    fn into_config(self) -> FoundryConfig {
+        let defaults = FoundryConfig::default();
+        FoundryConfig {
+            src: self
+                .profile
+                .default
+                .src
+                .or(self.src)
+                .unwrap_or(defaults.src),
+            test: self
+                .profile
+                .default
+                .test
+                .or(self.test)
+                .unwrap_or(defaults.test),
+            out: self
+                .profile
+                .default
+                .out
+                .or(self.out)
+                .unwrap_or(defaults.out),
+        }
+    }
+}
+
 pub fn load_config(root: &Utf8Path) -> Result<TamaConfig> {
     let path = root.join("tama.toml");
     parse_tama_config(&path)
@@ -180,7 +234,9 @@ pub fn parse_foundry_config(root: &Utf8Path) -> Result<FoundryConfig> {
         return Ok(FoundryConfig::default());
     }
     let text = read_to_string(&path)?;
-    toml::from_str(&text).map_err(|source| Error::Toml { path, source })
+    let foundry: FoundryToml =
+        toml::from_str(&text).map_err(|source| Error::Toml { path, source })?;
+    Ok(foundry.into_config())
 }
 
 pub fn parse_lake_build_dir(root: &Utf8Path) -> Result<Option<Utf8PathBuf>> {
@@ -596,6 +652,50 @@ solc = "0.8.33"
         assert_eq!(cfg.paths.src, Utf8PathBuf::from("verity/src"));
         assert_eq!(cfg.yul.optimizer_runs, 200);
         assert!(cfg.trust.allow_axioms.contains_key("Classical.choice"));
+    }
+
+    #[test]
+    fn foundry_profile_default_paths_are_parsed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("foundry.toml"),
+            r#"[profile.default]
+src = "contracts"
+test = "tests"
+out = "build/out"
+"#,
+        )
+        .unwrap();
+
+        let foundry = parse_foundry_config(&root).unwrap();
+
+        assert_eq!(foundry.src, Utf8PathBuf::from("contracts"));
+        assert_eq!(foundry.test, Utf8PathBuf::from("tests"));
+        assert_eq!(foundry.out, Utf8PathBuf::from("build/out"));
+    }
+
+    #[test]
+    fn foundry_profile_paths_override_root_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("foundry.toml"),
+            r#"src = "root-src"
+test = "root-test"
+out = "root-out"
+
+[profile.default]
+test = "profile-test"
+"#,
+        )
+        .unwrap();
+
+        let foundry = parse_foundry_config(&root).unwrap();
+
+        assert_eq!(foundry.src, Utf8PathBuf::from("root-src"));
+        assert_eq!(foundry.test, Utf8PathBuf::from("profile-test"));
+        assert_eq!(foundry.out, Utf8PathBuf::from("root-out"));
     }
 
     #[test]
