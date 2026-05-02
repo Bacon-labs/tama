@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{Cursor, Read};
 #[cfg(unix)]
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::process::ExitCode;
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -269,11 +269,15 @@ fn extract_archive(bytes: &[u8], dest: &Utf8Path) -> Result<(), String> {
         if let Some(parent) = out.parent() {
             fs::create_dir_all(parent).map_err(|err| err.to_string())?;
         }
+        let mode = entry.header().mode().unwrap_or(0o755) & 0o777;
         let mut content = Vec::new();
         entry
             .read_to_end(&mut content)
             .map_err(|err| err.to_string())?;
-        fs::write(out, content).map_err(|err| err.to_string())?;
+        fs::write(&out, content).map_err(|err| err.to_string())?;
+        #[cfg(unix)]
+        fs::set_permissions(&out, fs::Permissions::from_mode(mode))
+            .map_err(|err| err.to_string())?;
     }
     Ok(())
 }
@@ -341,5 +345,31 @@ mod tests {
         assert_eq!(fs::read_to_string(home.join("active")).unwrap(), "0.1.0");
         assert!(home.join("bin/tama").exists());
         assert!(home.join("bin/tamaup").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn extract_archive_preserves_executable_mode() {
+        let mut tarball = Vec::new();
+        {
+            let encoder =
+                flate2::write::GzEncoder::new(&mut tarball, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_path("bin/tama").unwrap();
+            header.set_size(4);
+            header.set_mode(0o755);
+            header.set_cksum();
+            archive.append(&header, &b"tama"[..]).unwrap();
+            archive.finish().unwrap();
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let dest = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        extract_archive(&tarball, &dest).unwrap();
+        let mode = fs::metadata(dest.join("bin/tama"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_ne!(mode & 0o111, 0);
     }
 }
