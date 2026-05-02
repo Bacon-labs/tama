@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use tama_common::{read_to_string, sha256_file};
 use toml_edit::{value, ArrayOfTables, Item, Table};
@@ -34,6 +34,11 @@ pub enum Error {
     InvalidDependencySpec(String),
     #[error("dependency `{0}` not found in lakefile.toml")]
     DependencyNotFound(String),
+    #[error("configured path `{field}` must stay inside the project and contain a directory name: {path}")]
+    InvalidPath {
+        field: &'static str,
+        path: Utf8PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,10 +229,46 @@ pub fn load_config(root: &Utf8Path) -> Result<TamaConfig> {
 
 pub fn parse_tama_config(path: &Utf8Path) -> Result<TamaConfig> {
     let text = read_to_string(path)?;
-    toml::from_str(&text).map_err(|source| Error::Toml {
+    let config = toml::from_str(&text).map_err(|source| Error::Toml {
         path: path.to_owned(),
         source,
-    })
+    })?;
+    validate_tama_config(&config)?;
+    Ok(config)
+}
+
+fn validate_tama_config(config: &TamaConfig) -> Result<()> {
+    for (field, path) in [
+        ("paths.src", &config.paths.src),
+        ("paths.spec", &config.paths.spec),
+        ("paths.proof", &config.paths.proof),
+        ("paths.mirror_test", &config.paths.test),
+        ("paths.out", &config.paths.out),
+        ("paths.generated_solidity", &config.paths.generated),
+    ] {
+        validate_project_relative_path(field, path)?;
+    }
+    Ok(())
+}
+
+pub fn validate_project_relative_path(field: &'static str, path: &Utf8Path) -> Result<()> {
+    let has_directory_name = path
+        .components()
+        .any(|component| matches!(component, Utf8Component::Normal(_)));
+    let unsafe_component = path.components().any(|component| {
+        matches!(
+            component,
+            Utf8Component::ParentDir | Utf8Component::RootDir | Utf8Component::Prefix(_)
+        )
+    });
+    if path.as_str().is_empty() || path.is_absolute() || !has_directory_name || unsafe_component {
+        Err(Error::InvalidPath {
+            field,
+            path: path.to_owned(),
+        })
+    } else {
+        Ok(())
+    }
 }
 
 pub fn load_lock(root: &Utf8Path) -> Result<TamaLock> {
@@ -913,6 +954,44 @@ optimizer_runz = 200
 
             assert!(matches!(err, Error::Toml { .. }));
             assert!(err.to_string().contains("unknown field"));
+        }
+    }
+
+    #[test]
+    fn tama_config_rejects_unsafe_project_paths() {
+        for (path_key, path_value) in [
+            ("src", ""),
+            ("spec", "."),
+            ("proof", "../proof"),
+            ("mirror_test", "/tmp/tests"),
+            ("out", "artifacts/../escape"),
+            ("generated_solidity", "../generated"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = Utf8PathBuf::from_path_buf(dir.path().join("tama.toml")).unwrap();
+            tama_common::write_string(
+                &path,
+                &format!(
+                    r#"[project]
+name = "my-protocol"
+verity = "0.1.0"
+
+[paths]
+{path_key} = "{path_value}"
+
+[yul]
+solc = "0.8.33"
+"#
+                ),
+            )
+            .unwrap();
+
+            let err = parse_tama_config(&path).unwrap_err();
+
+            assert!(matches!(
+                err,
+                Error::InvalidPath { field, .. } if field.starts_with("paths.")
+            ));
         }
     }
 

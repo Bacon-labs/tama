@@ -20,6 +20,9 @@ instead of ignored. This keeps misspelled compiler or path settings from
 silently changing build behavior. Foundry-specific settings remain in
 `foundry.toml` and are parsed by Foundry.
 
+Tama-owned paths in `tama.toml` must be non-empty relative paths inside the
+project. Absolute paths, `..` components, and `.` are rejected before writes.
+
 Environment:
 
 ```text

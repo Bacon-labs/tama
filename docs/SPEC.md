@@ -149,7 +149,10 @@ metadata_bytecode_hash = "none"          # reproducible bytecode by default
 "Quot.sound" = "accepted Lean quotient axiom"
 ```
 
-`[paths]` is optional; omitted fields fall back to the defaults above.
+`[paths]` is optional; omitted fields fall back to the defaults above. Every
+Tama-owned path must be a non-empty relative path inside the project. Absolute
+paths, `..` components, and root-collapsing values such as `.` are rejected
+before Tama writes or removes files.
 
 `tama.toml` and `foundry.toml` are intentionally non-overlapping:
 
