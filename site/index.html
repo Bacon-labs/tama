@@ -3,64 +3,279 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Tama is the Verity developer toolchain for building, testing, auditing, and inspecting smart-contract projects from one CLI.">
+  <meta name="theme-color" content="#0f766e">
   <title>Tama</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <main>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Tama home">
+      <span class="brand-mark" aria-hidden="true">t</span>
+      <span>Tama</span>
+    </a>
+    <nav class="top-nav" aria-label="Primary">
+      <a href="#why">Why</a>
+      <a href="#pipeline">Pipeline</a>
+      <a href="#docs">Docs</a>
+      <a href="/manifest.json">Manifest</a>
+      <a href="/install.sh">Installer</a>
+    </nav>
+  </header>
+
+  <main id="top">
     <section class="hero">
-      <p class="eyebrow">Verity developer toolchain</p>
-      <h1>Tama</h1>
-      <p class="lede">Create, build, test, audit, and inspect real Verity smart-contract projects from one CLI.</p>
+      <div class="hero-copy">
+        <p class="eyebrow">Verity developer toolchain</p>
+        <h1>Tama</h1>
+        <p class="lede">A single CLI for Verity smart-contract projects: scaffold, prove, compile, test, audit, and inspect without giving up the Foundry workflow.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#install">Install Tama</a>
+          <a class="button" href="#docs">Read the docs</a>
+        </div>
+      </div>
+
+      <aside class="terminal" aria-label="Tama command preview">
+        <div class="terminal-bar">
+          <span></span><span></span><span></span>
+        </div>
+        <pre><code>$ tama build
+Build scope:
+  project: my-protocol
+  proofs: first-class inputs
+
+Steps:
+  run  proof       Lake builds proofs
+  ok   proof       modules accepted
+  run  codegen     Yul + ABI
+  ok   manifest    manifest ready
+  run  solc        compile Yul
+  ok   forge       Foundry built
+
+Build completed: 1 manifest</code></pre>
+      </aside>
+    </section>
+
+    <section id="install" class="install-band" aria-labelledby="install-title">
+      <div>
+        <p class="eyebrow">Install</p>
+        <h2 id="install-title">Signed releases, one command.</h2>
+      </div>
       <pre><code>curl -L https://tama.tools/install.sh | sh</code></pre>
-      <div class="links">
-        <a href="#quickstart">Quickstart</a>
-        <a href="#commands">Commands</a>
-        <a href="/manifest.json">Manifest</a>
-        <a href="/manifest.json.minisig">Signature</a>
-        <a href="/install.sh">Installer</a>
+    </section>
+
+    <section id="why" class="section-block" aria-labelledby="why-title">
+      <p class="eyebrow">Why Tama</p>
+      <h2 id="why-title">Verity work becomes one reproducible project flow.</h2>
+      <div class="reason-grid">
+        <article>
+          <h3>One command surface</h3>
+          <p>Tama ties together Lean/Lake, Verity codegen, solc, Foundry, lockfiles, and generated artifacts behind commands that are easy to remember.</p>
+        </article>
+        <article>
+          <h3>Proofs stay in the path</h3>
+          <p>Builds validate proof modules before bytecode and bridges are produced, so contract artifacts are connected to the obligations they rely on.</p>
+        </article>
+        <article>
+          <h3>Foundry remains native</h3>
+          <p>A Tama project is also a Foundry project. Run <code>forge</code> directly, write mirror tests, and keep Solidity-side workflows where they belong.</p>
+        </article>
       </div>
     </section>
 
-    <section id="quickstart">
-      <h2>Quickstart</h2>
-      <pre><code>tama init my-protocol
-cd my-protocol
-tama doctor
-tama check
-tama build
-tama test
-tama audit
-tama inspect ERC20Lite selectors</code></pre>
-    </section>
-
-    <section id="commands">
-      <h2>Core Commands</h2>
-      <div class="grid">
-        <article><h3>init</h3><p>Create the ERC20Lite starter project.</p></article>
-        <article><h3>build</h3><p>Run Lean, Verity, solc, bridge generation, and Foundry.</p></article>
-        <article><h3>test</h3><p>Pass through directly to <code>forge test</code>.</p></article>
-        <article><h3>audit</h3><p>Check structure, selectors, storage, coverage, and trust boundaries.</p></article>
-        <article><h3>inspect</h3><p>Read manifests, ABI, selectors, storage, Yul, bytecode, and obligations.</p></article>
-        <article><h3>doctor</h3><p>Diagnose toolchain drift and missing dependencies.</p></article>
+    <section id="pipeline" class="pipeline section-block" aria-labelledby="pipeline-title">
+      <div>
+        <p class="eyebrow">Pipeline</p>
+        <h2 id="pipeline-title">From Verity source to audited bytecode.</h2>
+        <p>Tama keeps the moving parts visible: Lean checks, Verity outputs, manifests, solc bytecode, generated Solidity bridges, Foundry builds, and audit checks.</p>
       </div>
+      <ol class="pipeline-list">
+        <li><span>01</span><strong>Scaffold</strong><p>Create a Foundry-compatible ERC20Lite starter or add another Verity contract.</p></li>
+        <li><span>02</span><strong>Check</strong><p>Run the fast implementation and spec Lean check while proofs are still in progress.</p></li>
+        <li><span>03</span><strong>Build</strong><p>Elaborate proofs, generate Yul and manifests, compile bytecode, and build Foundry targets.</p></li>
+        <li><span>04</span><strong>Audit</strong><p>Review structure, selectors, storage layout, coverage, and trust-boundary evidence.</p></li>
+      </ol>
     </section>
 
-    <section>
-      <h2>Documentation</h2>
-      <ul>
-        <li><a href="https://github.com/foglight-labs/tama/blob/main/docs/QUICKSTART.md">Quickstart</a></li>
-        <li><a href="https://github.com/foglight-labs/tama/blob/main/docs/COMMANDS.md">Command reference</a></li>
-        <li><a href="https://github.com/foglight-labs/tama/blob/main/docs/AUDIT.md">Audit guide</a></li>
-        <li><a href="https://github.com/foglight-labs/tama/blob/main/docs/GENERATED_ARTIFACTS.md">Generated artifacts</a></li>
-        <li><a href="https://github.com/foglight-labs/tama/blob/main/docs/TROUBLESHOOTING.md">Troubleshooting</a></li>
-        <li><a href="https://github.com/foglight-labs/tama/blob/main/docs/VERITY_COMPAT.md">Verity compatibility</a></li>
-        <li><a href="https://github.com/foglight-labs/tama/blob/main/docs/LIMITATIONS.md">Limitations</a></li>
-        <li><a href="https://github.com/foglight-labs/tama/blob/main/docs/RELEASE.md">Release guide</a></li>
-        <li><a href="https://github.com/foglight-labs/tama/releases">Release artifacts</a></li>
-        <li><a href="https://github.com/foglight-labs/tama/blob/main/docs/PRIVACY.md">Privacy</a></li>
-      </ul>
+    <section id="docs" class="docs section-block" aria-labelledby="docs-title">
+      <div class="docs-intro">
+        <p class="eyebrow">Documentation</p>
+        <h2 id="docs-title">Docs are rendered from the repo Markdown.</h2>
+        <p>The website reads the same <code>docs/*.md</code> files used by the repository, so release pages and source docs stay in sync.</p>
+      </div>
+
+      <div class="doc-shell">
+        <nav class="doc-nav" aria-label="Documentation pages">
+          <a id="doc-quickstart" href="#doc-quickstart" data-doc="quickstart">Quickstart<span>First run</span></a>
+          <a id="doc-commands" href="#doc-commands" data-doc="commands">Commands<span>CLI reference</span></a>
+          <a id="doc-audit" href="#doc-audit" data-doc="audit">Audit<span>Checks and findings</span></a>
+          <a id="doc-artifacts" href="#doc-artifacts" data-doc="artifacts">Artifacts<span>Generated outputs</span></a>
+          <a id="doc-troubleshooting" href="#doc-troubleshooting" data-doc="troubleshooting">Troubleshooting<span>Common fixes</span></a>
+          <a id="doc-compat" href="#doc-compat" data-doc="compat">Verity compat<span>Supported upstream</span></a>
+          <a id="doc-limits" href="#doc-limits" data-doc="limits">Limitations<span>v0.1 boundary</span></a>
+          <a id="doc-release" href="#doc-release" data-doc="release">Release<span>Signed artifacts</span></a>
+          <a id="doc-privacy" href="#doc-privacy" data-doc="privacy">Privacy<span>No telemetry</span></a>
+          <a id="doc-spec" href="#doc-spec" data-doc="spec">Spec<span>Product model</span></a>
+          <a id="doc-plan" href="#doc-plan" data-doc="plan">Plan<span>Implementation bar</span></a>
+        </nav>
+        <article class="doc-reader" id="doc-reader" aria-live="polite">
+          <p class="loading">Loading documentation...</p>
+        </article>
+      </div>
     </section>
   </main>
+
+  <script>
+    const docs = [
+      ["quickstart", "Quickstart", "docs/QUICKSTART.md"],
+      ["commands", "Command reference", "docs/COMMANDS.md"],
+      ["audit", "Audit", "docs/AUDIT.md"],
+      ["artifacts", "Generated artifacts", "docs/GENERATED_ARTIFACTS.md"],
+      ["troubleshooting", "Troubleshooting", "docs/TROUBLESHOOTING.md"],
+      ["compat", "Verity compatibility", "docs/VERITY_COMPAT.md"],
+      ["limits", "Limitations", "docs/LIMITATIONS.md"],
+      ["release", "Release", "docs/RELEASE.md"],
+      ["privacy", "Privacy", "docs/PRIVACY.md"],
+      ["spec", "Spec", "docs/SPEC.md"],
+      ["plan", "Implementation plan", "docs/IMPLEMENTATION_PLAN.md"]
+    ].map(([slug, title, path]) => ({ slug, title, path }));
+
+    const reader = document.querySelector("#doc-reader");
+    const navItems = [...document.querySelectorAll("[data-doc]")];
+    const bySlug = Object.fromEntries(docs.map(doc => [doc.slug, doc]));
+    const byPath = Object.fromEntries(docs.map(doc => [doc.path.split("/").pop(), doc.slug]));
+    const cache = new Map();
+
+    navItems.forEach(link => link.addEventListener("click", event => {
+      event.preventDefault();
+      history.pushState(null, "", link.hash);
+      loadDocFromHash();
+      document.querySelector("#docs").scrollIntoView({ block: "start" });
+    }));
+    addEventListener("popstate", loadDocFromHash);
+    addEventListener("hashchange", loadDocFromHash);
+    loadDocFromHash();
+
+    async function loadDocFromHash() {
+      const slug = location.hash.replace(/^#doc-/, "");
+      const doc = bySlug[slug] || bySlug.quickstart;
+      navItems.forEach(link => link.classList.toggle("active", link.dataset.doc === doc.slug));
+      reader.innerHTML = `<p class="loading">Loading ${escapeHtml(doc.title)}...</p>`;
+      try {
+        const markdown = await fetchDoc(doc);
+        reader.innerHTML = markdownToHtml(markdown);
+      } catch (error) {
+        reader.innerHTML = `<h1>${escapeHtml(doc.title)}</h1><p class="error">Could not load ${escapeHtml(doc.path)}. Serve the repository root or publish the Pages bundle so the Markdown docs are available beside the site.</p>`;
+      }
+    }
+
+    async function fetchDoc(doc) {
+      if (cache.has(doc.slug)) return cache.get(doc.slug);
+      for (const path of [doc.path, `../${doc.path}`, `/${doc.path}`]) {
+        try {
+          const response = await fetch(path);
+          if (response.ok) {
+            const text = await response.text();
+            cache.set(doc.slug, text);
+            return text;
+          }
+        } catch (_) {}
+      }
+      throw new Error(`missing ${doc.path}`);
+    }
+
+    function markdownToHtml(markdown) {
+      const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+      let html = "";
+      let paragraph = [];
+      let list = null;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const fence = line.match(/^```(\w+)?/);
+        if (fence) {
+          closeBlocks();
+          const code = [];
+          while (++i < lines.length && !lines[i].startsWith("```")) code.push(lines[i]);
+          html += `<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`;
+          continue;
+        }
+        if (!line.trim()) {
+          closeBlocks();
+          continue;
+        }
+        const heading = line.match(/^(#{1,4})\s+(.*)$/);
+        if (heading) {
+          closeBlocks();
+          const level = heading[1].length;
+          html += `<h${level}>${inline(heading[2])}</h${level}>`;
+          continue;
+        }
+        if (line.startsWith("|") && lines[i + 1]?.match(/^\|?[\s:-]+\|/)) {
+          closeBlocks();
+          const rows = [];
+          while (i < lines.length && lines[i].startsWith("|")) rows.push(lines[i++]);
+          i--;
+          html += tableToHtml(rows);
+          continue;
+        }
+        const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+        const number = line.match(/^\s*\d+\.\s+(.*)$/);
+        if (bullet || number) {
+          closeParagraph();
+          const type = bullet ? "ul" : "ol";
+          if (list !== type) {
+            closeList();
+            html += `<${type}>`;
+            list = type;
+          }
+          html += `<li>${inline((bullet || number)[1])}</li>`;
+          continue;
+        }
+        paragraph.push(line.trim());
+      }
+      closeBlocks();
+      return html;
+
+      function closeBlocks() { closeParagraph(); closeList(); }
+      function closeParagraph() {
+        if (paragraph.length) {
+          html += `<p>${inline(paragraph.join(" "))}</p>`;
+          paragraph = [];
+        }
+      }
+      function closeList() {
+        if (list) {
+          html += `</${list}>`;
+          list = null;
+        }
+      }
+    }
+
+    function tableToHtml(rows) {
+      const cells = row => row.split("|").slice(1, -1).map(cell => inline(cell.trim()));
+      const head = cells(rows[0]).map(cell => `<th>${cell}</th>`).join("");
+      const body = rows.slice(2).map(row => `<tr>${cells(row).map(cell => `<td>${cell}</td>`).join("")}</tr>`).join("");
+      return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+
+    function inline(text) {
+      return escapeHtml(text)
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/`([^`]+)`/g, "<code>$1</code>")
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => link(label, href));
+    }
+
+    function link(label, href) {
+      const file = href.split("#")[0].split("/").pop();
+      const slug = byPath[file];
+      if (slug) return `<a href="#doc-${slug}">${label}</a>`;
+      const safe = href.replace(/"/g, "%22");
+      return `<a href="${safe}">${label}</a>`;
+    }
+
+    function escapeHtml(value) {
+      return value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+    }
+  </script>
 </body>
 </html>

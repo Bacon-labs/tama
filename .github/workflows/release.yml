@@ -948,6 +948,7 @@ jobs:
           set -euxo pipefail
           mkdir -p public/releases
           cp -R site/. public/
+          cp -R docs public/docs
           cp installer/install.sh public/install.sh
           cp dist/manifest.json public/manifest.json
           cp dist/manifest.json.minisig public/manifest.json.minisig
