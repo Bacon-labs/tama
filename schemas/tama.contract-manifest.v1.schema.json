@@ -3,15 +3,283 @@
   "$id": "https://tama.tools/schemas/tama.contract-manifest.v1.schema.json",
   "title": "Tama contract manifest v1",
   "type": "object",
-  "required": ["schema", "contract", "source", "lean", "abi", "storage", "obligations", "artifacts"],
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "source",
+    "lean",
+    "abi",
+    "storage",
+    "obligations",
+    "artifacts"
+  ],
   "properties": {
     "schema": { "const": "tama.contract-manifest.v1" },
-    "contract": { "type": "string" },
-    "source": { "type": "object" },
-    "lean": { "type": "object" },
-    "abi": { "type": "object" },
-    "storage": { "type": "array" },
-    "obligations": { "type": "array" },
-    "artifacts": { "type": "object" }
+    "contract": { "$ref": "#/$defs/contractName" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation", "spec", "proof"],
+      "properties": {
+        "implementation": { "$ref": "#/$defs/projectPath" },
+        "spec": { "$ref": "#/$defs/projectPath" },
+        "proof": { "$ref": "#/$defs/projectPath" }
+      }
+    },
+    "lean": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation_module", "spec_module", "proof_module"],
+      "properties": {
+        "implementation_module": { "$ref": "#/$defs/leanDecl" },
+        "spec_module": { "$ref": "#/$defs/leanDecl" },
+        "proof_module": { "$ref": "#/$defs/leanDecl" }
+      }
+    },
+    "abi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["constructor", "functions", "events", "errors"],
+      "properties": {
+        "constructor": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["inputs"],
+              "properties": {
+                "inputs": {
+                  "type": "array",
+                  "items": { "$ref": "#/$defs/param" }
+                }
+              }
+            }
+          ]
+        },
+        "functions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/function" }
+        },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/event" }
+        },
+        "errors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/error" }
+        }
+      }
+    },
+    "storage": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/storageEntry" }
+    },
+    "obligations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/obligation" }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "yul",
+        "creation_bytecode",
+        "runtime_bytecode",
+        "bytecode_hash",
+        "solc_input",
+        "solc_output",
+        "interface",
+        "deployer"
+      ],
+      "properties": {
+        "yul": { "$ref": "#/$defs/projectPath" },
+        "creation_bytecode": { "$ref": "#/$defs/projectPath" },
+        "runtime_bytecode": { "$ref": "#/$defs/projectPath" },
+        "bytecode_hash": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          ]
+        },
+        "solc_input": { "$ref": "#/$defs/projectPath" },
+        "solc_output": { "$ref": "#/$defs/projectPath" },
+        "interface": { "$ref": "#/$defs/projectPath" },
+        "deployer": { "$ref": "#/$defs/projectPath" }
+      }
+    }
+  },
+  "$defs": {
+    "contractName": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Za-z0-9_]*$"
+    },
+    "projectPath": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "anyOf": [
+          { "pattern": "^/" },
+          { "pattern": "(^|/)\\.\\.(/|$)" }
+        ]
+      }
+    },
+    "leanDecl": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+$"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\([^)]*\\)$"
+    },
+    "selector": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]{8}$"
+    },
+    "topic": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]{64}$"
+    },
+    "param": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "minLength": 1 }
+      }
+    },
+    "function": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "signature",
+        "selector",
+        "visibility",
+        "mutability",
+        "inputs",
+        "outputs"
+      ],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "signature": { "$ref": "#/$defs/signature" },
+        "selector": { "$ref": "#/$defs/selector" },
+        "visibility": { "enum": ["external", "public"] },
+        "mutability": {
+          "enum": ["pure", "view", "nonpayable", "payable"]
+        },
+        "inputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/param" }
+        },
+        "outputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/param" }
+        }
+      }
+    },
+    "eventField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "indexed"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "minLength": 1 },
+        "indexed": { "type": "boolean" }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "signature", "topic0", "fields"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "signature": { "$ref": "#/$defs/signature" },
+        "topic0": { "$ref": "#/$defs/topic" },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/eventField" }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "signature", "selector", "inputs"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "signature": { "$ref": "#/$defs/signature" },
+        "selector": { "$ref": "#/$defs/selector" },
+        "inputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/param" }
+        }
+      }
+    },
+    "storageEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "slot", "offset", "width_bytes", "encoding"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "slot": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{1,64}$"
+        },
+        "offset": { "type": "integer", "minimum": 0, "maximum": 31 },
+        "width_bytes": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "encoding": { "enum": ["value", "mapping", "dynamic_array", "bytes", "struct"] }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disposition", "path", "reason"],
+      "properties": {
+        "disposition": { "enum": ["mirror", "proof_only", "none"] },
+        "path": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 1 }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "string" }
+          ]
+        }
+      }
+    },
+    "obligation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "lean_decl",
+        "contract",
+        "function",
+        "coverage"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["invariant", "postcondition", "helper"] },
+        "lean_decl": { "$ref": "#/$defs/leanDecl" },
+        "contract": { "$ref": "#/$defs/contractName" },
+        "function": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 1 }
+          ]
+        },
+        "coverage": { "$ref": "#/$defs/coverage" }
+      }
+    }
   }
 }
