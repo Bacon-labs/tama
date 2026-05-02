@@ -1747,6 +1747,8 @@ impl From<AbiParam> for Param {
 mod tests {
     use super::*;
 
+    static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+
     struct EnvVarGuard {
         key: &'static str,
         old: Option<std::ffi::OsString>,
@@ -1756,6 +1758,12 @@ mod tests {
         fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let old = std::env::var_os(key);
             std::env::set_var(key, value);
+            Self { key, old }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let old = std::env::var_os(key);
+            std::env::remove_var(key);
             Self { key, old }
         }
     }
@@ -2743,6 +2751,10 @@ TAMA_AXIOMS_END proof.CounterProof.increment_post
     fn compile_yul_rejects_wrong_solc_version_before_bytecode() {
         use std::os::unix::fs::PermissionsExt;
 
+        let _guard = ENV_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap();
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let solc = root.join("solc");
@@ -2769,6 +2781,40 @@ TAMA_AXIOMS_END proof.CounterProof.increment_post
             err,
             Error::Toolchain(tama_toolchain::Error::ToolVersionMismatch(message))
                 if message.contains("0.8.32") && message.contains("0.8.33")
+        ));
+        assert!(!root.join(&manifest.artifacts.creation_bytecode).exists());
+        assert!(!root.join(&manifest.artifacts.runtime_bytecode).exists());
+        assert_eq!(manifest.artifacts.bytecode_hash, None);
+    }
+
+    #[test]
+    fn compile_yul_reports_missing_solc_before_bytecode() {
+        let _guard = ENV_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let bin = root.join("bin");
+        let home = root.join("home");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let _solc_guard = EnvVarGuard::unset("TAMA_SOLC");
+        let _path_guard = EnvVarGuard::set("PATH", bin.as_os_str());
+        let _home_guard = EnvVarGuard::set("HOME", home.as_os_str());
+        let config = test_config();
+        let mut manifest = test_manifest("Counter");
+        tama_common::write_string(
+            &root.join(&manifest.artifacts.yul),
+            "object \"Counter\" { code { stop() } }\n",
+        )
+        .unwrap();
+
+        let err = compile_yul_standard_json(&root, &config, &mut manifest).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::Toolchain(tama_toolchain::Error::MissingTool(name)) if name == "solc"
         ));
         assert!(!root.join(&manifest.artifacts.creation_bytecode).exists());
         assert!(!root.join(&manifest.artifacts.runtime_bytecode).exists());
