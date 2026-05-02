@@ -688,6 +688,9 @@ cache/
 src/generated/verity/
 ```
 
+If Foundry's `out` or `cache_path` is customized in `foundry.toml`, `tama clean`
+uses those configured directories instead of the defaults.
+
 It does not remove `.lake/packages` by default. Use `tama clean --deep` to remove Lake dependency/build cache state as well.
 
 ### `tama install <repo>[@<version>]`

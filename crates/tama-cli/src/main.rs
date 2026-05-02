@@ -1560,7 +1560,7 @@ fn clean(root: &Utf8PathBuf, deep: bool) -> Result<(), String> {
         paths.out.join("lean"),
         paths.out.join("trust-probe"),
         foundry.out,
-        Utf8PathBuf::from("cache"),
+        foundry.cache,
     ] {
         remove_project_dir(root, &rel)?;
     }
@@ -2928,6 +2928,30 @@ solc = "0.8.33"
         clean(&root, false).unwrap();
 
         assert!(!root.join("forge-out").exists());
+    }
+
+    #[test]
+    fn clean_uses_foundry_profile_default_cache_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            "[project]\nname='x'\nverity='v'\n[yul]\nsolc='0.8.33'\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("foundry.toml"),
+            "[profile.default]\ncache_path = 'forge-cache'\n",
+        )
+        .unwrap();
+        tama_common::write_string(&root.join("forge-cache/solidity-files-cache.json"), "{}\n")
+            .unwrap();
+        tama_common::write_string(&root.join("cache/keep.txt"), "user cache\n").unwrap();
+
+        clean(&root, false).unwrap();
+
+        assert!(!root.join("forge-cache").exists());
+        assert!(root.join("cache/keep.txt").is_file());
     }
 
     #[test]

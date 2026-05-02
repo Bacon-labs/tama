@@ -118,7 +118,7 @@ trust
 
 ## `tama clean [--deep]`
 
-Removes generated Tama artifacts, the configured Lake build directory, and generated Solidity. `--deep` also removes Lake dependency/cache state.
+Removes generated Tama artifacts, generated Solidity, the configured Lake build directory, and Foundry's configured `out` and `cache_path` directories. `--deep` also removes Lake dependency/cache state.
 
 ## `tama install`, `tama remove`, `tama update`, `tama doctor`
 

@@ -126,6 +126,8 @@ pub struct FoundryConfig {
     pub test: Utf8PathBuf,
     #[serde(default = "default_foundry_out")]
     pub out: Utf8PathBuf,
+    #[serde(default = "default_foundry_cache")]
+    pub cache: Utf8PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +148,7 @@ impl Default for FoundryConfig {
             src: default_foundry_src(),
             test: default_foundry_test(),
             out: default_foundry_out(),
+            cache: default_foundry_cache(),
         }
     }
 }
@@ -158,6 +161,8 @@ struct FoundryToml {
     test: Option<Utf8PathBuf>,
     #[serde(default)]
     out: Option<Utf8PathBuf>,
+    #[serde(default)]
+    cache_path: Option<Utf8PathBuf>,
     #[serde(default)]
     profile: FoundryProfiles,
 }
@@ -176,6 +181,8 @@ struct FoundryProfileConfig {
     test: Option<Utf8PathBuf>,
     #[serde(default)]
     out: Option<Utf8PathBuf>,
+    #[serde(default)]
+    cache_path: Option<Utf8PathBuf>,
 }
 
 impl FoundryToml {
@@ -200,6 +207,12 @@ impl FoundryToml {
                 .out
                 .or(self.out)
                 .unwrap_or(defaults.out),
+            cache: self
+                .profile
+                .default
+                .cache_path
+                .or(self.cache_path)
+                .unwrap_or(defaults.cache),
         }
     }
 }
@@ -766,6 +779,9 @@ fn default_foundry_test() -> Utf8PathBuf {
 fn default_foundry_out() -> Utf8PathBuf {
     "out".into()
 }
+fn default_foundry_cache() -> Utf8PathBuf {
+    "cache".into()
+}
 fn default_true() -> bool {
     true
 }
@@ -910,6 +926,7 @@ optimizer_runz = 200
 src = "contracts"
 test = "tests"
 out = "build/out"
+cache_path = "build/cache"
 "#,
         )
         .unwrap();
@@ -919,6 +936,7 @@ out = "build/out"
         assert_eq!(foundry.src, Utf8PathBuf::from("contracts"));
         assert_eq!(foundry.test, Utf8PathBuf::from("tests"));
         assert_eq!(foundry.out, Utf8PathBuf::from("build/out"));
+        assert_eq!(foundry.cache, Utf8PathBuf::from("build/cache"));
     }
 
     #[test]
@@ -930,9 +948,11 @@ out = "build/out"
             r#"src = "root-src"
 test = "root-test"
 out = "root-out"
+cache_path = "root-cache"
 
 [profile.default]
 test = "profile-test"
+cache_path = "profile-cache"
 "#,
         )
         .unwrap();
@@ -942,6 +962,7 @@ test = "profile-test"
         assert_eq!(foundry.src, Utf8PathBuf::from("root-src"));
         assert_eq!(foundry.test, Utf8PathBuf::from("profile-test"));
         assert_eq!(foundry.out, Utf8PathBuf::from("root-out"));
+        assert_eq!(foundry.cache, Utf8PathBuf::from("profile-cache"));
     }
 
     #[test]
