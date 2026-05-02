@@ -177,6 +177,22 @@ fn install_with_bootstrap(
     bootstrap: BootstrapOptions,
     bootstrap_toolchain: impl FnOnce(BootstrapOptions) -> Result<(), String>,
 ) -> Result<(), String> {
+    install_with_hooks(
+        version,
+        manifest_file,
+        bootstrap,
+        bootstrap_toolchain,
+        verify_manifest_signature,
+    )
+}
+
+fn install_with_hooks(
+    version: &str,
+    manifest_file: Option<Utf8PathBuf>,
+    bootstrap: BootstrapOptions,
+    bootstrap_toolchain: impl FnOnce(BootstrapOptions) -> Result<(), String>,
+    verify_signature: impl FnOnce(&[u8], &[u8]) -> Result<(), String>,
+) -> Result<(), String> {
     let (manifest_bytes, signature_bytes) = if let Some(path) = manifest_file {
         let sig = path.with_extension("json.minisig");
         (
@@ -192,7 +208,7 @@ fn install_with_bootstrap(
             download(&format!("{DEFAULT_BASE_URL}/manifest.json.minisig"))?,
         )
     };
-    verify_manifest_signature(&manifest_bytes, &signature_bytes)?;
+    verify_signature(&manifest_bytes, &signature_bytes)?;
     let manifest: ReleaseManifest =
         serde_json::from_slice(&manifest_bytes).map_err(|err| err.to_string())?;
     validate_release_manifest(&manifest)?;
@@ -874,6 +890,33 @@ fn platform() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::{OsStr, OsString};
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    struct EnvVarGuard {
+        key: &'static str,
+        old: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+            let old = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.old {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     #[test]
     fn bad_sha_fails() {
@@ -1366,6 +1409,78 @@ mod tests {
 
         assert!(!bootstrap_called);
         assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn fake_signed_manifest_installs_local_fake_artifact() {
+        let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let home = root.join("home");
+        let _home_guard = EnvVarGuard::set("TAMAUP_HOME", home.as_std_path().as_os_str());
+        let archive = test_archive(&[
+            ("bin/tama", b"fake tama".as_slice(), 0o755),
+            ("bin/tamaup", b"fake tamaup".as_slice(), 0o755),
+        ]);
+        let archive_path = root.join("tama.tar.gz");
+        fs::write(&archive_path, &archive).unwrap();
+        let sha256 = hex::encode(Sha256::digest(&archive));
+        let manifest_path = root.join("manifest.json");
+        let manifest = serde_json::json!({
+            "schema": RELEASE_MANIFEST_SCHEMA,
+            "stable": "0.1.0",
+            "releases": [{
+                "version": "0.1.0",
+                "artifacts": [{
+                    "platform": platform().unwrap(),
+                    "url": format!("file://{archive_path}"),
+                    "sha256": sha256
+                }]
+            }]
+        });
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            manifest_path.with_extension("json.minisig"),
+            b"fake-signature",
+        )
+        .unwrap();
+        let mut bootstrap_called = false;
+
+        install_with_hooks(
+            "stable",
+            Some(manifest_path),
+            BootstrapOptions {
+                yes: true,
+                offline: true,
+                no_modify_path: true,
+                no_install_lean: true,
+                no_install_foundry: true,
+                no_install_solc: true,
+            },
+            |_| {
+                bootstrap_called = true;
+                Ok(())
+            },
+            |manifest_bytes, signature_bytes| {
+                assert!(std::str::from_utf8(manifest_bytes)
+                    .unwrap()
+                    .contains(RELEASE_MANIFEST_SCHEMA));
+                assert_eq!(signature_bytes, b"fake-signature");
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(bootstrap_called);
+        assert!(home.join("versions/0.1.0/bin/tama").is_file());
+        assert!(home.join("versions/0.1.0/bin/tamaup").is_file());
+        assert!(home.join("bin/tama").exists());
+        assert!(home.join("bin/tamaup").exists());
+        assert_eq!(fs::read_to_string(home.join("active")).unwrap(), "0.1.0");
     }
 
     #[test]
