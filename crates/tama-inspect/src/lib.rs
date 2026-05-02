@@ -20,6 +20,10 @@ pub enum Error {
     UnknownField(String),
     #[error("missing artifact for {contract}: {path}. Run `tama build`.")]
     MissingArtifact { contract: String, path: Utf8PathBuf },
+    #[error(
+        "missing trust artifacts for {contract}: {path}. Run `tama build` and `tama audit trust-boundary`."
+    )]
+    MissingTrustArtifact { contract: String, path: Utf8PathBuf },
     #[error("failed to parse JSON artifact {path}: {source}")]
     InvalidJsonArtifact {
         path: Utf8PathBuf,
@@ -97,7 +101,7 @@ fn inspect_json(
             .iter()
             .filter_map(|obligation| obligation.coverage.path.as_ref())
             .collect::<Vec<_>>()),
-        Field::Trust => trust_artifacts(root, paths)?,
+        Field::Trust => trust_artifacts(root, paths, manifest)?,
     })
 }
 
@@ -156,7 +160,9 @@ fn inspect_human(
             .collect::<Vec<_>>()
             .join("\n")
             + "\n"),
-        Field::Trust => Ok(serde_json::to_string_pretty(&trust_artifacts(root, paths)?)? + "\n"),
+        Field::Trust => {
+            Ok(serde_json::to_string_pretty(&trust_artifacts(root, paths, manifest)?)? + "\n")
+        }
     }
 }
 
@@ -195,12 +201,20 @@ fn selectors_json(manifest: &ContractManifest) -> Value {
     })
 }
 
-fn trust_artifacts(root: &Utf8Path, paths: &PathsConfig) -> Result<Value> {
-    let axiom_probe = read_json(root.join(paths.out.join("trust-probe/axioms.json")))?;
+fn trust_artifacts(
+    root: &Utf8Path,
+    paths: &PathsConfig,
+    manifest: &ContractManifest,
+) -> Result<Value> {
+    let axiom_probe_path = paths.out.join("trust-probe/axioms.json");
+    let axiom_probe = read_json(root.join(&axiom_probe_path))?;
     let trust_report = read_json(root.join(paths.out.join("trust-report.json")))?;
     let assumption_report = read_json(root.join(paths.out.join("assumption-report.json")))?;
     if axiom_probe.is_none() && trust_report.is_none() && assumption_report.is_none() {
-        Ok(json!({}))
+        Err(Error::MissingTrustArtifact {
+            contract: manifest.contract.clone(),
+            path: axiom_probe_path,
+        })
     } else {
         Ok(json!({
             "axiom_probe": axiom_probe,
@@ -313,6 +327,35 @@ solc = "0.8.33"
             err,
             Error::InvalidJsonArtifact { path, .. }
                 if path.as_str().ends_with("artifacts/trust-report.json")
+        ));
+    }
+
+    #[test]
+    fn inspect_trust_requires_trust_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            r#"[project]
+name = "custom"
+verity = "0.1.0"
+
+[yul]
+solc = "0.8.33"
+"#,
+        )
+        .unwrap();
+        let manifest = counter_manifest("artifacts");
+        manifest
+            .write_pretty(&root.join("artifacts/manifest/Counter.json"))
+            .unwrap();
+
+        let err = inspect(&root, "Counter", Field::Trust, true).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::MissingTrustArtifact { contract, path }
+                if contract == "Counter" && path.as_str() == "artifacts/trust-probe/axioms.json"
         ));
     }
 
