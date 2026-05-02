@@ -532,28 +532,29 @@ fn lean_version_from_toolchain(toolchain: &str) -> Option<String> {
 }
 
 fn apply_doctor_fix(
-    root: &Utf8PathBuf,
+    _root: &Utf8PathBuf,
     project: Option<&Utf8PathBuf>,
     offline: bool,
 ) -> Result<(), String> {
-    let repair_root = project.unwrap_or(root);
-    for dir in ["artifacts", "src/generated/verity"] {
-        std::fs::create_dir_all(repair_root.join(dir)).map_err(|err| err.to_string())?;
+    let Some(project_root) = project else {
+        return Err("`tama doctor --fix` requires a Tama project with tama.toml".to_string());
+    };
+    let config = tama_config::load_config(project_root).map_err(|err| err.to_string())?;
+    let mut lock = tama_config::load_lock(project_root).map_err(|err| err.to_string())?;
+    for dir in [&config.paths.out, &config.paths.generated] {
+        ensure_project_relative(dir)?;
+        std::fs::create_dir_all(project_root.join(dir)).map_err(|err| err.to_string())?;
     }
-    if let Some(project_root) = project {
-        let config = tama_config::load_config(project_root).map_err(|err| err.to_string())?;
-        let mut lock = tama_config::load_lock(project_root).map_err(|err| err.to_string())?;
-        let (_, needs_lake_update) = planned_verity_lake_dependency(project_root, &config, &lock)?;
-        if needs_lake_update && offline {
-            return Err("`tama doctor --fix --offline` cannot repair Verity dependency drift because it must run `lake update`".to_string());
-        }
-        let changed = sync_verity_lake_dependency(project_root, &config, &mut lock)?;
-        if changed {
-            run_lake_update(project_root, None)?;
-        }
-        tama_config::update_lock_inputs(project_root, &mut lock).map_err(|err| err.to_string())?;
-        tama_config::write_lock(project_root, &lock).map_err(|err| err.to_string())?;
+    let (_, needs_lake_update) = planned_verity_lake_dependency(project_root, &config, &lock)?;
+    if needs_lake_update && offline {
+        return Err("`tama doctor --fix --offline` cannot repair Verity dependency drift because it must run `lake update`".to_string());
     }
+    let changed = sync_verity_lake_dependency(project_root, &config, &mut lock)?;
+    if changed {
+        run_lake_update(project_root, None)?;
+    }
+    tama_config::update_lock_inputs(project_root, &mut lock).map_err(|err| err.to_string())?;
+    tama_config::write_lock(project_root, &lock).map_err(|err| err.to_string())?;
     Ok(())
 }
 
@@ -1555,6 +1556,38 @@ mod tests {
         apply_doctor_fix(&root, Some(&root), false).unwrap();
         let current = doctor_report(Some(&root)).unwrap();
         assert_eq!(current.lock_current, Some(true));
+    }
+
+    #[test]
+    fn doctor_fix_requires_project_before_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let err = apply_doctor_fix(&root, None, false).unwrap_err();
+
+        assert!(err.contains("requires a Tama project"));
+        assert!(!root.join("artifacts").exists());
+        assert!(!root.join("src/generated/verity").exists());
+    }
+
+    #[test]
+    fn doctor_fix_uses_configured_generated_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let config = tama_common::read_to_string(&root.join("tama.toml"))
+            .unwrap()
+            .replace("out = \"artifacts\"", "out = \"build/tama\"")
+            .replace(
+                "generated = \"src/generated/verity\"",
+                "generated = \"gen/verity\"",
+            );
+        tama_common::write_string(&root.join("tama.toml"), &config).unwrap();
+
+        apply_doctor_fix(&root, Some(&root), false).unwrap();
+
+        assert!(root.join("build/tama").is_dir());
+        assert!(root.join("gen/verity").is_dir());
     }
 
     #[test]
