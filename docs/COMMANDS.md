@@ -31,9 +31,10 @@ TAMA_LAKE_PACKAGE_CACHE
                     `lake update` and refreshes cached packages after a
                     successful update. Before `tama check` or `tama build`, Tama
                     may also seed missing packages when the cached checkout's
-                    Git HEAD exactly matches `lake-manifest.json`. This is a
-                    performance optimization only; locked builds must also work
-                    from an empty cache.
+                    Git HEAD exactly matches `lake-manifest.json` and the
+                    checkout has a clean Git worktree. This is a performance
+                    optimization only; locked builds must also work from an
+                    empty cache.
 ```
 
 ## `tama init [path]`
