@@ -128,7 +128,7 @@ pub fn parse_forge_version(output: &str) -> Result<Version> {
     parse_version_with(output, "forge", &re)
 }
 
-fn parse_expected_version(tool: &str, version: &str) -> Result<Version> {
+pub fn parse_expected_version(tool: &str, version: &str) -> Result<Version> {
     Version::parse(version.trim_start_matches('v')).map_err(|_| Error::InvalidExpectedVersion {
         tool: tool.to_string(),
         version: version.to_string(),

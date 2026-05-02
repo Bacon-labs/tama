@@ -299,6 +299,24 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
 fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::DoctorReport, String> {
     let mut report = tama_toolchain::detect_required_tools();
     if let Some(project_root) = project {
+        if let Ok(toolchain) = tama_config::read_lean_toolchain(project_root) {
+            if let Some(expected) = lean_version_from_toolchain(&toolchain) {
+                mark_version_mismatch(
+                    &mut report,
+                    "lean",
+                    &expected,
+                    tama_toolchain::parse_lean_version,
+                );
+            }
+        }
+        if let Ok(config) = tama_config::load_config(project_root) {
+            mark_version_mismatch(
+                &mut report,
+                "solc",
+                &config.yul.solc,
+                tama_toolchain::parse_solc_version,
+            );
+        }
         match tama_config::load_lock(project_root) {
             Ok(lock) => {
                 let drift =
@@ -319,6 +337,56 @@ fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::Doctor
         }
     }
     Ok(report)
+}
+
+fn mark_version_mismatch(
+    report: &mut tama_toolchain::DoctorReport,
+    name: &str,
+    expected: &str,
+    parse: fn(&str) -> tama_toolchain::Result<semver::Version>,
+) {
+    let Ok(expected_version) = tama_toolchain::parse_expected_version(name, expected) else {
+        return;
+    };
+    for status in &mut report.tools {
+        let tama_toolchain::ToolStatus::Ok(tool) = status else {
+            continue;
+        };
+        if tool.name != name {
+            continue;
+        }
+        let Some(raw) = &tool.version else {
+            continue;
+        };
+        match parse(raw) {
+            Ok(found) if found == expected_version => {}
+            Ok(found) => {
+                *status = tama_toolchain::ToolStatus::Incompatible {
+                    name: name.to_string(),
+                    found: found.to_string(),
+                    expected: expected_version.to_string(),
+                };
+            }
+            Err(_) => {
+                *status = tama_toolchain::ToolStatus::Incompatible {
+                    name: name.to_string(),
+                    found: raw.clone(),
+                    expected: expected_version.to_string(),
+                };
+            }
+        }
+    }
+}
+
+fn lean_version_from_toolchain(toolchain: &str) -> Option<String> {
+    toolchain
+        .rsplit_once(":v")
+        .map(|(_, version)| version.to_string())
+        .or_else(|| {
+            toolchain
+                .rsplit_once(':')
+                .map(|(_, version)| version.to_string())
+        })
 }
 
 fn apply_doctor_fix(root: &Utf8PathBuf, project: Option<&Utf8PathBuf>) -> Result<(), String> {
@@ -620,5 +688,37 @@ mod tests {
         std::fs::create_dir_all(root.join("artifacts/lean")).unwrap();
         clean(&root, true).unwrap();
         assert!(!root.join(".lake").exists());
+    }
+
+    #[test]
+    fn lean_toolchain_version_is_extracted() {
+        assert_eq!(
+            lean_version_from_toolchain("leanprover/lean4:v4.22.0").as_deref(),
+            Some("4.22.0")
+        );
+    }
+
+    #[test]
+    fn doctor_marks_tool_version_mismatch() {
+        let mut report = tama_toolchain::DoctorReport {
+            tools: vec![tama_toolchain::ToolStatus::Ok(tama_toolchain::Tool {
+                name: "solc".to_string(),
+                path: "solc".into(),
+                version: Some("Version: 0.8.32+commit.test".to_string()),
+            })],
+            lock_current: None,
+            notes: vec![],
+        };
+        mark_version_mismatch(
+            &mut report,
+            "solc",
+            "0.8.33",
+            tama_toolchain::parse_solc_version,
+        );
+        assert!(matches!(
+            &report.tools[0],
+            tama_toolchain::ToolStatus::Incompatible { found, expected, .. }
+                if found == "0.8.32" && expected == "0.8.33"
+        ));
     }
 }
