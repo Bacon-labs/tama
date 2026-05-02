@@ -937,6 +937,7 @@ fn refresh_lock(root: &Utf8PathBuf) -> Result<(), String> {
     tama_config::write_lock(root, &lock).map_err(|err| err.to_string())
 }
 
+#[derive(Debug)]
 struct RemoteTamaPackage {
     name: String,
     rev: String,
@@ -965,7 +966,7 @@ fn validate_remote_tama_package(
     }
     if !checkout.join("tama.toml").is_file() {
         return Err(format!(
-            "remote dependency `{url}` at `{rev}` does not contain tama.toml"
+            "remote dependency `{url}` at `{rev}` does not contain tama.toml; pure Lake packages are outside `tama install`'s scope, so add this dependency manually to lakefile.toml"
         ));
     }
     let name = tama_config::lake_package_name(&checkout).map_err(|err| {
@@ -1906,6 +1907,40 @@ mod tests {
 
         assert_eq!(resolved.rev, expected);
         assert_eq!(resolved.name, "metadata_dep");
+    }
+
+    #[test]
+    fn pure_lake_remote_dependency_points_to_manual_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Utf8PathBuf::from_path_buf(dir.path().join("package.git")).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        run_process("git", &["init"], Some(&repo)).unwrap();
+        tama_common::write_string(
+            &repo.join("lakefile.toml"),
+            "name = \"pure_lake_dep\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        run_process("git", &["add", "lakefile.toml"], Some(&repo)).unwrap();
+        run_process(
+            "git",
+            &[
+                "-c",
+                "user.name=Tama Test",
+                "-c",
+                "user.email=tama@example.test",
+                "commit",
+                "-m",
+                "init",
+            ],
+            Some(&repo),
+        )
+        .unwrap();
+
+        let err = validate_remote_tama_package(repo.as_str(), "main", false).unwrap_err();
+
+        assert!(err.contains("does not contain tama.toml"));
+        assert!(err.contains("pure Lake packages are outside `tama install`'s scope"));
+        assert!(err.contains("add this dependency manually to lakefile.toml"));
     }
 
     #[test]
