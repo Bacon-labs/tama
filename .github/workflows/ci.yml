@@ -1,0 +1,311 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  TAMA_LAKE_PACKAGE_CACHE: ${{ github.workspace }}/.cache/tama/lake-packages
+
+jobs:
+  rust:
+    name: Rust ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: msrv
+            os: ubuntu-22.04
+            toolchain: 1.81.0
+          - name: stable-linux
+            os: ubuntu-22.04
+            toolchain: stable
+          - name: stable-macos-arm64
+            os: macos-14
+            toolchain: stable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --workspace --release
+
+  real-e2e:
+    name: Real e2e ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+          - name: macos-arm64
+            os: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: .cache/tama
+          key: tama-lake-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/lake-manifest.json') }}
+          restore-keys: |
+            tama-lake-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install Lean, Foundry, and solc
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          curl -fsSL https://foundry.paradigm.xyz | bash
+          foundryup
+          python3 -m pip install --user --upgrade solc-select
+          solc-select install 0.8.33
+          solc-select use 0.8.33
+          forge --version
+          solc --version
+      - name: Build Tama
+        run: cargo build --workspace
+      - name: Fresh starter quickstart
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          tmp="$(mktemp -d)"
+          project="$tmp/my-protocol"
+          tama init "$project"
+          cd "$project"
+          tama doctor
+          tama check
+          tama build --locked
+          tama test
+          tama audit
+          for field in manifest selectors abi storage-layout yul bytecode runtime-bytecode theorems obligations mirrors trust; do
+            tama inspect ERC20Lite "$field" >/dev/null
+            tama --json inspect ERC20Lite "$field" | python3 -m json.tool >/dev/null
+          done
+      - name: Counter fixture e2e
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          counter="$PWD/fixtures/projects/counter"
+          git -C "$counter" init
+          (cd "$counter" && lake update)
+          (cd "$counter" && forge install foundry-rs/forge-std --no-commit)
+          tama --root "$counter" doctor
+          tama --root "$counter" check
+          tama --root "$counter" --locked build
+          tama --root "$counter" test
+          tama --root "$counter" audit
+          for field in manifest selectors abi storage-layout yul bytecode runtime-bytecode theorems obligations mirrors trust; do
+            tama --root "$counter" inspect Counter "$field" >/dev/null
+            tama --root "$counter" --json inspect Counter "$field" | python3 -m json.tool >/dev/null
+          done
+
+  negative-audit:
+    name: Negative audit fixtures
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: .cache/tama
+          key: tama-lake-negative-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/lake-manifest.json') }}
+          restore-keys: |
+            tama-lake-negative-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install real toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          curl -fsSL https://foundry.paradigm.xyz | bash
+          foundryup
+          python3 -m pip install --user --upgrade solc-select
+          solc-select install 0.8.33
+          solc-select use 0.8.33
+      - name: Build Tama and starter baseline
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          cargo build --workspace
+          tmp="$(mktemp -d)"
+          echo "TAMA_NEGATIVE_TMP=$tmp" >> "$GITHUB_ENV"
+          tama init "$tmp/base"
+          tama --root "$tmp/base" build
+          tama --root "$tmp/base" audit
+      - name: Mutated audits fail closed
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          base="$TAMA_NEGATIVE_TMP/base"
+
+          expect_audit_failure() {
+            project="$1"
+            check="$2"
+            if tama --root "$project" audit "$check"; then
+              echo "expected tama audit $check to fail for $project" >&2
+              exit 1
+            fi
+          }
+
+          copy_case() {
+            name="$1"
+            target="$TAMA_NEGATIVE_TMP/$name"
+            cp -R "$base" "$target"
+            printf '%s\n' "$target"
+          }
+
+          project="$(copy_case deleted-source)"
+          rm "$project/verity/src/ERC20Lite.lean"
+          expect_audit_failure "$project" structure
+
+          project="$(copy_case corrupted-selector)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["abi"]["functions"][0]["selector"] = "0x00000000"
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" selectors
+
+          project="$(copy_case duplicate-storage)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          if len(data["storage"]) < 2:
+              raise SystemExit("fixture needs at least two storage entries")
+          data["storage"][1]["slot"] = data["storage"][0]["slot"]
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" storage-layout
+
+          project="$(copy_case missing-mirror)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["obligations"][0]["coverage"] = {"disposition": "none", "path": None, "reason": None}
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" coverage
+
+          project="$(copy_case empty-proof-only-reason)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["obligations"][0]["coverage"] = {"disposition": "proof_only", "path": None, "reason": ""}
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" coverage
+
+          project="$(copy_case hand-edited-bridge)"
+          printf '%s\n' "// user edit" > "$project/src/generated/verity/ERC20LiteIface.sol"
+          expect_audit_failure "$project" structure
+
+          project="$(copy_case unresolved-decl)"
+          python3 - "$project/artifacts/manifest/ERC20Lite.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["obligations"][0]["lean_decl"] = "proof.Missing.nope"
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" trust-boundary
+
+          project="$(copy_case inserted-sorry)"
+          python3 - "$project/artifacts/trust-probe/axioms.json" <<'PY'
+          import json
+          import sys
+          path = sys.argv[1]
+          data = json.load(open(path, encoding="utf-8"))
+          data["obligations"][0]["axioms"].append("sorryAx")
+          json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+          PY
+          expect_audit_failure "$project" trust-boundary
+
+  installer:
+    name: Installer safety
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install installer test tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck minisign
+      - run: shellcheck installer/install.sh
+      - run: sh -n installer/install.sh
+      - run: cargo test -p tamaup-cli
+      - name: Shell installer rejects bad signature
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tmp="$(mktemp -d)"
+          printf '%s\n' '{"version":"0.1.0","artifacts":[]}' > "$tmp/manifest.json"
+          printf '%s\n' 'not a minisign signature' > "$tmp/manifest.json.minisig"
+          if TAMAUP_HOME="$tmp/home" installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path; then
+            echo "installer accepted a bad signature" >&2
+            exit 1
+          fi
+          test ! -e "$tmp/home"
+      - name: Shell installer rejects bad SHA before extraction
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tmp="$(mktemp -d)"
+          mkdir -p "$tmp/archive/bin"
+          printf '%s\n' '#!/bin/sh' 'echo tama' > "$tmp/archive/bin/tama"
+          printf '%s\n' '#!/bin/sh' 'echo tamaup' > "$tmp/archive/bin/tamaup"
+          chmod +x "$tmp/archive/bin/tama" "$tmp/archive/bin/tamaup"
+          tar -C "$tmp/archive" -czf "$tmp/tama.tar.gz" bin/tama bin/tamaup
+          minisign -G -p "$tmp/minisign.pub" -s "$tmp/minisign.sec" -W
+          pubkey="$(tail -n 1 "$tmp/minisign.pub")"
+          cat > "$tmp/manifest.json" <<JSON
+          {
+            "version": "0.1.0",
+            "artifacts": [
+              {
+                "platform": "linux-x86_64",
+                "url": "file://$tmp/tama.tar.gz",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            ]
+          }
+          JSON
+          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
+          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
+            echo "installer accepted a bad artifact hash" >&2
+            exit 1
+          fi
+          test ! -e "$tmp/home/versions/0.1.0/bin/tama"

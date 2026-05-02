@@ -1,0 +1,131 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  pages: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-artifacts:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-22.04
+          - platform: linux-aarch64
+            os: ubuntu-24.04-arm
+          - platform: macos-x86_64
+            os: macos-13
+          - platform: macos-aarch64
+            os: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --release
+      - name: Pack archive
+        shell: bash
+        run: |
+          set -euxo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          staging="tama-$version-${{ matrix.platform }}"
+          mkdir -p "$staging/bin"
+          cp target/release/tama "$staging/bin/tama"
+          cp target/release/tamaup "$staging/bin/tamaup"
+          tar -C "$staging" -czf "$staging.tar.gz" bin/tama bin/tamaup
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tama-${{ matrix.platform }}
+          path: tama-*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish signed release
+    runs-on: ubuntu-22.04
+    needs: build-artifacts
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: tama-*
+          merge-multiple: true
+      - name: Install release tools
+        run: sudo apt-get update && sudo apt-get install -y minisign
+      - name: Build manifest
+        shell: bash
+        run: |
+          set -euxo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          python3 - "$version" dist/*.tar.gz > dist/manifest.json <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          version = sys.argv[1]
+          artifacts = []
+          for raw in sys.argv[2:]:
+              path = pathlib.Path(raw)
+              name = path.name
+              suffix = ".tar.gz"
+              prefix = f"tama-{version}-"
+              if not name.startswith(prefix) or not name.endswith(suffix):
+                  raise SystemExit(f"unexpected release archive name: {name}")
+              platform = name[len(prefix):-len(suffix)]
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              artifacts.append({
+                  "platform": platform,
+                  "url": f"https://tama.tools/releases/{name}",
+                  "sha256": digest,
+              })
+          print(json.dumps({"version": version, "artifacts": sorted(artifacts, key=lambda item: item["platform"])}, indent=2))
+          PY
+      - name: Sign manifest
+        env:
+          TAMA_MINISIGN_SECRET_KEY: ${{ secrets.TAMA_MINISIGN_SECRET_KEY }}
+          TAMA_MINISIGN_PUBLIC_KEY: ${{ secrets.TAMA_MINISIGN_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -n "$TAMA_MINISIGN_SECRET_KEY"
+          test -n "$TAMA_MINISIGN_PUBLIC_KEY"
+          printf '%s\n' "$TAMA_MINISIGN_SECRET_KEY" > dist/minisign.sec
+          minisign -S -s dist/minisign.sec -m dist/manifest.json -x dist/manifest.json.minisig -W
+          minisign -V -P "$TAMA_MINISIGN_PUBLIC_KEY" -m dist/manifest.json -x dist/manifest.json.minisig
+          rm dist/minisign.sec
+      - name: Prepare Pages bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p public/releases
+          cp -R site/. public/
+          cp installer/install.sh public/install.sh
+          cp dist/manifest.json public/manifest.json
+          cp dist/manifest.json.minisig public/manifest.json.minisig
+          cp dist/*.tar.gz public/releases/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - id: deploy
+        uses: actions/deploy-pages@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/manifest.json
+            dist/manifest.json.minisig
