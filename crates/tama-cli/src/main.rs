@@ -125,6 +125,9 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             .map_err(|err| err.to_string())?;
             finalize_init(&path, cli.offline)?;
             println!("Initialized Tama ERC20Lite starter at {path}");
+            for line in init_next_steps(&path) {
+                println!("{line}");
+            }
             Ok(ExitCode::SUCCESS)
         }
         Command::New { name } => {
@@ -1001,6 +1004,24 @@ fn offline_init_instructions() -> [&'static str; 5] {
     ]
 }
 
+fn init_next_steps(path: &Utf8Path) -> Vec<String> {
+    let mut steps = vec!["Next steps:".to_string()];
+    if path.as_str() != "." {
+        steps.push(format!("  cd {path}"));
+    }
+    steps.extend(
+        [
+            "tama doctor",
+            "tama check",
+            "tama build",
+            "tama test",
+            "tama audit",
+        ]
+        .map(|command| format!("  {command}")),
+    );
+    steps
+}
+
 fn project_root(root: Option<Utf8PathBuf>) -> Result<Utf8PathBuf, String> {
     let start = match root {
         Some(root) => root,
@@ -1163,6 +1184,25 @@ mod tests {
         assert!(instructions.contains("git init"));
         assert!(instructions.contains("forge install foundry-rs/forge-std@v1.16.1 --shallow"));
         assert!(!instructions.contains("--no-git"));
+    }
+
+    #[test]
+    fn init_next_steps_are_actionable() {
+        assert_eq!(
+            init_next_steps(Utf8Path::new("demo")),
+            vec![
+                "Next steps:",
+                "  cd demo",
+                "  tama doctor",
+                "  tama check",
+                "  tama build",
+                "  tama test",
+                "  tama audit",
+            ]
+        );
+        assert!(!init_next_steps(Utf8Path::new("."))
+            .iter()
+            .any(|line| line == "  cd ."));
     }
 
     #[test]
