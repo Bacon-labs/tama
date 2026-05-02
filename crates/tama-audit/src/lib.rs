@@ -2193,6 +2193,36 @@ mod tests {
     }
 
     #[test]
+    fn audit_report_json_shape_is_stable() {
+        let report = AuditReport {
+            issues: vec![Issue {
+                check: "coverage".to_string(),
+                contract: Some("Counter".to_string()),
+                severity: Severity::Error,
+                code: "TAMA_COVERAGE_MISSING".to_string(),
+                message: "postcondition has no mirror test".to_string(),
+                path: Some("test/verity/Counter.t.sol".into()),
+            }],
+        };
+
+        assert_eq!(
+            serde_json::to_string_pretty(&report).unwrap(),
+            r#"{
+  "issues": [
+    {
+      "check": "coverage",
+      "contract": "Counter",
+      "severity": "Error",
+      "code": "TAMA_COVERAGE_MISSING",
+      "message": "postcondition has no mirror test",
+      "path": "test/verity/Counter.t.sol"
+    }
+  ]
+}"#
+        );
+    }
+
+    #[test]
     fn targeted_checks_fail_closed_without_manifests() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
