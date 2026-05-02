@@ -306,6 +306,22 @@ pub fn lock_drift(root: &Utf8Path, lock: &TamaLock) -> Result<Vec<String>> {
             drift.push(path.clone());
         }
     }
+    let lake_manifest_current = actual
+        .get("lake-manifest.json")
+        .is_some_and(|hash| lock.inputs.get("lake-manifest.json") == Some(hash));
+    if lake_manifest_current {
+        let lake_resolved = lake_manifest_resolutions(root)?;
+        for (key, value) in &lake_resolved {
+            if lock.resolved.get(key) != Some(value) {
+                drift.push(format!("resolved.{key}"));
+            }
+        }
+        for key in lock.resolved.keys().filter(|key| key.starts_with("lake.")) {
+            if !lake_resolved.contains_key(key) {
+                drift.push(format!("resolved.{key}"));
+            }
+        }
+    }
     let tama_toml_current = actual
         .get("tama.toml")
         .is_some_and(|hash| lock.inputs.get("tama.toml") == Some(hash));
@@ -398,19 +414,26 @@ pub fn record_yul_config(root: &Utf8Path, lock: &mut TamaLock) -> Result<()> {
 }
 
 pub fn record_lake_manifest_resolutions(root: &Utf8Path, lock: &mut TamaLock) -> Result<()> {
+    let resolved = lake_manifest_resolutions(root)?;
+    lock.resolved.retain(|key, _| !key.starts_with("lake."));
+    lock.resolved.extend(resolved);
+    Ok(())
+}
+
+fn lake_manifest_resolutions(root: &Utf8Path) -> Result<BTreeMap<String, String>> {
     let path = root.join("lake-manifest.json");
     if !path.is_file() {
-        return Ok(());
+        return Ok(BTreeMap::new());
     }
     let text = read_to_string(&path)?;
     let manifest: serde_json::Value =
         serde_json::from_str(&text).map_err(|source| Error::Json { path, source })?;
-    lock.resolved.retain(|key, _| !key.starts_with("lake."));
+    let mut resolved = BTreeMap::new();
     let Some(packages) = manifest
         .get("packages")
         .and_then(serde_json::Value::as_array)
     else {
-        return Ok(());
+        return Ok(resolved);
     };
     for package in packages {
         if package
@@ -430,19 +453,16 @@ pub fn record_lake_manifest_resolutions(root: &Utf8Path, lock: &mut TamaLock) ->
             continue;
         }
         if let Some(url) = package.get("url").and_then(serde_json::Value::as_str) {
-            lock.resolved
-                .insert(format!("lake.{name}.url"), url.to_string());
+            resolved.insert(format!("lake.{name}.url"), url.to_string());
         }
         if let Some(rev) = package.get("rev").and_then(serde_json::Value::as_str) {
-            lock.resolved
-                .insert(format!("lake.{name}.rev"), rev.to_string());
+            resolved.insert(format!("lake.{name}.rev"), rev.to_string());
         }
         if let Some(input_rev) = package.get("inputRev").and_then(serde_json::Value::as_str) {
-            lock.resolved
-                .insert(format!("lake.{name}.input_rev"), input_rev.to_string());
+            resolved.insert(format!("lake.{name}.input_rev"), input_rev.to_string());
         }
     }
-    Ok(())
+    Ok(resolved)
 }
 
 fn valid_lock_component(name: &str) -> bool {
@@ -1140,6 +1160,13 @@ metadata_bytecode_hash = "ipfs"
         assert!(!lock.resolved.contains_key("lake.indirectpkg.rev"));
         assert!(!lock.resolved.contains_key("lake.stale.rev"));
         assert!(lock.inputs.contains_key("lake-manifest.json"));
+        assert!(lock_drift(&root, &lock).unwrap().is_empty());
+
+        lock.resolved
+            .insert("lake.directpkg.rev".to_string(), "stale".to_string());
+        let drift = lock_drift(&root, &lock).unwrap();
+
+        assert!(drift.contains(&"resolved.lake.directpkg.rev".to_string()));
     }
 
     #[test]
