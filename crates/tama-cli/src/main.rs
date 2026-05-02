@@ -1,7 +1,10 @@
+use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitCode, Stdio};
 
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use clap::{ArgAction, Args, Parser, Subcommand};
+
+const LAKE_PACKAGE_CACHE_ENV: &str = "TAMA_LAKE_PACKAGE_CACHE";
 
 #[derive(Debug, Parser)]
 #[command(name = "tama", version, about = "Verity developer toolchain")]
@@ -407,7 +410,7 @@ fn finalize_init(root: &Utf8PathBuf, offline: bool) -> Result<(), String> {
         }
         return Ok(());
     }
-    run_tool(root, "lake", &["update"])?;
+    run_lake_update(root)?;
     ensure_git_worktree(root)?;
     let mut forge_args = vec!["install", "foundry-rs/forge-std"];
     if let Some(flag) = forge_install_no_commit_flag()? {
@@ -467,7 +470,7 @@ fn update_project(
     lock.resolved.insert("verity_git".to_string(), verity_git);
     lock.resolved.insert("verity_rev".to_string(), verity_rev);
     if !no_lake {
-        run_tool(root, "lake", &["update"])?;
+        run_lake_update(root)?;
     }
     if !no_forge {
         run_tool(root, "forge", &["update"])?;
@@ -486,7 +489,7 @@ fn mutate_dependencies(
         tama_config::enforce_locked(root, &lock).map_err(|err| err.to_string())?;
     }
     edit(root)?;
-    run_tool(root, "lake", &["update"])?;
+    run_lake_update(root)?;
     refresh_lock(root)
 }
 
@@ -519,6 +522,171 @@ fn validate_remote_tama_package(url: &str, rev: &str) -> Result<(), String> {
         Err(format!(
             "remote dependency `{url}` at `{rev}` does not contain tama.toml"
         ))
+    }
+}
+
+fn run_lake_update(root: &Utf8PathBuf) -> Result<(), String> {
+    let Some(cache) = lake_package_cache()? else {
+        return run_tool(root, "lake", &["update"]);
+    };
+    seed_lake_package_cache(root, &cache)?;
+    run_tool(root, "lake", &["update"])?;
+    sync_lake_package_cache(root, &cache)
+}
+
+fn lake_package_cache() -> Result<Option<Utf8PathBuf>, String> {
+    if let Some(value) = std::env::var_os(LAKE_PACKAGE_CACHE_ENV) {
+        return lake_package_cache_from_override(value);
+    }
+    default_lake_package_cache().map(Some)
+}
+
+fn lake_package_cache_from_override(
+    value: impl Into<std::ffi::OsString>,
+) -> Result<Option<Utf8PathBuf>, String> {
+    let value = value.into();
+    if value.as_os_str().is_empty() {
+        return Ok(None);
+    }
+    let raw = value.to_string_lossy();
+    if matches!(raw.as_ref(), "0" | "false" | "none" | "off") {
+        return Ok(None);
+    }
+    utf8_path_from_path_buf(PathBuf::from(value), LAKE_PACKAGE_CACHE_ENV).map(Some)
+}
+
+fn default_lake_package_cache() -> Result<Utf8PathBuf, String> {
+    let base = if cfg!(target_os = "macos") {
+        home_dir("HOME")?.join("Library/Caches")
+    } else if let Some(cache_home) = std::env::var_os("XDG_CACHE_HOME") {
+        PathBuf::from(cache_home)
+    } else {
+        home_dir("HOME")?.join(".cache")
+    };
+    utf8_path_from_path_buf(base.join("tama/lake-packages"), "default cache directory")
+}
+
+fn home_dir(name: &str) -> Result<PathBuf, String> {
+    std::env::var_os(name)
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("cannot determine Tama cache directory because ${name} is unset"))
+}
+
+fn utf8_path_from_path_buf(path: PathBuf, label: &str) -> Result<Utf8PathBuf, String> {
+    Utf8PathBuf::from_path_buf(path)
+        .map_err(|path| format!("{label} must be a UTF-8 path, got `{}`", path.display()))
+}
+
+fn seed_lake_package_cache(root: &Utf8Path, cache: &Utf8Path) -> Result<(), String> {
+    if !cache.exists() {
+        return Ok(());
+    }
+    let packages = root.join(".lake/packages");
+    copy_missing_package_dirs(cache, &packages)
+}
+
+fn sync_lake_package_cache(root: &Utf8Path, cache: &Utf8Path) -> Result<(), String> {
+    let packages = root.join(".lake/packages");
+    if !packages.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(cache).map_err(|err| format!("failed to create `{cache}`: {err}"))?;
+    copy_missing_package_dirs(&packages, cache)
+}
+
+fn copy_missing_package_dirs(source: &Utf8Path, destination: &Utf8Path) -> Result<(), String> {
+    if same_existing_path(source, destination) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(destination)
+        .map_err(|err| format!("failed to create `{destination}`: {err}"))?;
+    for entry in
+        std::fs::read_dir(source).map_err(|err| format!("failed to read `{source}`: {err}"))?
+    {
+        let entry = entry.map_err(|err| format!("failed to read `{source}` entry: {err}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("failed to inspect `{}`: {err}", entry.path().display()))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let source = Utf8PathBuf::from_path_buf(entry.path())
+            .map_err(|path| format!("package path `{}` is not UTF-8", path.display()))?;
+        if !source.join(".git").exists() {
+            continue;
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|name| format!("package cache entry `{name:?}` is not UTF-8"))?;
+        let target = destination.join(&name);
+        if target.exists() {
+            continue;
+        }
+        copy_dir_recursively(&source, &target)?;
+    }
+    Ok(())
+}
+
+fn copy_dir_recursively(source: &Utf8Path, destination: &Utf8Path) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(source)
+        .map_err(|err| format!("failed to inspect `{source}`: {err}"))?;
+    if !metadata.is_dir() {
+        return Err(format!("`{source}` is not a directory"));
+    }
+    std::fs::create_dir_all(destination)
+        .map_err(|err| format!("failed to create `{destination}`: {err}"))?;
+    std::fs::set_permissions(destination, metadata.permissions())
+        .map_err(|err| format!("failed to set permissions on `{destination}`: {err}"))?;
+    for entry in
+        std::fs::read_dir(source).map_err(|err| format!("failed to read `{source}`: {err}"))?
+    {
+        let entry = entry.map_err(|err| format!("failed to read `{source}` entry: {err}"))?;
+        let source_path = Utf8PathBuf::from_path_buf(entry.path())
+            .map_err(|path| format!("package path `{}` is not UTF-8", path.display()))?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|name| format!("package cache entry `{name:?}` is not UTF-8"))?;
+        let destination_path = destination.join(name);
+        let metadata = std::fs::symlink_metadata(&source_path)
+            .map_err(|err| format!("failed to inspect `{source_path}`: {err}"))?;
+        if metadata.file_type().is_symlink() {
+            copy_symlink(&source_path, &destination_path)?;
+        } else if metadata.is_dir() {
+            copy_dir_recursively(&source_path, &destination_path)?;
+        } else if metadata.is_file() {
+            std::fs::copy(&source_path, &destination_path)
+                .map_err(|err| format!("failed to copy `{source_path}`: {err}"))?;
+            std::fs::set_permissions(&destination_path, metadata.permissions()).map_err(|err| {
+                format!("failed to set permissions on `{destination_path}`: {err}")
+            })?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn copy_symlink(source: &Utf8Path, destination: &Utf8Path) -> Result<(), String> {
+    let target = std::fs::read_link(source)
+        .map_err(|err| format!("failed to read symlink `{source}`: {err}"))?;
+    std::os::unix::fs::symlink(&target, destination).map_err(|err| {
+        format!(
+            "failed to create symlink `{destination}` to `{}`: {err}",
+            target.display()
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn copy_symlink(source: &Utf8Path, _destination: &Utf8Path) -> Result<(), String> {
+    Err(format!("cannot copy symlink `{source}` on this platform"))
+}
+
+fn same_existing_path(left: &Utf8Path, right: &Utf8Path) -> bool {
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
     }
 }
 
@@ -714,6 +882,38 @@ mod tests {
         ensure_git_worktree(&root).unwrap();
         assert!(is_git_worktree(&root).unwrap());
         assert!(root.join(".git").is_dir());
+    }
+
+    #[test]
+    fn lake_package_cache_seeds_and_records_missing_packages() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
+
+        tama_common::write_string(&cache.join("mathlib/.git/config"), "[remote]\n").unwrap();
+        seed_lake_package_cache(&root, &cache).unwrap();
+        assert!(root.join(".lake/packages/mathlib/.git/config").is_file());
+
+        tama_common::write_string(
+            &root.join(".lake/packages/verity/.git/config"),
+            "[remote]\n",
+        )
+        .unwrap();
+        sync_lake_package_cache(&root, &cache).unwrap();
+        assert!(cache.join("verity/.git/config").is_file());
+    }
+
+    #[test]
+    fn lake_package_cache_override_can_disable_default_cache() {
+        assert_eq!(lake_package_cache_from_override("").unwrap(), None);
+        assert_eq!(lake_package_cache_from_override("off").unwrap(), None);
+        assert_eq!(lake_package_cache_from_override("false").unwrap(), None);
+        assert_eq!(
+            lake_package_cache_from_override("/tmp/tama-cache")
+                .unwrap()
+                .as_deref(),
+            Some(Utf8Path::new("/tmp/tama-cache"))
+        );
     }
 
     #[test]

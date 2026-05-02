@@ -380,6 +380,24 @@ Global flags:
 --no-color          Disable colored output
 ```
 
+Environment:
+
+```text
+TAMA_LAKE_PACKAGE_CACHE
+                    Directory of trusted reusable Lake package checkouts. By
+                    default Tama uses the platform user cache directory:
+                    `~/Library/Caches/tama/lake-packages` on macOS and
+                    `$XDG_CACHE_HOME/tama/lake-packages` or
+                    `~/.cache/tama/lake-packages` elsewhere. Set this variable
+                    to a different directory, or to `off` to disable caching.
+
+                    Tama may seed `.lake/packages` from this directory before
+                    `lake update` and copy newly fetched packages back
+                    afterward. The cache is a performance optimization only;
+                    release and locked builds must remain reproducible from an
+                    empty cache.
+```
+
 ### `tama init [path]`
 
 Scaffolds a new Tama project.
