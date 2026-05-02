@@ -676,11 +676,26 @@ fn solidity_declarations(text: &str, kind: &str) -> BTreeSet<String> {
         .collect()
 }
 
-fn solidity_function_declared(text: &str, name: &str) -> bool {
+fn solidity_contract_function_declared(text: &str, contract: &str, name: &str) -> bool {
     let text = strip_solidity_non_code(text);
-    let re =
+    let contract_re = Regex::new(&format!(
+        r"\b(?:abstract\s+)?(?:contract|interface|library)\s+{}\b",
+        regex::escape(contract)
+    ))
+    .expect("valid regex");
+    let next_contract_re =
+        Regex::new(r"\b(?:abstract\s+)?(?:contract|interface|library)\s+[A-Za-z_][A-Za-z0-9_]*\b")
+            .expect("valid regex");
+    let function_re =
         Regex::new(&format!(r"\bfunction\s+{}\s*\(", regex::escape(name))).expect("valid regex");
-    re.is_match(&text)
+    let found = contract_re.find_iter(&text).any(|contract_match| {
+        let body_start = contract_match.end();
+        let body_end = next_contract_re
+            .find_at(&text, body_start)
+            .map_or(text.len(), |next| next.start());
+        function_re.is_match(&text[body_start..body_end])
+    });
+    found
 }
 
 fn mirror_symbol_is_property(name: &str) -> bool {
@@ -1200,7 +1215,30 @@ fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Is
                             continue;
                         }
                     };
-                    let name = symbol.rsplit('.').next().unwrap_or(symbol);
+                    let Some((contract_name, name)) = symbol.rsplit_once('.') else {
+                        issues.push(issue(
+                            "coverage",
+                            Some(&manifest.contract),
+                            "TAMA_COVERAGE_SYMBOL",
+                            format!(
+                                "mirror symbol `{symbol}` must include a Solidity contract and function"
+                            ),
+                            Some(file.into()),
+                        ));
+                        continue;
+                    };
+                    if contract_name.trim().is_empty() || name.trim().is_empty() {
+                        issues.push(issue(
+                            "coverage",
+                            Some(&manifest.contract),
+                            "TAMA_COVERAGE_SYMBOL",
+                            format!(
+                                "mirror symbol `{symbol}` must include a non-empty Solidity contract and function"
+                            ),
+                            Some(file.into()),
+                        ));
+                        continue;
+                    }
                     if !mirror_symbol_is_property(name) {
                         issues.push(issue(
                             "coverage",
@@ -1210,7 +1248,7 @@ fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Is
                             Some(file.into()),
                         ));
                     }
-                    if !solidity_function_declared(&text, name) {
+                    if !solidity_contract_function_declared(&text, contract_name, name) {
                         issues.push(issue(
                             "coverage",
                             Some(&manifest.contract),
@@ -2836,6 +2874,23 @@ contract CounterTest {
 
         tama_common::write_string(
             &root.join("test/verity/Counter.t.sol"),
+            r#"contract OtherTest {
+    function testFuzzIncrementUpdatesCount(uint8 initialSteps, uint8 extraSteps) public {}
+}
+
+contract CounterTest {}
+"#,
+        )
+        .unwrap();
+
+        let mut wrong_contract_issues = Vec::new();
+        coverage(&root, &[manifest.clone()], &mut wrong_contract_issues);
+        assert!(wrong_contract_issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_COVERAGE_MISSING_SYMBOL"));
+
+        tama_common::write_string(
+            &root.join("test/verity/Counter.t.sol"),
             r#"contract CounterTest {
     function testFuzzIncrementUpdatesCount(uint8 initialSteps, uint8 extraSteps) public {}
 }
@@ -2928,6 +2983,34 @@ contract CounterTest {
         obligation.coverage = tama_manifest::Coverage {
             disposition: CoverageDisposition::Mirror,
             path: Some("test/verity/Counter.t.sol".to_string()),
+            reason: None,
+        };
+        manifest.obligations.push(obligation);
+        tama_common::write_string(
+            &root.join("test/verity/Counter.t.sol"),
+            r#"contract CounterTest {
+    function testFuzzIncrementUpdatesCount(uint8 initialSteps, uint8 extraSteps) public {}
+}
+"#,
+        )
+        .unwrap();
+
+        let mut issues = Vec::new();
+        coverage(&root, &[manifest], &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_COVERAGE_SYMBOL"));
+    }
+
+    #[test]
+    fn coverage_requires_contract_qualified_mirror_symbol() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut manifest = counter_manifest();
+        let mut obligation = public_obligation();
+        obligation.coverage = tama_manifest::Coverage {
+            disposition: CoverageDisposition::Mirror,
+            path: Some("test/verity/Counter.t.sol:testFuzzIncrementUpdatesCount".to_string()),
             reason: None,
         };
         manifest.obligations.push(obligation);
