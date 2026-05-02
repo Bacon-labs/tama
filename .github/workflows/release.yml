@@ -376,6 +376,32 @@ jobs:
             exit 1
           fi
           test ! -e "$tmp/home"
+          python3 - "$tmp/manifest.json" "$tmp/tama.tar.gz" "$tmp/pwned" <<'PY'
+          import json
+          import shlex
+          import sys
+
+          manifest_path, artifact_path, pwned_path = sys.argv[1:]
+          json.dump({
+              "schema": "tama.release-manifest.v1",
+              "stable": "0.1.0",
+              "releases": [{
+                  "version": "0.1.0",
+                  "artifacts": [{
+                      "platform": "linux-x86_64",
+                      "url": f"file://{artifact_path}\nprintf pwned > {shlex.quote(pwned_path)}",
+                      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                  }],
+              }],
+          }, open(manifest_path, "w", encoding="utf-8"))
+          PY
+          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
+          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
+            echo "installer accepted unsafe release manifest fields" >&2
+            exit 1
+          fi
+          test ! -e "$tmp/pwned"
+          test ! -e "$tmp/home"
       - name: Shell installer verifies local artifact
         shell: bash
         run: |

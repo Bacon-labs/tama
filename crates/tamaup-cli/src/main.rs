@@ -247,6 +247,17 @@ fn validate_release_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
             return Err(format!("unsupported release manifest schema `{schema}`"));
         }
     }
+    if let Some(stable) = &manifest.stable {
+        validate_release_version(stable)?;
+    }
+    if let Some(version) = &manifest.version {
+        validate_release_version(version)?;
+    }
+    validate_artifacts(&manifest.artifacts)?;
+    for release in &manifest.releases {
+        validate_release_version(&release.version)?;
+        validate_artifacts(&release.artifacts)?;
+    }
     Ok(())
 }
 
@@ -255,6 +266,7 @@ fn use_version(version: &str) -> Result<(), String> {
 }
 
 fn use_version_at(home: &Utf8Path, version: &str) -> Result<(), String> {
+    validate_release_version(version)?;
     let active = home.join("active");
     let bin = home.join("bin");
     let version_dir = home.join("versions").join(version);
@@ -329,6 +341,7 @@ fn uninstall_at(home: &Utf8Path) -> Result<(), String> {
     let active = active.trim();
     remove_file_if_exists(&home.join("bin/tama"))?;
     if !active.is_empty() {
+        validate_release_version(active)?;
         remove_file_if_exists(&home.join("versions").join(active).join("bin/tama"))?;
     }
     remove_file_if_exists(&home.join("active"))
@@ -351,14 +364,49 @@ fn verify_manifest_signature(manifest: &[u8], signature: &[u8]) -> Result<(), St
 }
 
 fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), String> {
+    validate_sha256(expected)?;
     let actual = hex::encode(Sha256::digest(bytes));
-    if actual == expected {
+    if actual.eq_ignore_ascii_case(expected) {
         Ok(())
     } else {
         Err(format!(
             "bad artifact SHA-256: expected {expected}, got {actual}"
         ))
     }
+}
+
+fn validate_artifacts(artifacts: &[Artifact]) -> Result<(), String> {
+    for artifact in artifacts {
+        validate_manifest_string(&artifact.platform, "artifact platform")?;
+        validate_manifest_string(&artifact.url, "artifact URL")?;
+        validate_sha256(&artifact.sha256)?;
+    }
+    Ok(())
+}
+
+fn validate_release_version(version: &str) -> Result<(), String> {
+    if version.is_empty()
+        || !version
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '+' | '-'))
+    {
+        return Err(format!("unsafe release version `{version}`"));
+    }
+    Ok(())
+}
+
+fn validate_sha256(value: &str) -> Result<(), String> {
+    if value.len() != 64 || !value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(format!("invalid artifact SHA-256 `{value}`"));
+    }
+    Ok(())
+}
+
+fn validate_manifest_string(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty() || value.chars().any(|ch| ch.is_control()) {
+        return Err(format!("unsafe release manifest field `{label}`"));
+    }
+    Ok(())
 }
 
 fn bootstrap_toolchain(opts: BootstrapOptions) -> Result<(), String> {
@@ -811,6 +859,40 @@ mod tests {
     }
 
     #[test]
+    fn release_manifest_rejects_unsafe_fields() {
+        let mut manifest = ReleaseManifest {
+            schema: Some(RELEASE_MANIFEST_SCHEMA.to_string()),
+            stable: Some("../evil".to_string()),
+            version: None,
+            artifacts: vec![],
+            releases: vec![],
+        };
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("unsafe release version"));
+
+        manifest.stable = Some("0.1.0".to_string());
+        manifest.releases = vec![Release {
+            version: "0.1.0".to_string(),
+            artifacts: vec![Artifact {
+                platform: "linux-x86_64".to_string(),
+                url: "file:///tmp/tama.tar.gz\nTAMA_INJECTED=1".to_string(),
+                sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_string(),
+            }],
+        }];
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("unsafe release manifest field"));
+
+        manifest.releases[0].artifacts[0].url = "file:///tmp/tama.tar.gz".to_string();
+        manifest.releases[0].artifacts[0].sha256 = "not-a-sha".to_string();
+        assert!(validate_release_manifest(&manifest)
+            .unwrap_err()
+            .contains("invalid artifact SHA-256"));
+    }
+
+    #[test]
     fn release_manifest_keeps_legacy_single_version_shape() {
         let manifest = ReleaseManifest {
             schema: None,
@@ -869,6 +951,16 @@ mod tests {
         assert_eq!(fs::read_to_string(home.join("active")).unwrap(), "0.1.0");
         assert!(home.join("bin/tama").exists());
         assert!(home.join("bin/tamaup").exists());
+    }
+
+    #[test]
+    fn use_version_rejects_unsafe_version_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let err = use_version_at(&home, "../evil").unwrap_err();
+
+        assert!(err.contains("unsafe release version"));
     }
 
     #[test]

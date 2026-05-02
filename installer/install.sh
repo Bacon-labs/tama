@@ -41,9 +41,9 @@ if [ "$OFFLINE" -eq 1 ] && [ -z "$MANIFEST_FILE" ]; then
   exit 1
 fi
 
-TMPDIR="${TMPDIR:-/tmp}/tama-install.$$"
-mkdir -p "$TMPDIR"
-trap 'rm -rf "$TMPDIR"' EXIT INT TERM
+TMP_PARENT="${TMPDIR:-/tmp}"
+INSTALL_TMPDIR="$(mktemp -d "${TMP_PARENT%/}/tama-install.XXXXXX")"
+trap 'rm -rf "$INSTALL_TMPDIR"' EXIT INT TERM
 
 fetch() {
   url="$1"
@@ -59,68 +59,96 @@ fetch() {
 }
 
 if [ -n "$MANIFEST_FILE" ]; then
-  cp "$MANIFEST_FILE" "$TMPDIR/manifest.json"
-  cp "$MANIFEST_FILE.minisig" "$TMPDIR/manifest.json.minisig"
+  cp "$MANIFEST_FILE" "$INSTALL_TMPDIR/manifest.json"
+  cp "$MANIFEST_FILE.minisig" "$INSTALL_TMPDIR/manifest.json.minisig"
 else
-  fetch "$BASE_URL/manifest.json" "$TMPDIR/manifest.json"
-  fetch "$BASE_URL/manifest.json.minisig" "$TMPDIR/manifest.json.minisig"
+  fetch "$BASE_URL/manifest.json" "$INSTALL_TMPDIR/manifest.json"
+  fetch "$BASE_URL/manifest.json.minisig" "$INSTALL_TMPDIR/manifest.json.minisig"
 fi
 
 PUBLIC_KEY="${TAMA_MINISIGN_PUBLIC_KEY:-RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3}"
-minisign -Vm "$TMPDIR/manifest.json" -P "$PUBLIC_KEY" -x "$TMPDIR/manifest.json.minisig" >/dev/null
+minisign -Vm "$INSTALL_TMPDIR/manifest.json" -P "$PUBLIC_KEY" -x "$INSTALL_TMPDIR/manifest.json.minisig" >/dev/null
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required by the bootstrap installer to read the release manifest" >&2
   exit 1
 fi
 
-python3 - "$TMPDIR/manifest.json" "$PLATFORM" "$VERSION" > "$TMPDIR/artifact.env" <<'PY'
+python3 - "$INSTALL_TMPDIR/manifest.json" "$PLATFORM" "$VERSION" > "$INSTALL_TMPDIR/artifact.env" <<'PY'
 import json
+import re
+import shlex
 import sys
+
+SAFE_VERSION = re.compile(r"^[A-Za-z0-9._+-]+$")
+SAFE_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+
+def require_string(value, label):
+    if not isinstance(value, str) or value == "":
+        raise SystemExit(f"invalid release manifest field: {label}")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise SystemExit(f"unsafe control character in release manifest field: {label}")
+    return value
+
+def emit_env(name, value):
+    print(f"{name}={shlex.quote(value)}")
 
 manifest_path, platform, version = sys.argv[1:4]
 manifest = json.load(open(manifest_path, encoding="utf-8"))
 schema = manifest.get("schema")
 if schema is not None and schema != "tama.release-manifest.v1":
     raise SystemExit(f"unsupported release manifest schema: {schema}")
+if not SAFE_VERSION.fullmatch(version):
+    raise SystemExit(f"unsafe requested release version: {version}")
 if manifest.get("releases"):
     selected = manifest.get("stable") if version == "stable" else version
     releases = manifest["releases"]
 else:
     selected = manifest["version"] if version == "stable" else version
     releases = [{"version": manifest["version"], "artifacts": manifest["artifacts"]}]
+selected = require_string(selected, "selected version")
+if not SAFE_VERSION.fullmatch(selected):
+    raise SystemExit(f"unsafe release version: {selected}")
 for release in releases:
-    if release["version"] != selected:
+    release_version = require_string(release.get("version"), "release.version")
+    if release_version != selected:
         continue
-    for artifact in release["artifacts"]:
-        if artifact["platform"] == platform:
-            print("VERSION=" + release["version"])
-            print("URL=" + artifact["url"])
-            print("SHA256=" + artifact["sha256"])
+    if not SAFE_VERSION.fullmatch(release_version):
+        raise SystemExit(f"unsafe release version: {release_version}")
+    for artifact in release.get("artifacts", []):
+        artifact_platform = require_string(artifact.get("platform"), "artifact.platform")
+        if artifact_platform == platform:
+            artifact_url = require_string(artifact.get("url"), "artifact.url")
+            artifact_sha256 = require_string(artifact.get("sha256"), "artifact.sha256")
+            if not SAFE_SHA256.fullmatch(artifact_sha256):
+                raise SystemExit(f"invalid artifact SHA-256 for {platform} {selected}")
+            emit_env("VERSION", release_version)
+            emit_env("URL", artifact_url)
+            emit_env("SHA256", artifact_sha256.lower())
             raise SystemExit(0)
 raise SystemExit(f"no artifact for {platform} {version}")
 PY
-. "$TMPDIR/artifact.env"
+. "$INSTALL_TMPDIR/artifact.env"
 
 case "$VERSION" in
   ""|*[!A-Za-z0-9._+-]*) echo "unsafe release version: $VERSION" >&2; exit 1 ;;
 esac
 
 case "$URL" in
-  file://*) cp "${URL#file://}" "$TMPDIR/tama.tar.gz" ;;
+  file://*) cp "${URL#file://}" "$INSTALL_TMPDIR/tama.tar.gz" ;;
   *)
     if [ "$OFFLINE" -eq 1 ]; then
       echo "offline install cannot download artifact" >&2
       exit 1
     fi
-    fetch "$URL" "$TMPDIR/tama.tar.gz"
+    fetch "$URL" "$INSTALL_TMPDIR/tama.tar.gz"
     ;;
 esac
 
 if command -v sha256sum >/dev/null 2>&1; then
-  ACTUAL="$(sha256sum "$TMPDIR/tama.tar.gz" | awk '{print $1}')"
+  ACTUAL="$(sha256sum "$INSTALL_TMPDIR/tama.tar.gz" | awk '{print $1}')"
 else
-  ACTUAL="$(shasum -a 256 "$TMPDIR/tama.tar.gz" | awk '{print $1}')"
+  ACTUAL="$(shasum -a 256 "$INSTALL_TMPDIR/tama.tar.gz" | awk '{print $1}')"
 fi
 
 if [ "$ACTUAL" != "$SHA256" ]; then
@@ -128,18 +156,18 @@ if [ "$ACTUAL" != "$SHA256" ]; then
   exit 1
 fi
 
-tar -tzf "$TMPDIR/tama.tar.gz" > "$TMPDIR/archive.entries"
+tar -tzf "$INSTALL_TMPDIR/tama.tar.gz" > "$INSTALL_TMPDIR/archive.entries"
 while IFS= read -r entry; do
   case "$entry" in
     /*|*../*|../*) echo "unsafe archive path: $entry" >&2; exit 1 ;;
     bin/tama|bin/tamaup|tama|tamaup) ;;
     *) echo "unexpected archive entry: $entry" >&2; exit 1 ;;
   esac
-done < "$TMPDIR/archive.entries"
+done < "$INSTALL_TMPDIR/archive.entries"
 
-ARCHIVE_STAGE="$TMPDIR/archive"
+ARCHIVE_STAGE="$INSTALL_TMPDIR/archive"
 mkdir -p "$ARCHIVE_STAGE"
-tar -xzf "$TMPDIR/tama.tar.gz" -C "$ARCHIVE_STAGE"
+tar -xzf "$INSTALL_TMPDIR/tama.tar.gz" -C "$ARCHIVE_STAGE"
 
 BAD_ENTRY="$(find "$ARCHIVE_STAGE" ! -type d ! -type f -print | sed -n '1p')"
 if [ -n "$BAD_ENTRY" ]; then
