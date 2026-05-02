@@ -950,6 +950,19 @@ mod tests {
     }
 
     #[test]
+    fn test_args_parse_after_double_dash() {
+        let cli =
+            Cli::try_parse_from(["tama", "test", "--", "--match-test", "foo", "-vvv"]).unwrap();
+        match cli.command {
+            Command::Test(args) => assert_eq!(
+                prefixed_test_args(args.forge_args),
+                vec!["test", "--match-test", "foo", "-vvv"]
+            ),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
     fn offline_init_instructions_are_actionable() {
         let instructions = offline_init_instructions().join("\n");
         assert!(instructions.contains("lake update"));
