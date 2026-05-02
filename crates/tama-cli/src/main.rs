@@ -1197,7 +1197,7 @@ fn copy_matching_package_dirs(
         if path_exists(&target)? {
             continue;
         }
-        copy_dir_recursively(&source, &target)?;
+        copy_dir_recursively_into_new(&source, &target)?;
     }
     Ok(())
 }
@@ -1241,27 +1241,59 @@ fn copy_package_dirs(
         if replace_existing {
             replace_dir_recursively(&source, &target)?;
         } else {
-            copy_dir_recursively(&source, &target)?;
+            copy_dir_recursively_into_new(&source, &target)?;
         }
     }
     Ok(())
 }
 
+fn copy_dir_recursively_into_new(source: &Utf8Path, target: &Utf8Path) -> Result<(), String> {
+    let temp = copy_dir_recursively_to_temp(source, target)?;
+    match path_exists(target) {
+        Ok(true) => {
+            remove_path_if_exists(&temp)?;
+            Ok(())
+        }
+        Ok(false) => std::fs::rename(&temp, target).map_err(|err| {
+            let _ = remove_path_if_exists(&temp);
+            format!("failed to copy cached package `{target}`: {err}")
+        }),
+        Err(err) => {
+            let _ = remove_path_if_exists(&temp);
+            Err(err)
+        }
+    }
+}
+
 fn replace_dir_recursively(source: &Utf8Path, target: &Utf8Path) -> Result<(), String> {
-    let parent = target
-        .parent()
-        .ok_or_else(|| format!("cannot replace cache entry `{target}` without a parent"))?;
-    let name = target
-        .file_name()
-        .ok_or_else(|| format!("cannot replace cache entry `{target}` without a file name"))?;
-    let temp = parent.join(format!(".tama-cache-tmp-{name}-{}", std::process::id()));
-    remove_path_if_exists(&temp)?;
-    copy_dir_recursively(source, &temp)?;
-    remove_path_if_exists(target)?;
+    let temp = copy_dir_recursively_to_temp(source, target)?;
+    if let Err(err) = remove_path_if_exists(target) {
+        let _ = remove_path_if_exists(&temp);
+        return Err(err);
+    }
     std::fs::rename(&temp, target).map_err(|err| {
         let _ = remove_path_if_exists(&temp);
         format!("failed to replace cached package `{target}`: {err}")
     })
+}
+
+fn copy_dir_recursively_to_temp(
+    source: &Utf8Path,
+    target: &Utf8Path,
+) -> Result<Utf8PathBuf, String> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("cannot copy cache entry `{target}` without a parent"))?;
+    let name = target
+        .file_name()
+        .ok_or_else(|| format!("cannot copy cache entry `{target}` without a file name"))?;
+    let temp = parent.join(format!(".tama-cache-tmp-{name}-{}", std::process::id()));
+    remove_path_if_exists(&temp)?;
+    if let Err(err) = copy_dir_recursively(source, &temp) {
+        let _ = remove_path_if_exists(&temp);
+        return Err(err);
+    }
+    Ok(temp)
 }
 
 fn path_exists(path: &Utf8Path) -> Result<bool, String> {
@@ -1976,6 +2008,44 @@ mod tests {
         seed_lake_package_cache_from_manifest(&root, &cache).unwrap();
 
         assert!(!root.join(".lake/packages/verity").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lake_package_cache_copy_failures_do_not_leave_partial_entries() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let source = root.join("source");
+        let packages = root.join(".lake/packages");
+        let target = packages.join("verity");
+        let temp = packages.join(format!(".tama-cache-tmp-verity-{}", std::process::id()));
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&packages).unwrap();
+        tama_common::write_string(&source.join("package.txt"), "new").unwrap();
+        let unreadable = source.join("unreadable.txt");
+        tama_common::write_string(&unreadable, "blocked").unwrap();
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let new_result = copy_dir_recursively_into_new(&source, &target);
+
+        assert!(new_result.is_err());
+        assert!(!target.exists());
+        assert!(!temp.exists());
+
+        std::fs::create_dir_all(&target).unwrap();
+        tama_common::write_string(&target.join("package.txt"), "old").unwrap();
+
+        let replace_result = replace_dir_recursively(&source, &target);
+
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(replace_result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(target.join("package.txt")).unwrap(),
+            "old"
+        );
+        assert!(!temp.exists());
     }
 
     #[test]
