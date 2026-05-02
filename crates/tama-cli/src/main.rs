@@ -860,10 +860,22 @@ fn sync_lake_package_cache(root: &Utf8Path, cache: &Utf8Path) -> Result<(), Stri
         return Ok(());
     }
     std::fs::create_dir_all(cache).map_err(|err| format!("failed to create `{cache}`: {err}"))?;
-    copy_missing_package_dirs(&packages, cache)
+    refresh_package_dirs(&packages, cache)
 }
 
 fn copy_missing_package_dirs(source: &Utf8Path, destination: &Utf8Path) -> Result<(), String> {
+    copy_package_dirs(source, destination, false)
+}
+
+fn refresh_package_dirs(source: &Utf8Path, destination: &Utf8Path) -> Result<(), String> {
+    copy_package_dirs(source, destination, true)
+}
+
+fn copy_package_dirs(
+    source: &Utf8Path,
+    destination: &Utf8Path,
+    replace_existing: bool,
+) -> Result<(), String> {
     if same_existing_path(source, destination) {
         return Ok(());
     }
@@ -889,12 +901,57 @@ fn copy_missing_package_dirs(source: &Utf8Path, destination: &Utf8Path) -> Resul
             .into_string()
             .map_err(|name| format!("package cache entry `{name:?}` is not UTF-8"))?;
         let target = destination.join(&name);
-        if target.exists() {
+        if path_exists(&target)? && !replace_existing {
             continue;
         }
-        copy_dir_recursively(&source, &target)?;
+        if replace_existing {
+            replace_dir_recursively(&source, &target)?;
+        } else {
+            copy_dir_recursively(&source, &target)?;
+        }
     }
     Ok(())
+}
+
+fn replace_dir_recursively(source: &Utf8Path, target: &Utf8Path) -> Result<(), String> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("cannot replace cache entry `{target}` without a parent"))?;
+    let name = target
+        .file_name()
+        .ok_or_else(|| format!("cannot replace cache entry `{target}` without a file name"))?;
+    let temp = parent.join(format!(".tama-cache-tmp-{name}-{}", std::process::id()));
+    remove_path_if_exists(&temp)?;
+    copy_dir_recursively(source, &temp)?;
+    remove_path_if_exists(target)?;
+    std::fs::rename(&temp, target).map_err(|err| {
+        let _ = remove_path_if_exists(&temp);
+        format!("failed to replace cached package `{target}`: {err}")
+    })
+}
+
+fn path_exists(path: &Utf8Path) -> Result<bool, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(format!("failed to inspect `{path}`: {err}")),
+    }
+}
+
+fn remove_path_if_exists(path: &Utf8Path) -> Result<(), String> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(format!("failed to inspect `{path}`: {err}")),
+    };
+    let result = if metadata.file_type().is_symlink() || metadata.is_file() {
+        std::fs::remove_file(path)
+    } else if metadata.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    result.map_err(|err| format!("failed to remove `{path}`: {err}"))
 }
 
 fn copy_dir_recursively(source: &Utf8Path, destination: &Utf8Path) -> Result<(), String> {
@@ -1404,6 +1461,26 @@ mod tests {
         .unwrap();
         sync_lake_package_cache(&root, &cache).unwrap();
         assert!(cache.join("verity/.git/config").is_file());
+    }
+
+    #[test]
+    fn lake_package_cache_refreshes_existing_entries_after_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
+
+        tama_common::write_string(&cache.join("verity/.git/config"), "old\n").unwrap();
+        tama_common::write_string(&cache.join("verity/revision"), "old\n").unwrap();
+        tama_common::write_string(&root.join(".lake/packages/verity/.git/config"), "new\n")
+            .unwrap();
+        tama_common::write_string(&root.join(".lake/packages/verity/revision"), "new\n").unwrap();
+
+        sync_lake_package_cache(&root, &cache).unwrap();
+
+        let config = std::fs::read_to_string(cache.join("verity/.git/config")).unwrap();
+        let revision = std::fs::read_to_string(cache.join("verity/revision")).unwrap();
+        assert_eq!(config, "new\n");
+        assert_eq!(revision, "new\n");
     }
 
     #[test]
