@@ -700,11 +700,20 @@ jobs:
                   raise SystemExit(f"unsafe control character in release manifest field: {label}")
               return value
 
+          def reject_unknown_keys(obj, allowed, label):
+              if not isinstance(obj, dict):
+                  raise SystemExit(f"invalid release manifest field: {label}")
+              unknown = sorted(set(obj) - set(allowed))
+              if unknown:
+                  raise SystemExit(f"unknown release manifest field in {label}: {unknown[0]}")
+
           def validate_release(release):
+              reject_unknown_keys(release, {"version", "artifacts"}, "release")
               release_version = require_string(release.get("version"), "release.version")
               if not SAFE_VERSION.fullmatch(release_version) or ".." in release_version:
                   raise SystemExit(f"unsafe release version: {release_version}")
               for artifact in release.get("artifacts", []):
+                  reject_unknown_keys(artifact, {"platform", "url", "sha256"}, "artifact")
                   platform = require_string(artifact.get("platform"), "artifact.platform")
                   if not SAFE_PLATFORM.fullmatch(platform):
                       raise SystemExit(f"unsafe artifact platform: {platform}")
@@ -714,10 +723,25 @@ jobs:
                       raise SystemExit(f"invalid artifact SHA-256 for {release_version} {platform}")
 
           def releases_from(manifest):
+              reject_unknown_keys(manifest, {"schema", "stable", "nightly", "version", "artifacts", "releases"}, "manifest")
               schema = manifest.get("schema")
               if schema is not None and schema != "tama.release-manifest.v1":
                   raise SystemExit(f"unsupported previous release manifest schema: {schema}")
-              if "releases" in manifest:
+              is_cumulative = schema is not None or "stable" in manifest or "nightly" in manifest or "releases" in manifest
+              if is_cumulative:
+                  if schema != "tama.release-manifest.v1":
+                      raise SystemExit("cumulative previous release manifest must declare schema tama.release-manifest.v1")
+                  stable = require_string(manifest.get("stable"), "stable")
+                  if not SAFE_VERSION.fullmatch(stable) or ".." in stable:
+                      raise SystemExit(f"unsafe stable release version: {stable}")
+                  if "nightly" in manifest:
+                      nightly = require_string(manifest.get("nightly"), "nightly")
+                      if not SAFE_VERSION.fullmatch(nightly) or ".." in nightly:
+                          raise SystemExit(f"unsafe nightly release version: {nightly}")
+                  if "version" in manifest or "artifacts" in manifest:
+                      raise SystemExit("cumulative previous release manifest must not mix legacy version/artifacts fields")
+                  if not isinstance(manifest.get("releases"), list) or not manifest["releases"]:
+                      raise SystemExit("cumulative previous release manifest must contain releases[]")
                   releases = list(manifest["releases"])
                   for release in releases:
                       validate_release(release)

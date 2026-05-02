@@ -33,7 +33,7 @@ Each archive contains `tama` and `tamaup`. No Windows archive is published for v
 
 ## Signing
 
-The release workflow writes a cumulative `manifest.json` with `schema = "tama.release-manifest.v1"`, a `stable` version, and a `releases[]` list. It computes SHA-256 for every new archive, preserves older release entries only after verifying the previously published manifest signature, signs the new manifest, and publishes the manifest, signature, and archives.
+The release workflow writes a cumulative `manifest.json` with `schema = "tama.release-manifest.v1"`, a `stable` version, and a `releases[]` list. It computes SHA-256 for every new archive, preserves older release entries only after verifying the previously published manifest signature and rejecting unknown or mixed manifest fields, signs the new manifest, and publishes the manifest, signature, and archives.
 
 The schema-less legacy `version` plus `artifacts[]` manifest shape is accepted only for local/offline tests. Installers reject cumulative manifests that omit `releases[]` or mix the legacy and cumulative shapes.
 
