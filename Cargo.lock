@@ -1133,12 +1133,14 @@ name = "tama-build"
 version = "0.1.0"
 dependencies = [
  "camino",
+ "regex",
  "serde",
  "serde_json",
  "tama-common",
  "tama-config",
  "tama-manifest",
  "tama-toolchain",
+ "tempfile",
  "thiserror",
 ]
 

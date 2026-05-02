@@ -415,10 +415,12 @@ namespace proof.ERC20LiteProof
 open Verity
 open spec.ERC20LiteSpec
 
+-- tama: obligation kind=postcondition function=transfer coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransferPostPlaceholder
 theorem transfer_total_supply_preserved_refl (s : ContractState) :
   transfer_total_supply_preserved s s := by
   simp [transfer_total_supply_preserved]
 
+-- tama: obligation kind=postcondition function=balanceOf coverage=proof_only reason="Pure read specification; Foundry mirror coverage is provided by generated ABI tests."
 theorem balanceOf_spec_refl (account : Address) (s : ContractState) :
   balanceOf_spec account (s.storageMap 1 account) s := by
   simp [balanceOf_spec]

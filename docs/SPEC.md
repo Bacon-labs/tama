@@ -514,7 +514,7 @@ This should also be a Rust semantic port of the upstream Verity storage-layout s
 
 Checks that every public contract obligation has a mirror classification.
 
-Coverage is not over every theorem in `verity/proof/`. Helper lemmas are not obligations. Proof-only facts may be intentionally non-executable. Public contract obligations must be explicitly marked and either:
+Coverage is not over every theorem in `verity/proof/`. Helper lemmas are not obligations. Proof-only facts may be intentionally non-executable. Public contract obligations must be explicitly marked with Tama attributes or `-- tama:` metadata comments and either:
 
 - linked to a Foundry mirror test; or
 - marked proof-only with a reason.
@@ -533,6 +533,14 @@ theorem arithmetic_helper : ... := by
 
 @[tama.proof_only "quantifies over symbolic state; no executable mirror"]
 theorem symbolic_refinement : ... := by
+  ...
+```
+
+The comment form exists for projects that have not loaded no-op Tama Lean attributes yet:
+
+```lean
+-- tama: obligation kind=postcondition function=transfer coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransferPost
+theorem transfer_post : ... := by
   ...
 ```
 

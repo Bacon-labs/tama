@@ -3,12 +3,14 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use camino::{Utf8Path, Utf8PathBuf};
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tama_config::{TamaConfig, TamaLock};
 use tama_manifest::{
-    Abi, ArtifactPaths, Constructor, ContractManifest, ErrorEntry, Event, Function, LeanModules,
-    Param, SourcePaths, StorageEntry, SCHEMA,
+    Abi, ArtifactPaths, Constructor, ContractManifest, Coverage, CoverageDisposition, ErrorEntry,
+    Event, Function, LeanModules, Obligation, ObligationKind, Param, SourcePaths, StorageEntry,
+    SCHEMA,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -202,6 +204,7 @@ pub fn adapt_verity_outputs(
                 path: yul,
             });
         }
+        let proof_module = format!("proof.{contract}Proof");
         let manifest = ContractManifest {
             schema: SCHEMA.to_string(),
             contract: contract.clone(),
@@ -213,11 +216,11 @@ pub fn adapt_verity_outputs(
             lean: LeanModules {
                 implementation_module: format!("src.{contract}"),
                 spec_module: format!("spec.{contract}Spec"),
-                proof_module: format!("proof.{contract}Proof"),
+                proof_module: proof_module.clone(),
             },
             abi: parse_abi(&path)?,
             storage: parse_storage(&storage_report, &contract),
-            obligations: Vec::new(),
+            obligations: extract_obligations(root, config, &contract, &proof_module)?,
             artifacts: ArtifactPaths {
                 yul: config.paths.out.join("yul").join(format!("{contract}.yul")),
                 creation_bytecode: config
@@ -754,6 +757,257 @@ fn storage_type(value: &Value) -> (String, String) {
     }
 }
 
+fn extract_obligations(
+    root: &Utf8Path,
+    config: &TamaConfig,
+    contract: &str,
+    proof_module: &str,
+) -> Result<Vec<Obligation>> {
+    let proof_path = root.join(config.paths.proof.join(format!("{contract}Proof.lean")));
+    if !proof_path.is_file() {
+        return Ok(Vec::new());
+    }
+    let text = tama_common::read_to_string(&proof_path)?;
+    let theorem_re = Regex::new(
+        r"^\s*(?:@\[[^\]]*\]\s*)*(?:(?:private|protected)\s+)*(?:theorem|lemma)\s+([A-Za-z_][A-Za-z0-9_.']*)\b",
+    )
+    .expect("valid theorem regex");
+    let mut obligations = Vec::new();
+    let mut pending = ObligationMeta::default();
+    for line in strip_lean_block_comments(&text).lines() {
+        let trimmed = line.trim();
+        let metadata_line = parse_obligation_metadata(trimmed, &mut pending);
+        if let Some(captures) = theorem_re.captures(trimmed) {
+            if let Some(meta) = pending.take_if_obligation() {
+                let name = captures.get(1).expect("theorem name").as_str();
+                obligations.push(Obligation {
+                    id: format!("{contract}.{name}"),
+                    name: name.to_string(),
+                    kind: meta.kind.unwrap_or(ObligationKind::Postcondition),
+                    lean_decl: format!("{proof_module}.{name}"),
+                    contract: contract.to_string(),
+                    function: meta.function,
+                    coverage: meta.coverage,
+                });
+            }
+            pending = ObligationMeta::default();
+        } else if !metadata_line && !trimmed.is_empty() && !trimmed.starts_with("@[") {
+            pending = ObligationMeta::default();
+        }
+    }
+    Ok(obligations)
+}
+
+#[derive(Debug, Clone)]
+struct ObligationMeta {
+    tagged: bool,
+    kind: Option<ObligationKind>,
+    function: Option<String>,
+    coverage: Coverage,
+}
+
+impl Default for ObligationMeta {
+    fn default() -> Self {
+        Self {
+            tagged: false,
+            kind: None,
+            function: None,
+            coverage: Coverage {
+                disposition: CoverageDisposition::None,
+                path: None,
+                reason: None,
+            },
+        }
+    }
+}
+
+impl ObligationMeta {
+    fn take_if_obligation(&self) -> Option<Self> {
+        if self.tagged || self.kind.is_some() {
+            Some(self.clone())
+        } else {
+            None
+        }
+    }
+}
+
+fn parse_obligation_metadata(line: &str, meta: &mut ObligationMeta) -> bool {
+    let mut parsed = false;
+    if let Some(raw) = line.strip_prefix("-- tama:") {
+        parsed = true;
+        apply_tama_metadata(raw, meta);
+    }
+    if line.contains("tama.") {
+        parsed = true;
+        apply_tama_attribute_metadata(line, meta);
+    }
+    parsed
+}
+
+fn apply_tama_metadata(raw: &str, meta: &mut ObligationMeta) {
+    let values = parse_key_values(raw);
+    if raw.contains("obligation") {
+        meta.tagged = true;
+    }
+    if raw.contains("helper") || values.get("kind").is_some_and(|kind| kind == "helper") {
+        meta.tagged = true;
+        meta.kind = Some(ObligationKind::Helper);
+    } else if raw.contains("invariant")
+        || values.get("kind").is_some_and(|kind| kind == "invariant")
+    {
+        meta.tagged = true;
+        meta.kind = Some(ObligationKind::Invariant);
+    } else if raw.contains("postcondition")
+        || values
+            .get("kind")
+            .is_some_and(|kind| kind == "postcondition")
+    {
+        meta.tagged = true;
+        meta.kind = Some(ObligationKind::Postcondition);
+    }
+    if let Some(function) = values.get("function").filter(|value| !value.is_empty()) {
+        meta.function = Some(function.clone());
+    }
+    match values.get("coverage").map(String::as_str) {
+        Some("mirror") => {
+            meta.coverage.disposition = CoverageDisposition::Mirror;
+            meta.coverage.path = values.get("path").cloned();
+            meta.coverage.reason = None;
+        }
+        Some("proof_only") => {
+            meta.coverage.disposition = CoverageDisposition::ProofOnly;
+            meta.coverage.path = None;
+            meta.coverage.reason = values.get("reason").cloned();
+        }
+        Some("none") => {
+            meta.coverage.disposition = CoverageDisposition::None;
+            meta.coverage.path = None;
+            meta.coverage.reason = None;
+        }
+        _ => {}
+    }
+}
+
+fn apply_tama_attribute_metadata(line: &str, meta: &mut ObligationMeta) {
+    if line.contains("tama.obligation") {
+        meta.tagged = true;
+    }
+    if line.contains("tama.helper") {
+        meta.tagged = true;
+        meta.kind = Some(ObligationKind::Helper);
+    }
+    if line.contains("tama.invariant") {
+        meta.tagged = true;
+        meta.kind = Some(ObligationKind::Invariant);
+    }
+    if let Some(rest) = line.split("tama.postcondition").nth(1) {
+        meta.tagged = true;
+        meta.kind = Some(ObligationKind::Postcondition);
+        if let Some(function) = rest
+            .split([']', ','])
+            .next()
+            .and_then(|value| value.split_whitespace().next())
+            .filter(|value| !value.is_empty())
+        {
+            meta.function = Some(function.rsplit('.').next().unwrap_or(function).to_string());
+        }
+    }
+    if line.contains("tama.mirror") {
+        if let Some(path) = first_quoted_value(line) {
+            meta.coverage.disposition = CoverageDisposition::Mirror;
+            meta.coverage.path = Some(path);
+            meta.coverage.reason = None;
+        }
+    }
+    if line.contains("tama.proof_only") {
+        if let Some(reason) = first_quoted_value(line) {
+            meta.coverage.disposition = CoverageDisposition::ProofOnly;
+            meta.coverage.path = None;
+            meta.coverage.reason = Some(reason);
+        }
+    }
+}
+
+fn parse_key_values(raw: &str) -> std::collections::BTreeMap<String, String> {
+    let mut values = std::collections::BTreeMap::new();
+    let mut chars = raw.trim().chars().peekable();
+    while chars.peek().is_some() {
+        while chars.peek().is_some_and(|ch| ch.is_whitespace()) {
+            chars.next();
+        }
+        let mut key = String::new();
+        while chars
+            .peek()
+            .is_some_and(|ch| !ch.is_whitespace() && *ch != '=')
+        {
+            key.push(chars.next().expect("peeked char"));
+        }
+        if key.is_empty() {
+            break;
+        }
+        while chars.peek().is_some_and(|ch| ch.is_whitespace()) {
+            chars.next();
+        }
+        if chars.peek() != Some(&'=') {
+            values.insert(key, "true".to_string());
+            continue;
+        }
+        chars.next();
+        while chars.peek().is_some_and(|ch| ch.is_whitespace()) {
+            chars.next();
+        }
+        let value = if chars.peek() == Some(&'"') {
+            chars.next();
+            let mut value = String::new();
+            for ch in chars.by_ref() {
+                if ch == '"' {
+                    break;
+                }
+                value.push(ch);
+            }
+            value
+        } else {
+            let mut value = String::new();
+            while chars.peek().is_some_and(|ch| !ch.is_whitespace()) {
+                value.push(chars.next().expect("peeked char"));
+            }
+            value
+        };
+        values.insert(key, value);
+    }
+    values
+}
+
+fn first_quoted_value(line: &str) -> Option<String> {
+    let (_, rest) = line.split_once('"')?;
+    let (value, _) = rest.split_once('"')?;
+    Some(value.to_string())
+}
+
+fn strip_lean_block_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut depth = 0usize;
+    while let Some(ch) = chars.next() {
+        if ch == '/' && chars.peek() == Some(&'-') {
+            chars.next();
+            depth += 1;
+            continue;
+        }
+        if depth > 0 {
+            if ch == '-' && chars.peek() == Some(&'/') {
+                chars.next();
+                depth -= 1;
+            } else if ch == '\n' {
+                out.push('\n');
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
 fn extract_solc_bytecode(value: &Value) -> Option<(String, String)> {
     let contracts = value.get("contracts")?.as_object()?;
     for by_file in contracts.values() {
@@ -864,6 +1118,63 @@ mod tests {
     }
 
     #[test]
+    fn obligation_metadata_is_extracted_from_proof_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        tama_common::write_string(
+            &root.join("verity/proof/CounterProof.lean"),
+            r#"import spec.CounterSpec
+
+namespace proof.CounterProof
+
+-- tama: obligation kind=postcondition function=increment coverage=mirror path=test/verity/Counter.t.sol:CounterTest.testIncrementPost
+theorem increment_post : True := by
+  trivial
+
+@[tama.helper]
+lemma arithmetic_helper : True := by
+  trivial
+
+-- tama: obligation kind=invariant coverage=proof_only reason="Symbolic state only."
+theorem supply_invariant : True := by
+  trivial
+
+end proof.CounterProof
+"#,
+        )
+        .unwrap();
+        let obligations = extract_obligations(&root, &config, "Counter", "proof.CounterProof")
+            .expect("obligations");
+        assert_eq!(obligations.len(), 3);
+        assert_eq!(obligations[0].id, "Counter.increment_post");
+        assert_eq!(obligations[0].kind, ObligationKind::Postcondition);
+        assert_eq!(obligations[0].function.as_deref(), Some("increment"));
+        assert_eq!(
+            obligations[0].coverage.disposition,
+            CoverageDisposition::Mirror
+        );
+        assert_eq!(
+            obligations[0].coverage.path.as_deref(),
+            Some("test/verity/Counter.t.sol:CounterTest.testIncrementPost")
+        );
+        assert_eq!(obligations[1].kind, ObligationKind::Helper);
+        assert_eq!(
+            obligations[1].lean_decl,
+            "proof.CounterProof.arithmetic_helper"
+        );
+        assert_eq!(obligations[2].kind, ObligationKind::Invariant);
+        assert_eq!(
+            obligations[2].coverage.disposition,
+            CoverageDisposition::ProofOnly
+        );
+        assert_eq!(
+            obligations[2].coverage.reason.as_deref(),
+            Some("Symbolic state only.")
+        );
+    }
+
+    #[test]
     fn deployer_encodes_constructor_args() {
         let mut manifest = ContractManifest {
             schema: SCHEMA.to_string(),
@@ -907,5 +1218,23 @@ mod tests {
         let sol = deployer_sol(&manifest, "6000");
         assert!(sol.contains("function deploy(address owner, uint256 arg1)"));
         assert!(sol.contains(r#"abi.encodePacked(hex"6000", abi.encode(owner, arg1))"#));
+    }
+
+    fn test_config() -> TamaConfig {
+        TamaConfig {
+            project: tama_config::ProjectConfig {
+                name: "test".to_string(),
+                verity: "0.1.0".to_string(),
+            },
+            paths: tama_config::PathsConfig::default(),
+            yul: tama_config::YulConfig {
+                solc: "0.8.33".to_string(),
+                optimizer: true,
+                optimizer_runs: 200,
+                evm_version: "cancun".to_string(),
+                metadata_hash: "none".to_string(),
+            },
+            trust: tama_config::TrustConfig::default(),
+        }
     }
 }
