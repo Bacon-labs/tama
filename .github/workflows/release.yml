@@ -714,6 +714,8 @@ jobs:
           set -euxo pipefail
           test -n "$TAMA_MINISIGN_SECRET_KEY"
           test -n "$TAMA_MINISIGN_PUBLIC_KEY"
+          grep -Fq "$TAMA_MINISIGN_PUBLIC_KEY" crates/tamaup-cli/src/main.rs
+          grep -Fq "$TAMA_MINISIGN_PUBLIC_KEY" installer/install.sh
           printf '%s\n' "$TAMA_MINISIGN_SECRET_KEY" > dist/minisign.sec
           minisign -S -s dist/minisign.sec -m dist/manifest.json -x dist/manifest.json.minisig -W
           minisign -V -P "$TAMA_MINISIGN_PUBLIC_KEY" -m dist/manifest.json -x dist/manifest.json.minisig

@@ -990,6 +990,18 @@ mod tests {
     }
 
     #[test]
+    fn shell_installer_default_key_matches_tamaup_embedded_key() {
+        let installer = fs::read_to_string(
+            Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../installer/install.sh")
+                .as_std_path(),
+        )
+        .unwrap();
+
+        assert!(installer.contains(EMBEDDED_PUBLIC_KEY));
+    }
+
+    #[test]
     fn release_manifest_selects_stable_and_specific_versions() {
         let manifest = ReleaseManifest {
             schema: Some(RELEASE_MANIFEST_SCHEMA.to_string()),
