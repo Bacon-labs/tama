@@ -391,6 +391,17 @@ fn trust(
     let deny = BTreeSet::from(["sorryAx".to_string()]);
     let allow = &config.trust.allow_axioms;
     let probe = root.join(config.paths.out.join("trust-probe").join("axioms.json"));
+    let public_obligations = manifests
+        .iter()
+        .flat_map(|manifest| {
+            manifest
+                .obligations
+                .iter()
+                .filter(|obligation| obligation.kind != ObligationKind::Helper)
+                .map(move |obligation| (manifest, obligation))
+        })
+        .collect::<Vec<_>>();
+    let mut seen_decls = BTreeSet::new();
     if probe.is_file() {
         let text = tama_common::read_to_string(&probe).unwrap_or_default();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
@@ -400,6 +411,7 @@ fn trust(
                     .get("lean_decl")
                     .and_then(|value| value.as_str())
                     .unwrap_or("<unknown>");
+                seen_decls.insert(decl.to_string());
                 for axiom in obligation
                     .get("axioms")
                     .and_then(|value| value.as_array())
@@ -419,18 +431,39 @@ fn trust(
                 }
             }
         }
+    } else if !public_obligations.is_empty() {
+        issues.push(issue(
+            "trust-boundary",
+            None,
+            "TAMA_TRUST_PROBE_MISSING",
+            format!(
+                "trust probe output is missing: {}",
+                probe.strip_prefix(root).unwrap_or(&probe)
+            ),
+            Some(probe.strip_prefix(root).unwrap_or(&probe).to_owned()),
+        ));
     }
-    for manifest in manifests {
-        for obligation in &manifest.obligations {
-            if !obligation.lean_decl.contains('.') {
-                issues.push(issue(
-                    "trust-boundary",
-                    Some(&manifest.contract),
-                    "TAMA_TRUST_DECL",
-                    format!("{} is not fully qualified", obligation.lean_decl),
-                    None,
-                ));
-            }
+    for (manifest, obligation) in public_obligations {
+        if !obligation.lean_decl.contains('.') {
+            issues.push(issue(
+                "trust-boundary",
+                Some(&manifest.contract),
+                "TAMA_TRUST_DECL",
+                format!("{} is not fully qualified", obligation.lean_decl),
+                None,
+            ));
+        }
+        if probe.is_file() && !seen_decls.contains(&obligation.lean_decl) {
+            issues.push(issue(
+                "trust-boundary",
+                Some(&manifest.contract),
+                "TAMA_TRUST_DECL_MISSING",
+                format!(
+                    "{} was not reported by the trust probe",
+                    obligation.lean_decl
+                ),
+                Some(probe.strip_prefix(root).unwrap_or(&probe).to_owned()),
+            ));
         }
     }
 }
@@ -482,21 +515,7 @@ mod tests {
     fn structure_reports_missing_test_and_aggregate_import() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let config = tama_config::TamaConfig {
-            project: tama_config::ProjectConfig {
-                name: "test".to_string(),
-                verity: "0.1.0".to_string(),
-            },
-            paths: tama_config::PathsConfig::default(),
-            yul: tama_config::YulConfig {
-                solc: "0.8.33".to_string(),
-                optimizer: true,
-                optimizer_runs: 200,
-                evm_version: "cancun".to_string(),
-                metadata_hash: "none".to_string(),
-            },
-            trust: tama_config::TrustConfig::default(),
-        };
+        let config = test_config();
         for dir in [
             &config.paths.src,
             &config.paths.spec,
@@ -530,6 +549,74 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(codes.contains("TAMA_STRUCTURE_MISSING_TEST"));
         assert!(codes.contains("TAMA_STRUCTURE_AGGREGATE_IMPORT"));
+    }
+
+    #[test]
+    fn trust_fails_when_probe_is_missing_for_public_obligation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        let mut manifest = counter_manifest();
+        manifest.obligations.push(public_obligation());
+        let mut issues = Vec::new();
+        trust(&root, &config, &[manifest], &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_TRUST_PROBE_MISSING"));
+    }
+
+    #[test]
+    fn trust_fails_when_probe_omits_public_obligation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        std::fs::create_dir_all(root.join("artifacts/trust-probe")).unwrap();
+        tama_common::write_string(
+            &root.join("artifacts/trust-probe/axioms.json"),
+            r#"{"obligations":[]}"#,
+        )
+        .unwrap();
+        let mut manifest = counter_manifest();
+        manifest.obligations.push(public_obligation());
+        let mut issues = Vec::new();
+        trust(&root, &config, &[manifest], &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TAMA_TRUST_DECL_MISSING"));
+    }
+
+    fn test_config() -> tama_config::TamaConfig {
+        tama_config::TamaConfig {
+            project: tama_config::ProjectConfig {
+                name: "test".to_string(),
+                verity: "0.1.0".to_string(),
+            },
+            paths: tama_config::PathsConfig::default(),
+            yul: tama_config::YulConfig {
+                solc: "0.8.33".to_string(),
+                optimizer: true,
+                optimizer_runs: 200,
+                evm_version: "cancun".to_string(),
+                metadata_hash: "none".to_string(),
+            },
+            trust: tama_config::TrustConfig::default(),
+        }
+    }
+
+    fn public_obligation() -> tama_manifest::Obligation {
+        tama_manifest::Obligation {
+            id: "Counter.increment_post".to_string(),
+            name: "increment_post".to_string(),
+            kind: ObligationKind::Postcondition,
+            lean_decl: "proof.CounterProof.increment_post".to_string(),
+            contract: "Counter".to_string(),
+            function: Some("increment".to_string()),
+            coverage: tama_manifest::Coverage {
+                disposition: CoverageDisposition::ProofOnly,
+                path: None,
+                reason: Some("symbolic only".to_string()),
+            },
+        }
     }
 
     fn counter_manifest() -> ContractManifest {
