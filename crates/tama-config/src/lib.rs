@@ -37,6 +37,7 @@ pub enum Error {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TamaConfig {
     pub project: ProjectConfig,
     #[serde(default)]
@@ -47,12 +48,14 @@ pub struct TamaConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub name: String,
     pub verity: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PathsConfig {
     #[serde(default = "default_src")]
     pub src: Utf8PathBuf,
@@ -82,6 +85,7 @@ impl Default for PathsConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct YulConfig {
     pub solc: String,
     #[serde(default = "default_true")]
@@ -97,6 +101,7 @@ pub struct YulConfig {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TrustConfig {
     #[serde(default)]
     pub allow_axioms: BTreeMap<String, String>,
@@ -849,6 +854,49 @@ solc = "0.8.33"
                 Utf8PathBuf::from("contracts/generated")
             );
             assert_eq!(cfg.yul.metadata_hash, "none");
+        }
+    }
+
+    #[test]
+    fn tama_config_rejects_unknown_keys() {
+        for body in [
+            r#"[project]
+name = "my-protocol"
+verity = "0.1.0"
+
+[yul]
+solc = "0.8.33"
+
+[unexpected]
+value = true
+"#,
+            r#"[project]
+name = "my-protocol"
+verity = "0.1.0"
+
+[paths]
+generated_solidity_typo = "src/generated/verity"
+
+[yul]
+solc = "0.8.33"
+"#,
+            r#"[project]
+name = "my-protocol"
+verity = "0.1.0"
+
+[yul]
+solc = "0.8.33"
+optimizer_runz = 200
+"#,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = Utf8PathBuf::from_path_buf(dir.path().join("tama.toml")).unwrap();
+            tama_common::write_string(&path, body).unwrap();
+
+            let err = parse_tama_config(&path).unwrap_err();
+
+            assert!(matches!(err, Error::Toml { .. }));
+            assert!(err.to_string().contains("unknown field"));
         }
     }
 
