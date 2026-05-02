@@ -1,4 +1,4 @@
-use std::process::{Command as ProcessCommand, ExitCode};
+use std::process::{Command as ProcessCommand, ExitCode, Stdio};
 
 use camino::Utf8PathBuf;
 use clap::{ArgAction, Args, Parser, Subcommand};
@@ -531,33 +531,26 @@ fn run_process(program: &str, args: &[&str], cwd: Option<&Utf8PathBuf>) -> Resul
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    let output = command.output().map_err(|err| {
-        format!(
-            "failed to run `{}`: {err}",
-            std::iter::once(program)
-                .chain(args.iter().copied())
-                .collect::<Vec<_>>()
-                .join(" ")
-        )
-    })?;
-    if output.status.success() {
+    let display = command_display(program, args);
+    eprintln!("running `{display}`");
+    let status = command
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|err| format!("failed to run `{display}`: {err}"))?;
+    if status.success() {
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
-            "`{}` failed with status {}{}",
-            std::iter::once(program)
-                .chain(args.iter().copied())
-                .collect::<Vec<_>>()
-                .join(" "),
-            output.status,
-            if stderr.trim().is_empty() {
-                String::new()
-            } else {
-                format!(": {}", stderr.trim())
-            }
-        ))
+        Err(format!("`{display}` failed with status {status}"))
     }
+}
+
+fn command_display(program: &str, args: &[&str]) -> String {
+    std::iter::once(program)
+        .chain(args.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn verity_rev_from_config(version: &str) -> String {
