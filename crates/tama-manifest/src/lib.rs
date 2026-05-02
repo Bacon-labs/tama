@@ -636,6 +636,12 @@ fn validate_params(params: &[Param], label: &str, owner: &str) -> std::result::R
                 param.ty
             ));
         }
+        if !param.name.is_empty() && !is_identifier(&param.name) {
+            return Err(format!(
+                "{label} {index} for `{owner}` name `{}` must be a Solidity identifier",
+                param.name
+            ));
+        }
     }
     Ok(())
 }
@@ -651,6 +657,12 @@ fn validate_event_fields(fields: &[EventField], event: &str) -> std::result::Res
             return Err(format!(
                 "event field {index} for `{event}` has unsupported ABI type `{}`",
                 field.ty
+            ));
+        }
+        if !field.name.is_empty() && !is_identifier(&field.name) {
+            return Err(format!(
+                "event field {index} for `{event}` name `{}` must be a Solidity identifier",
+                field.name
             ));
         }
     }
@@ -869,6 +881,22 @@ mod tests {
             unsupported_event_field.validate(),
             Err(Error::Invalid { message, .. }) if message.contains("event field")
                 && message.contains("unsupported ABI type `uint8`")
+        ));
+
+        let mut invalid_function_param_name = manifest();
+        invalid_function_param_name.abi.functions[0].inputs[0].name = "bad-name".to_string();
+        assert!(matches!(
+            invalid_function_param_name.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("function input")
+                && message.contains("must be a Solidity identifier")
+        ));
+
+        let mut invalid_event_field_name = manifest();
+        invalid_event_field_name.abi.events[0].fields[0].name = "bad-name".to_string();
+        assert!(matches!(
+            invalid_event_field_name.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("event field")
+                && message.contains("must be a Solidity identifier")
         ));
 
         let mut empty_storage_type = manifest();
