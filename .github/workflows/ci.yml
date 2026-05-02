@@ -99,6 +99,8 @@ jobs:
             tama inspect ERC20Lite "$field" >/dev/null
             tama --json inspect ERC20Lite "$field" | python3 -m json.tool >/dev/null
           done
+          tama new TipJar
+          tama check
       - name: Counter fixture e2e
         shell: bash
         run: |
