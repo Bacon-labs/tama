@@ -749,6 +749,7 @@ fn update_project(
                     .to_string(),
             );
         }
+        run_lake_update(root, package)?;
     } else {
         let (_, needs_lake_update) = planned_verity_lake_dependency(root, &config, &lock)?;
         if needs_lake_update && no_lake {
@@ -757,10 +758,13 @@ fn update_project(
                     .to_string(),
             );
         }
+        let lakefile_before = snapshot_lakefile(root);
         sync_verity_lake_dependency(root, &config, &mut lock)?;
-    }
-    if !no_lake {
-        run_lake_update(root, package)?;
+        if !no_lake {
+            if let Err(err) = run_lake_update(root, package) {
+                return Err(restore_lakefile_after_failure(root, lakefile_before, err));
+            }
+        }
     }
     if package.is_none() && !no_forge {
         run_tool(root, "forge", &["update"])?;
@@ -837,9 +841,32 @@ fn mutate_dependencies(
         let lock = tama_config::load_lock(root).map_err(|err| err.to_string())?;
         tama_config::enforce_locked(root, &lock).map_err(|err| err.to_string())?;
     }
+    let lakefile_before = snapshot_lakefile(root);
     edit(root)?;
-    run_lake_update(root, None)?;
+    if let Err(err) = run_lake_update(root, None) {
+        return Err(restore_lakefile_after_failure(root, lakefile_before, err));
+    }
     refresh_lock(root)
+}
+
+fn snapshot_lakefile(root: &Utf8Path) -> Option<String> {
+    tama_common::read_to_string(&root.join("lakefile.toml")).ok()
+}
+
+fn restore_lakefile_after_failure(
+    root: &Utf8Path,
+    lakefile_before: Option<String>,
+    err: String,
+) -> String {
+    let Some(lakefile_before) = lakefile_before else {
+        return err;
+    };
+    match tama_common::write_string(&root.join("lakefile.toml"), &lakefile_before) {
+        Ok(()) => err,
+        Err(restore_err) => {
+            format!("{err}; additionally failed to restore lakefile.toml: {restore_err}")
+        }
+    }
 }
 
 fn refresh_lock(root: &Utf8PathBuf) -> Result<(), String> {
@@ -2048,6 +2075,62 @@ mod tests {
         assert!(!called);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn dependency_mutation_restores_lakefile_when_lake_update_fails() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let lakefile_before = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+
+        let bin = Utf8PathBuf::from_path_buf(dir.path().join("bin")).unwrap();
+        let lake = bin.join("lake");
+        tama_common::write_string(
+            &lake,
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--version\" ]; then\n\
+             echo 'Lake version 5.0.0-src+test (Lean version 4.22.0)'\n\
+             exit 0\n\
+             fi\n\
+             exit 42\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&lake).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&lake, permissions).unwrap();
+        }
+        let mut path_entries = vec![bin.as_std_path().to_path_buf()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        let _path_guard = EnvVarGuard::set("PATH", std::env::join_paths(path_entries).unwrap());
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, "off");
+
+        let err = mutate_dependencies(&root, false, false, |root| {
+            tama_config::upsert_lake_dependency(
+                root,
+                &tama_config::LakeDependency {
+                    name: "mathlib".to_string(),
+                    source: tama_config::LakeDependencySource::Git {
+                        url: "https://github.com/leanprover-community/mathlib4.git".to_string(),
+                        rev: "v4.22.0".to_string(),
+                    },
+                },
+            )
+            .map_err(|err| err.to_string())
+        })
+        .unwrap_err();
+
+        assert!(err.contains("lake update"));
+        assert_eq!(
+            tama_common::read_to_string(&root.join("lakefile.toml")).unwrap(),
+            lakefile_before
+        );
+    }
+
     #[test]
     fn offline_update_requires_external_tools_disabled() {
         let dir = tempfile::tempdir().unwrap();
@@ -2102,6 +2185,50 @@ mod tests {
         assert_eq!(
             tama_common::read_to_string(&root.join("lakefile.toml")).unwrap(),
             lakefile
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_restores_lakefile_when_verity_sync_fails_lake_update() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
+        let old_rev = tama_config::load_lock(&root)
+            .unwrap()
+            .resolved
+            .get("verity_rev")
+            .cloned()
+            .unwrap();
+        let lakefile_before = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+        let config = tama_common::read_to_string(&root.join("tama.toml"))
+            .unwrap()
+            .replace(&format!("verity = \"{old_rev}\""), "verity = \"0.2.0\"");
+        tama_common::write_string(&root.join("tama.toml"), &config).unwrap();
+
+        let bin = Utf8PathBuf::from_path_buf(dir.path().join("bin")).unwrap();
+        let lake = bin.join("lake");
+        tama_common::write_string(&lake, "#!/bin/sh\nexit 42\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&lake).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&lake, permissions).unwrap();
+        }
+        let mut path_entries = vec![bin.as_std_path().to_path_buf()];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_entries.extend(std::env::split_paths(&path));
+        }
+        let _path_guard = EnvVarGuard::set("PATH", std::env::join_paths(path_entries).unwrap());
+        let _cache_guard = EnvVarGuard::set(LAKE_PACKAGE_CACHE_ENV, "off");
+
+        let err = update_project(&root, false, false, false, true, None).unwrap_err();
+
+        assert!(err.contains("lake update"));
+        assert_eq!(
+            tama_common::read_to_string(&root.join("lakefile.toml")).unwrap(),
+            lakefile_before
         );
     }
 
