@@ -245,6 +245,39 @@ fn remediation(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::{OsStr, OsString};
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    struct EnvVarGuard {
+        key: &'static str,
+        old: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+            let old = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, old }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let old = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.old {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     #[test]
     fn parses_solc_version() {
@@ -258,6 +291,54 @@ mod tests {
             parse_expected_version("solc", "v0.8.33").unwrap(),
             Version::new(0, 8, 33)
         );
+    }
+
+    #[test]
+    fn resolve_solc_reports_missing_tool() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let bin = Utf8PathBuf::from_path_buf(dir.path().join("bin")).unwrap();
+        let home = Utf8PathBuf::from_path_buf(dir.path().join("home")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let _solc_guard = EnvVarGuard::unset("TAMA_SOLC");
+        let _path_guard = EnvVarGuard::set("PATH", bin.as_os_str());
+        let _home_guard = EnvVarGuard::set("HOME", home.as_os_str());
+
+        let err = resolve_solc("0.8.33", &root).unwrap_err();
+
+        assert!(matches!(err, Error::MissingTool(name) if name == "solc"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_solc_reports_wrong_version() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let solc = Utf8PathBuf::from_path_buf(dir.path().join("solc")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        tama_common::write_string(
+            &solc,
+            "#!/bin/sh\nprintf '%s\\n' 'Version: 0.8.32+commit.test'\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&solc).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&solc, permissions).unwrap();
+        let _solc_guard = EnvVarGuard::set("TAMA_SOLC", solc.as_os_str());
+
+        let err = resolve_solc("0.8.33", &root).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::ToolVersionMismatch(message)
+                if message.contains("0.8.32") && message.contains("0.8.33")
+        ));
     }
 
     #[test]
