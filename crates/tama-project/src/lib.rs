@@ -81,6 +81,7 @@ pub fn init(path: &Utf8Path, opts: InitOptions) -> Result<()> {
         "lib",
         "script",
         "artifacts/yul",
+        "artifacts/abi",
         "artifacts/bytecode",
         "artifacts/solc-json",
         "artifacts/manifest",
@@ -818,6 +819,7 @@ metadata_hash = "none"
         init(&root, InitOptions::default()).unwrap();
         assert!(root.join("verity/src/ERC20Lite.lean").is_file());
         assert!(root.join("test/verity/ERC20Lite.t.sol").is_file());
+        assert!(root.join("artifacts/abi").is_dir());
         assert!(!root.join("src/Counter.sol").exists());
         assert!(!root.join("test/Counter.t.sol").exists());
         let proof = read_to_string(&root.join("verity/proof/ERC20LiteProof.lean")).unwrap();
