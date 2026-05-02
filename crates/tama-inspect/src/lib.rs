@@ -24,6 +24,8 @@ pub enum Error {
         "missing trust artifacts for {contract}: {path}. Run `tama build` and `tama audit trust-boundary`."
     )]
     MissingTrustArtifact { contract: String, path: Utf8PathBuf },
+    #[error("invalid contract name `{0}`")]
+    InvalidContractName(String),
     #[error("failed to parse JSON artifact {path}: {source}")]
     InvalidJsonArtifact {
         path: Utf8PathBuf,
@@ -65,6 +67,7 @@ pub fn parse_field(raw: &str) -> Option<Field> {
 }
 
 pub fn inspect(root: &Utf8Path, contract: &str, field: Field, json_mode: bool) -> Result<String> {
+    validate_contract_name(contract)?;
     let paths = tama_config::load_config(root)?.paths;
     let manifest_path = root
         .join(paths.out.join("manifest"))
@@ -199,6 +202,17 @@ fn selectors_json(manifest: &ContractManifest) -> Value {
             }))
             .collect::<Vec<_>>()
     })
+}
+
+fn validate_contract_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    let valid = matches!(chars.next(), Some(ch) if ch.is_ascii_uppercase())
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+    if valid {
+        Ok(())
+    } else {
+        Err(Error::InvalidContractName(name.to_string()))
+    }
 }
 
 fn trust_artifacts(
@@ -388,6 +402,16 @@ solc = "0.8.33"
             let out = inspect(&root, "Counter", field, true).unwrap();
             serde_json::from_str::<Value>(&out).unwrap();
         }
+    }
+
+    #[test]
+    fn inspect_rejects_invalid_contract_name_before_loading_project_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("missing-project")).unwrap();
+
+        let err = inspect(&root, "../Counter", Field::Manifest, false).unwrap_err();
+
+        assert!(matches!(err, Error::InvalidContractName(name) if name == "../Counter"));
     }
 
     #[test]
