@@ -291,6 +291,7 @@ pub fn adapt_verity_outputs(
     let storage_report =
         read_json_optional(&root.join(config.paths.out.join("layout-report.json")))?;
     let mut manifests = Vec::new();
+    let mut abi_paths = Vec::new();
     for entry in
         fs::read_dir(&abi_dir).map_err(|source| tama_common::io_error(abi_dir.clone(), source))?
     {
@@ -302,6 +303,10 @@ pub fn adapt_verity_outputs(
         {
             continue;
         }
+        abi_paths.push(path);
+    }
+    abi_paths.sort();
+    for path in abi_paths {
         let contract =
             contract_name_from_abi_path(&path).ok_or_else(|| Error::Adapter(path.to_string()))?;
         if contract_filter.is_some_and(|filter| filter != contract) {
@@ -1982,6 +1987,32 @@ end proof.CounterProof
             Utf8PathBuf::from("artifacts/yul/Counter.yul")
         );
         assert!(root.join("artifacts/manifest/Counter.json").is_file());
+    }
+
+    #[test]
+    fn adapter_orders_manifests_by_abi_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        for contract in ["Zed", "Alpha"] {
+            write_contract_files(&root, contract);
+            tama_common::write_string(
+                &root.join(format!("artifacts/abi/{contract}.abi.json")),
+                "[]\n",
+            )
+            .unwrap();
+            tama_common::write_string(&root.join(format!("artifacts/yul/{contract}.yul")), "{ }\n")
+                .unwrap();
+        }
+
+        let manifests = adapt_verity_outputs(&root, &test_config(), None).unwrap();
+
+        assert_eq!(
+            manifests
+                .iter()
+                .map(|manifest| manifest.contract.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Alpha", "Zed"]
+        );
     }
 
     #[test]

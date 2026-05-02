@@ -113,16 +113,20 @@ fn load_manifests(root: &Utf8Path, manifest_dir: &Utf8Path) -> Result<Vec<Contra
     if !dir.is_dir() {
         return Ok(Vec::new());
     }
-    let mut manifests = Vec::new();
+    let mut paths = Vec::new();
     for entry in fs::read_dir(&dir).map_err(|source| tama_common::io_error(dir.clone(), source))? {
         let entry = entry.map_err(|source| tama_common::io_error(dir.clone(), source))?;
         let path = Utf8PathBuf::from_path_buf(entry.path())
             .map_err(|path| tama_common::Error::NonUtf8Path(path.display().to_string()))?;
         if path.extension() == Some("json") {
-            manifests.push(ContractManifest::load_unvalidated(&path)?);
+            paths.push(path);
         }
     }
-    Ok(manifests)
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| ContractManifest::load_unvalidated(&path).map_err(Error::from))
+        .collect()
 }
 
 fn structure(
@@ -2003,6 +2007,29 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(codes.contains("TAMA_STRUCTURE_MANIFEST_SCHEMA"));
         assert!(codes.contains("TAMA_STRUCTURE_MANIFEST_PATH"));
+    }
+
+    #[test]
+    fn load_manifests_orders_by_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        for contract in ["Zed", "Alpha"] {
+            let mut manifest = counter_manifest();
+            manifest.contract = contract.to_string();
+            manifest
+                .write_pretty(&root.join(format!("artifacts/manifest/{contract}.json")))
+                .unwrap();
+        }
+
+        let manifests = load_manifests(&root, Utf8Path::new("artifacts/manifest")).unwrap();
+
+        assert_eq!(
+            manifests
+                .iter()
+                .map(|manifest| manifest.contract.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Alpha", "Zed"]
+        );
     }
 
     #[test]
