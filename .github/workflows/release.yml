@@ -568,7 +568,15 @@ jobs:
           }
           JSON
           minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
-          TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0
+          TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh \
+            --yes \
+            --offline \
+            --manifest-file "$tmp/manifest.json" \
+            --no-modify-path \
+            --no-install-lean \
+            --no-install-foundry \
+            --no-install-solc \
+            --version 0.1.0
           test -x "$tmp/home/versions/0.1.0/bin/tama"
           test -x "$tmp/home/versions/0.1.0/bin/tamaup"
       - name: Shell installer rejects bad SHA before extraction
