@@ -258,33 +258,52 @@ Example:
 {
   "schema": "tama.contract-manifest.v1",
   "contract": "ERC20Lite",
+  "source": {
+    "implementation": "verity/src/ERC20Lite.lean",
+    "spec": "verity/spec/ERC20LiteSpec.lean",
+    "proof": "verity/proof/ERC20LiteProof.lean"
+  },
   "lean": {
     "implementation_module": "src.ERC20Lite",
     "spec_module": "spec.ERC20LiteSpec",
     "proof_module": "proof.ERC20LiteProof"
   },
-  "abi": [
-    {
-      "name": "balanceOf",
-      "signature": "balanceOf(address)",
-      "selector": "0x70a08231",
-      "mutability": "view",
-      "returns": ["uint256"]
-    },
-    {
-      "name": "transfer",
-      "signature": "transfer(address,uint256)",
-      "selector": "0xa9059cbb",
-      "mutability": "nonpayable",
-      "returns": ["bool"]
-    }
-  ],
+  "abi": {
+    "constructor": null,
+    "functions": [
+      {
+        "name": "balanceOf",
+        "signature": "balanceOf(address)",
+        "selector": "0x70a08231",
+        "visibility": "external",
+        "mutability": "view",
+        "inputs": [{ "name": "account", "type": "address" }],
+        "outputs": [{ "name": "", "type": "uint256" }]
+      },
+      {
+        "name": "transfer",
+        "signature": "transfer(address,uint256)",
+        "selector": "0xa9059cbb",
+        "visibility": "external",
+        "mutability": "nonpayable",
+        "inputs": [
+          { "name": "to", "type": "address" },
+          { "name": "amount", "type": "uint256" }
+        ],
+        "outputs": [{ "name": "", "type": "bool" }]
+      }
+    ],
+    "events": [],
+    "errors": []
+  },
   "storage": [
     {
       "name": "balances",
       "type": "mapping(address => uint256)",
-      "slot": "1",
-      "offset": 0
+      "slot": "0x01",
+      "offset": 0,
+      "width_bytes": 32,
+      "encoding": "mapping"
     }
   ],
   "artifacts": {
@@ -293,13 +312,23 @@ Example:
     "solc_output": "artifacts/solc-json/ERC20Lite.output.json",
     "creation_bytecode": "artifacts/bytecode/ERC20Lite.bin",
     "runtime_bytecode": "artifacts/bytecode/ERC20Lite.runtime.bin",
-    "bytecode_hash": "..."
+    "bytecode_hash": "...",
+    "interface": "src/generated/verity/ERC20LiteIface.sol",
+    "deployer": "src/generated/verity/ERC20LiteDeployer.sol"
   },
   "obligations": [
     {
-      "name": "ERC20LiteProof.transfer_preserves_total_supply",
+      "id": "ERC20Lite.transfer_preserves_total_supply",
+      "name": "transfer_preserves_total_supply",
       "kind": "invariant",
-      "mirror": "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply"
+      "lean_decl": "proof.ERC20LiteProof.transfer_preserves_total_supply",
+      "contract": "ERC20Lite",
+      "function": "transfer",
+      "coverage": {
+        "disposition": "mirror",
+        "path": "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply",
+        "reason": null
+      }
     }
   ]
 }
@@ -620,6 +649,7 @@ Fields:
 - `theorems`
 - `obligations`
 - `mirrors`
+- `trust`
 
 Examples:
 
