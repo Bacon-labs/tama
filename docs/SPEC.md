@@ -665,7 +665,7 @@ Rules:
 4. Tama runs `lake update`.
 5. Tama updates `tama.lock`.
 
-Without `@version`, Tama resolves and pins the repo's default branch head in `tama.lock`.
+Without `@version`, Tama resolves and pins the repo's default branch head in `tama.lock`. Direct git packages from `lake-manifest.json` are recorded under `resolved.lake.<package>.*` so the lock captures Lake's actual resolved commit, not only the requested branch or tag.
 
 If the target repo lacks `tama.toml`, Tama errors and tells the user to add the dependency manually to `lakefile.toml`. Pure Lake libraries are intentionally outside `tama install`'s scope.
 
