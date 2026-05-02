@@ -334,6 +334,31 @@ jobs:
             exit 1
           fi
           test ! -e "$tmp/home"
+      - name: Shell installer refuses remote artifact offline
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tmp="$(mktemp -d)"
+          minisign -G -p "$tmp/minisign.pub" -s "$tmp/minisign.sec" -W
+          pubkey="$(tail -n 1 "$tmp/minisign.pub")"
+          cat > "$tmp/manifest.json" <<JSON
+          {
+            "version": "0.1.0",
+            "artifacts": [
+              {
+                "platform": "linux-x86_64",
+                "url": "https://example.invalid/tama.tar.gz",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+              }
+            ]
+          }
+          JSON
+          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
+          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
+            echo "installer fetched a remote artifact while offline" >&2
+            exit 1
+          fi
+          test ! -e "$tmp/home"
       - name: Shell installer installs local fake artifact
         shell: bash
         run: |

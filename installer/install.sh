@@ -105,7 +105,13 @@ esac
 
 case "$URL" in
   file://*) cp "${URL#file://}" "$TMPDIR/tama.tar.gz" ;;
-  *) fetch "$URL" "$TMPDIR/tama.tar.gz" ;;
+  *)
+    if [ "$OFFLINE" -eq 1 ]; then
+      echo "offline install cannot download artifact" >&2
+      exit 1
+    fi
+    fetch "$URL" "$TMPDIR/tama.tar.gz"
+    ;;
 esac
 
 if command -v sha256sum >/dev/null 2>&1; then
