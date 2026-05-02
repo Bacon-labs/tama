@@ -80,8 +80,8 @@ import re
 import shlex
 import sys
 
-SAFE_VERSION = re.compile(r"^[A-Za-z0-9._+-]+$")
-SAFE_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+SAFE_VERSION = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?$")
+SAFE_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 def require_string(value, label):
     if not isinstance(value, str) or value == "":
@@ -98,7 +98,7 @@ manifest = json.load(open(manifest_path, encoding="utf-8"))
 schema = manifest.get("schema")
 if schema is not None and schema != "tama.release-manifest.v1":
     raise SystemExit(f"unsupported release manifest schema: {schema}")
-if not SAFE_VERSION.fullmatch(version):
+if not SAFE_VERSION.fullmatch(version) or ".." in version:
     raise SystemExit(f"unsafe requested release version: {version}")
 if manifest.get("releases"):
     if version in ("stable", "nightly"):
@@ -112,13 +112,13 @@ else:
     selected = manifest["version"] if version == "stable" else version
     releases = [{"version": manifest["version"], "artifacts": manifest["artifacts"]}]
 selected = require_string(selected, "selected version")
-if not SAFE_VERSION.fullmatch(selected):
+if not SAFE_VERSION.fullmatch(selected) or ".." in selected:
     raise SystemExit(f"unsafe release version: {selected}")
 for release in releases:
     release_version = require_string(release.get("version"), "release.version")
     if release_version != selected:
         continue
-    if not SAFE_VERSION.fullmatch(release_version):
+    if not SAFE_VERSION.fullmatch(release_version) or ".." in release_version:
         raise SystemExit(f"unsafe release version: {release_version}")
     for artifact in release.get("artifacts", []):
         artifact_platform = require_string(artifact.get("platform"), "artifact.platform")
@@ -129,14 +129,15 @@ for release in releases:
                 raise SystemExit(f"invalid artifact SHA-256 for {platform} {selected}")
             emit_env("VERSION", release_version)
             emit_env("URL", artifact_url)
-            emit_env("SHA256", artifact_sha256.lower())
+            emit_env("SHA256", artifact_sha256)
             raise SystemExit(0)
 raise SystemExit(f"no artifact for {platform} {version}")
 PY
 . "$INSTALL_TMPDIR/artifact.env"
 
 case "$VERSION" in
-  ""|*[!A-Za-z0-9._+-]*) echo "unsafe release version: $VERSION" >&2; exit 1 ;;
+  ""|*[!A-Za-z0-9._+-]*|.*|*.) echo "unsafe release version: $VERSION" >&2; exit 1 ;;
+  *..*) echo "unsafe release version: $VERSION" >&2; exit 1 ;;
 esac
 
 case "$URL" in

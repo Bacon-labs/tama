@@ -606,8 +606,8 @@ jobs:
               "artifacts": sorted(artifacts, key=lambda item: item["platform"]),
           }
 
-          SAFE_VERSION = re.compile(r"^[A-Za-z0-9._+-]+$")
-          SAFE_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+          SAFE_VERSION = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?$")
+          SAFE_SHA256 = re.compile(r"^[0-9a-f]{64}$")
           SAFE_PLATFORM = re.compile(r"^[A-Za-z0-9._+-]+$")
 
           def require_string(value, label):
@@ -619,7 +619,7 @@ jobs:
 
           def validate_release(release):
               release_version = require_string(release.get("version"), "release.version")
-              if not SAFE_VERSION.fullmatch(release_version):
+              if not SAFE_VERSION.fullmatch(release_version) or ".." in release_version:
                   raise SystemExit(f"unsafe release version: {release_version}")
               for artifact in release.get("artifacts", []):
                   platform = require_string(artifact.get("platform"), "artifact.platform")
