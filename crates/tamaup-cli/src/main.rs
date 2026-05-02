@@ -480,7 +480,7 @@ fn bootstrap_toolchain(opts: BootstrapOptions) -> Result<(), String> {
 fn detect_toolchain_presence() -> ToolchainPresence {
     ToolchainPresence {
         lean: command_version_matches("lean", DEFAULT_LEAN_VERSION),
-        lake: command_exists("lake"),
+        lake: command_version_matches("lake", DEFAULT_LEAN_VERSION),
         forge: command_exists("forge"),
         solc: command_version_matches("solc", DEFAULT_SOLC_VERSION),
     }
@@ -855,8 +855,16 @@ mod tests {
             DEFAULT_LEAN_VERSION
         ));
         assert!(version_output_matches(
+            "Lake version 5.0.0-src+abc123 (Lean version 4.22.0)",
+            DEFAULT_LEAN_VERSION
+        ));
+        assert!(version_output_matches(
             "Version: 0.8.33+commit.64118f21",
             DEFAULT_SOLC_VERSION
+        ));
+        assert!(!version_output_matches(
+            "Lake version 5.0.0-src+abc123 (Lean version 4.29.1)",
+            DEFAULT_LEAN_VERSION
         ));
         assert!(!version_output_matches(
             "Version: 0.8.330+commit.64118f21",
