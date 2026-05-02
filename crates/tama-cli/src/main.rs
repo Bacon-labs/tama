@@ -758,11 +758,11 @@ fn update_project(
                     .to_string(),
             );
         }
-        let lakefile_before = snapshot_lakefile(root);
+        let snapshot = snapshot_dependency_files(root);
         sync_verity_lake_dependency(root, &config, &mut lock)?;
         if !no_lake {
             if let Err(err) = run_lake_update(root, package) {
-                return Err(restore_lakefile_after_failure(root, lakefile_before, err));
+                return Err(restore_dependency_files_after_failure(root, snapshot, err));
             }
         }
     }
@@ -841,31 +841,73 @@ fn mutate_dependencies(
         let lock = tama_config::load_lock(root).map_err(|err| err.to_string())?;
         tama_config::enforce_locked(root, &lock).map_err(|err| err.to_string())?;
     }
-    let lakefile_before = snapshot_lakefile(root);
+    let snapshot = snapshot_dependency_files(root);
     edit(root)?;
     if let Err(err) = run_lake_update(root, None) {
-        return Err(restore_lakefile_after_failure(root, lakefile_before, err));
+        return Err(restore_dependency_files_after_failure(root, snapshot, err));
     }
     refresh_lock(root)
 }
 
-fn snapshot_lakefile(root: &Utf8Path) -> Option<String> {
-    tama_common::read_to_string(&root.join("lakefile.toml")).ok()
+struct DependencyFileSnapshots {
+    lakefile: FileSnapshot,
+    lake_manifest: FileSnapshot,
 }
 
-fn restore_lakefile_after_failure(
+enum FileSnapshot {
+    Present(String),
+    Missing,
+}
+
+fn snapshot_dependency_files(root: &Utf8Path) -> DependencyFileSnapshots {
+    DependencyFileSnapshots {
+        lakefile: snapshot_file(root, "lakefile.toml"),
+        lake_manifest: snapshot_file(root, "lake-manifest.json"),
+    }
+}
+
+fn snapshot_file(root: &Utf8Path, path: &str) -> FileSnapshot {
+    match tama_common::read_to_string(&root.join(path)) {
+        Ok(contents) => FileSnapshot::Present(contents),
+        Err(_) => FileSnapshot::Missing,
+    }
+}
+
+fn restore_dependency_files_after_failure(
     root: &Utf8Path,
-    lakefile_before: Option<String>,
+    snapshot: DependencyFileSnapshots,
     err: String,
 ) -> String {
-    let Some(lakefile_before) = lakefile_before else {
-        return err;
-    };
-    match tama_common::write_string(&root.join("lakefile.toml"), &lakefile_before) {
-        Ok(()) => err,
-        Err(restore_err) => {
-            format!("{err}; additionally failed to restore lakefile.toml: {restore_err}")
+    let mut restore_errors = Vec::new();
+    for (path, snapshot) in [
+        ("lakefile.toml", snapshot.lakefile),
+        ("lake-manifest.json", snapshot.lake_manifest),
+    ] {
+        if let Err(restore_err) = restore_file(root, path, snapshot) {
+            restore_errors.push(restore_err);
         }
+    }
+    if restore_errors.is_empty() {
+        err
+    } else {
+        format!(
+            "{err}; additionally failed to restore dependency files: {}",
+            restore_errors.join("; ")
+        )
+    }
+}
+
+fn restore_file(root: &Utf8Path, path: &str, snapshot: FileSnapshot) -> Result<(), String> {
+    let path = root.join(path);
+    match snapshot {
+        FileSnapshot::Present(contents) => {
+            tama_common::write_string(&path, &contents).map_err(|err| err.to_string())
+        }
+        FileSnapshot::Missing => match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(format!("failed to remove `{path}`: {err}")),
+        },
     }
 }
 
@@ -2083,6 +2125,8 @@ mod tests {
         let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
         tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
         let lakefile_before = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+        let manifest_before =
+            tama_common::read_to_string(&root.join("lake-manifest.json")).unwrap();
 
         let bin = Utf8PathBuf::from_path_buf(dir.path().join("bin")).unwrap();
         let lake = bin.join("lake");
@@ -2093,6 +2137,7 @@ mod tests {
              echo 'Lake version 5.0.0-src+test (Lean version 4.22.0)'\n\
              exit 0\n\
              fi\n\
+             printf '%s\\n' '{\"partial\":true}' > lake-manifest.json\n\
              exit 42\n",
         )
         .unwrap();
@@ -2128,6 +2173,10 @@ mod tests {
         assert_eq!(
             tama_common::read_to_string(&root.join("lakefile.toml")).unwrap(),
             lakefile_before
+        );
+        assert_eq!(
+            tama_common::read_to_string(&root.join("lake-manifest.json")).unwrap(),
+            manifest_before
         );
     }
 
@@ -2202,6 +2251,8 @@ mod tests {
             .cloned()
             .unwrap();
         let lakefile_before = tama_common::read_to_string(&root.join("lakefile.toml")).unwrap();
+        let manifest_before =
+            tama_common::read_to_string(&root.join("lake-manifest.json")).unwrap();
         let config = tama_common::read_to_string(&root.join("tama.toml"))
             .unwrap()
             .replace(&format!("verity = \"{old_rev}\""), "verity = \"0.2.0\"");
@@ -2209,7 +2260,11 @@ mod tests {
 
         let bin = Utf8PathBuf::from_path_buf(dir.path().join("bin")).unwrap();
         let lake = bin.join("lake");
-        tama_common::write_string(&lake, "#!/bin/sh\nexit 42\n").unwrap();
+        tama_common::write_string(
+            &lake,
+            "#!/bin/sh\nprintf '%s\\n' '{\"partial\":true}' > lake-manifest.json\nexit 42\n",
+        )
+        .unwrap();
         {
             use std::os::unix::fs::PermissionsExt;
             let mut permissions = std::fs::metadata(&lake).unwrap().permissions();
@@ -2229,6 +2284,10 @@ mod tests {
         assert_eq!(
             tama_common::read_to_string(&root.join("lakefile.toml")).unwrap(),
             lakefile_before
+        );
+        assert_eq!(
+            tama_common::read_to_string(&root.join("lake-manifest.json")).unwrap(),
+            manifest_before
         );
     }
 
@@ -2282,6 +2341,7 @@ mod tests {
 
     #[test]
     fn doctor_fix_refreshes_lock_inputs() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
         tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
