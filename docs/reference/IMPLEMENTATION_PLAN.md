@@ -961,7 +961,7 @@ trust
 --offline
 --json
 --verbose / -v / -vv
---no-color
+--color <auto|always|never>
 ```
 
 2. Implement commands:
@@ -970,7 +970,9 @@ trust
    - `check`
    - `clean [--deep]`
 3. `--root` changes project root resolution for project commands.
-4. `--no-color` sets `NO_COLOR=1` for Tama diagnostics.
+4. `--color` controls colored output. `auto` (default) emits color when the
+   destination is a terminal and `NO_COLOR` is unset. `--no-color` is accepted
+   as a deprecated alias for `--color=never`. `--json` always disables color.
 5. `check` calls only `lake build TamaSrc TamaSpec`.
 6. `clean` removes configured artifact dirs.
 

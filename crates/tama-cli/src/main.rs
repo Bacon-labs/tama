@@ -7,6 +7,10 @@ use camino::{Utf8Path, Utf8PathBuf};
 use clap::CommandFactory;
 use clap::{ArgAction, Args, Parser, Subcommand};
 
+mod style;
+
+use style::{paint, ColorChoice, Palette, Stream};
+
 const LAKE_PACKAGE_CACHE_ENV: &str = "TAMA_LAKE_PACKAGE_CACHE";
 const FORGE_STD_DEPENDENCY: &str = "foundry-rs/forge-std@v1.16.1";
 const DEFAULT_VERITY_GIT: &str = "https://github.com/lfglabs-dev/verity.git";
@@ -147,7 +151,16 @@ struct Cli {
         help = "Increase Tama-owned logging verbosity"
     )]
     verbose: u8,
-    #[arg(long, global = true, help = "Disable colored output")]
+    #[arg(
+        long,
+        global = true,
+        value_name = "WHEN",
+        value_enum,
+        default_value_t = ColorChoice::Auto,
+        help = "Control colored output: auto, always, never"
+    )]
+    color: ColorChoice,
+    #[arg(long, global = true, hide = true, help = "Alias for --color=never")]
     no_color: bool,
     #[command(subcommand)]
     command: Command,
@@ -310,19 +323,21 @@ struct InspectArgs {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
     if cli.no_color {
-        std::env::set_var("NO_COLOR", "1");
+        cli.color = ColorChoice::Never;
     }
+    style::apply_env(cli.color, cli.json);
     tama_common::init_logging(
         cli.json,
         matches!(cli.command, Command::Test(_)),
         cli.verbose,
     );
+    let stderr_palette = Palette::new(style::resolve(cli.color, cli.json, Stream::Stderr));
     match run(cli) {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("error: {err}");
+            anstream::eprintln!("{} {err}", paint(stderr_palette.error_prefix, "error:"));
             ExitCode::from(1)
         }
     }
@@ -331,23 +346,24 @@ fn main() -> ExitCode {
 #[derive(Clone, Copy)]
 struct CommandProgress {
     enabled: bool,
+    palette: Palette,
 }
 
 impl CommandProgress {
-    fn new(enabled: bool) -> Self {
-        Self { enabled }
+    fn new(enabled: bool, palette: Palette) -> Self {
+        Self { enabled, palette }
     }
 
     fn scope(&self, title: &str, rows: &[(&str, String)]) {
         if !self.enabled {
             return;
         }
-        println!("{title}:");
+        anstream::println!("{}:", paint(self.palette.header, title));
         for (label, value) in rows {
-            println!("  {label}: {value}");
+            anstream::println!("  {}: {value}", paint(self.palette.dim, label));
         }
-        println!();
-        println!("Steps:");
+        anstream::println!();
+        anstream::println!("{}", paint(self.palette.header, "Steps:"));
     }
 
     fn run<T, F>(&self, name: &str, running: &str, success: &str, f: F) -> Result<T, String>
@@ -368,33 +384,35 @@ impl CommandProgress {
     }
 
     fn start(&self, name: &str, detail: &str) {
-        self.line("run", name, detail);
+        self.line("run", self.palette.run, name, detail);
     }
 
     fn ok(&self, name: &str, detail: &str) {
-        self.line("ok", name, detail);
+        self.line("ok", self.palette.ok, name, detail);
     }
 
     fn skip(&self, name: &str, detail: &str) {
-        self.line("skip", name, detail);
+        self.line("skip", self.palette.skip, name, detail);
     }
 
     fn fail(&self, name: &str, detail: &str) {
-        self.line("fail", name, detail);
+        self.line("fail", self.palette.fail, name, detail);
     }
 
-    fn line(&self, status: &str, name: &str, detail: &str) {
+    fn line(&self, status: &str, style: anstyle::Style, name: &str, detail: &str) {
         if self.enabled {
-            println!("{}", command_progress_line(status, name, detail));
+            anstream::println!("{}", command_progress_line(status, style, name, detail));
         }
     }
 }
 
-fn command_progress_line(status: &str, name: &str, detail: &str) -> String {
-    format!("  {status:<4} {name:<12} {detail}")
+fn command_progress_line(status: &str, style: anstyle::Style, name: &str, detail: &str) -> String {
+    let padded = format!("{status:<4}");
+    format!("  {} {name:<12} {detail}", paint(style, padded))
 }
 
 fn run(cli: Cli) -> Result<ExitCode, String> {
+    let palette = Palette::new(style::resolve(cli.color, cli.json, Stream::Stdout));
     match cli.command {
         Command::Init { path } => {
             let path = path.unwrap_or_else(|| Utf8PathBuf::from("."));
@@ -403,7 +421,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 .filter(|name| !name.is_empty())
                 .unwrap_or("my-protocol")
                 .to_string();
-            let progress = CommandProgress::new(!cli.json);
+            let progress = CommandProgress::new(!cli.json, palette);
             progress.scope(
                 "Init scope",
                 &[
@@ -431,21 +449,25 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 },
             )?;
             finalize_init(&path, cli.offline, progress)?;
-            println!("Initialized Tama ERC20Lite starter at {path}");
+            anstream::println!(
+                "{} {}",
+                paint(palette.ok, "Initialized Tama ERC20Lite starter at"),
+                paint(palette.path, &path),
+            );
             if cli.offline {
                 for line in offline_init_instructions() {
-                    println!("{line}");
+                    anstream::println!("{line}");
                 }
             }
             for line in init_next_steps(&path) {
-                println!("{line}");
+                anstream::println!("{line}");
             }
             Ok(ExitCode::SUCCESS)
         }
         Command::New { name } => {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
-            let progress = CommandProgress::new(!cli.json);
+            let progress = CommandProgress::new(!cli.json, palette);
             progress.scope(
                 "New scope",
                 &[
@@ -463,13 +485,17 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 "contract scaffold written",
                 || tama_project::scaffold_contract(&root, &name).map_err(|err| err.to_string()),
             )?;
-            println!("Created Verity contract scaffold {name}");
+            anstream::println!(
+                "{} {}",
+                paint(palette.ok, "Created Verity contract scaffold"),
+                paint(palette.path, &name),
+            );
             Ok(ExitCode::SUCCESS)
         }
         Command::Check => {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
-            let progress = CommandProgress::new(!cli.json);
+            let progress = CommandProgress::new(!cli.json, palette);
             progress.scope(
                 "Check scope",
                 &[
@@ -494,11 +520,14 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                         .map_err(|err| err.to_string())
                 },
             )?;
-            refresh_lake_package_cache_after_success(&root);
+            refresh_lake_package_cache_after_success(&root, &palette);
             if cli.json {
-                println!("{}", check_status_json()?);
+                anstream::println!("{}", check_status_json()?);
             } else {
-                println!("Check completed: TamaSrc and TamaSpec accepted");
+                anstream::println!(
+                    "{} TamaSrc and TamaSpec accepted",
+                    paint(palette.ok, "Check completed:"),
+                );
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -517,13 +546,17 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     verbose: cli.verbose,
                 })
                 .map_err(|err| err.to_string())?;
-            refresh_lake_package_cache_after_success(&root);
+            refresh_lake_package_cache_after_success(&root, &palette);
             if cli.json {
-                println!("{}", build_status_json(&status)?);
+                anstream::println!("{}", build_status_json(&status)?);
             } else {
-                println!(
-                    "Build completed: {}",
-                    format_count(status.manifests.len(), "manifest", "manifests")
+                anstream::println!(
+                    "{} {}",
+                    paint(palette.ok, "Build completed:"),
+                    paint(
+                        palette.count,
+                        format_count(status.manifests.len(), "manifest", "manifests"),
+                    ),
                 );
             }
             Ok(ExitCode::SUCCESS)
@@ -559,14 +592,14 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             )
             .map_err(|err| err.to_string())?;
             if cli.json {
-                println!(
+                anstream::println!(
                     "{}",
                     serde_json::to_string_pretty(&report).map_err(|err| err.to_string())?
                 );
             } else {
-                println!(
+                anstream::println!(
                     "{}",
-                    format_audit_report(&root, &report, args.deny_warnings)
+                    format_audit_report(&root, &report, args.deny_warnings, &palette)
                 );
             }
             Ok(if report.has_failures(args.deny_warnings) {
@@ -580,7 +613,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             enforce_locked_if_requested(&root, cli.locked)?;
             let field = tama_inspect::parse_field(&args.field)
                 .ok_or_else(|| format!("unknown inspect field `{}`", args.field))?;
-            print!(
+            anstream::print!(
                 "{}",
                 tama_inspect::inspect(&root, &args.contract, field, cli.json)
                     .map_err(|err| err.to_string())?
@@ -590,7 +623,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Clean { deep } => {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
-            let progress = CommandProgress::new(!cli.json);
+            let progress = CommandProgress::new(!cli.json, palette);
             progress.scope(
                 "Clean scope",
                 &[
@@ -613,7 +646,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 || clean(&root, deep),
             )?;
             if !cli.json {
-                println!("{}", format_clean_report(&report));
+                anstream::println!("{}", format_clean_report(&report, &palette));
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -625,7 +658,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     enforce_locked_if_requested(project_root, true)?;
                 }
             }
-            let progress = CommandProgress::new(!cli.json);
+            let progress = CommandProgress::new(!cli.json, palette);
             progress.scope(
                 "Doctor scope",
                 &[
@@ -652,13 +685,13 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             }
             let report = doctor_report(project.as_ref())?;
             if cli.json {
-                println!(
+                anstream::println!(
                     "{}",
                     serde_json::to_string_pretty(&report).map_err(|err| err.to_string())?
                 );
             } else {
                 progress.ok("report", "diagnostics collected");
-                println!("{}", format_doctor_report(&report, fix));
+                anstream::println!("{}", format_doctor_report(&report, fix, &palette));
             }
             Ok(if doctor_report_has_failures(&report) {
                 ExitCode::from(1)
@@ -668,7 +701,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Install { package } => {
             let root = project_root(cli.root)?;
-            let progress = CommandProgress::new(!cli.json);
+            let progress = CommandProgress::new(!cli.json, palette);
             progress.scope(
                 "Install scope",
                 &[
@@ -686,12 +719,16 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 "dependency installed",
                 || install_package(&root, &package, cli.offline, cli.locked),
             )?;
-            println!("Installed Tama dependency {package}");
+            anstream::println!(
+                "{} {}",
+                paint(palette.ok, "Installed Tama dependency"),
+                paint(palette.path, &package),
+            );
             Ok(ExitCode::SUCCESS)
         }
         Command::Remove { package } => {
             let root = project_root(cli.root)?;
-            let progress = CommandProgress::new(!cli.json);
+            let progress = CommandProgress::new(!cli.json, palette);
             progress.scope(
                 "Remove scope",
                 &[
@@ -714,7 +751,11 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     })
                 },
             )?;
-            println!("Removed Tama dependency {package}");
+            anstream::println!(
+                "{} {}",
+                paint(palette.ok, "Removed Tama dependency"),
+                paint(palette.path, &package),
+            );
             Ok(ExitCode::SUCCESS)
         }
         Command::Update {
@@ -723,7 +764,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             package,
         } => {
             let root = project_root(cli.root)?;
-            let progress = CommandProgress::new(!cli.json);
+            let progress = CommandProgress::new(!cli.json, palette);
             progress.scope(
                 "Update scope",
                 &[
@@ -757,7 +798,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     )
                 },
             )?;
-            println!("Updated Tama project lock state");
+            anstream::println!("{}", paint(palette.ok, "Updated Tama project lock state"),);
             Ok(ExitCode::SUCCESS)
         }
     }
@@ -854,24 +895,35 @@ fn doctor_report_has_failures(report: &tama_toolchain::DoctorReport) -> bool {
     }) || report.lock_current == Some(false)
 }
 
-fn format_doctor_report(report: &tama_toolchain::DoctorReport, fixed: bool) -> String {
+fn format_doctor_report(
+    report: &tama_toolchain::DoctorReport,
+    fixed: bool,
+    palette: &Palette,
+) -> String {
     let mut out = String::new();
-    out.push_str("Checks:\n");
+    out.push_str(&format!("{}\n", paint(palette.header, "Checks:")));
     let mut checks = 0usize;
     let mut failures = 0usize;
     for tool in &report.tools {
         checks += 1;
         match tool {
             tama_toolchain::ToolStatus::Ok(tool) => {
+                let name = format!("{:<15}", tool.name);
                 out.push_str(&format!(
-                    "  ok   {:<15} {}\n",
-                    tool.name,
-                    concise_tool_detail(tool)
+                    "  {} {} {}\n",
+                    paint(palette.ok, "ok  "),
+                    paint(palette.header, name),
+                    concise_tool_detail(tool),
                 ));
             }
             tama_toolchain::ToolStatus::Missing { name, remediation } => {
                 failures += 1;
-                out.push_str(&format!("  fail {name:<15} {remediation}\n"));
+                let name = format!("{name:<15}");
+                out.push_str(&format!(
+                    "  {} {} {remediation}\n",
+                    paint(palette.fail, "fail"),
+                    paint(palette.header, name),
+                ));
             }
             tama_toolchain::ToolStatus::Incompatible {
                 name,
@@ -879,8 +931,11 @@ fn format_doctor_report(report: &tama_toolchain::DoctorReport, fixed: bool) -> S
                 expected,
             } => {
                 failures += 1;
+                let name = format!("{name:<15}");
                 out.push_str(&format!(
-                    "  fail {name:<15} found {found}, expected {expected}\n"
+                    "  {} {} found {found}, expected {expected}\n",
+                    paint(palette.fail, "fail"),
+                    paint(palette.header, name),
                 ));
             }
         }
@@ -888,32 +943,46 @@ fn format_doctor_report(report: &tama_toolchain::DoctorReport, fixed: bool) -> S
     if let Some(lock_current) = report.lock_current {
         checks += 1;
         if lock_current {
-            out.push_str("  ok   lock            current\n");
+            out.push_str(&format!(
+                "  {} {} current\n",
+                paint(palette.ok, "ok  "),
+                paint(palette.header, "lock           "),
+            ));
         } else {
             failures += 1;
-            out.push_str("  fail lock            stale or unreadable\n");
+            out.push_str(&format!(
+                "  {} {} stale or unreadable\n",
+                paint(palette.fail, "fail"),
+                paint(palette.header, "lock           "),
+            ));
         }
     }
     if !report.notes.is_empty() {
-        out.push_str("\nNotes:\n");
+        out.push_str(&format!("\n{}\n", paint(palette.header, "Notes:")));
         for note in &report.notes {
             out.push_str(&format!("  {note}\n"));
         }
     }
     out.push('\n');
-    if failures == 0 {
+    let summary_style = if failures == 0 {
+        palette.ok
+    } else {
+        palette.fail
+    };
+    let prefix = if failures == 0 {
         if fixed {
-            out.push_str("Doctor passed after repair: ");
+            "Doctor passed after repair:"
         } else {
-            out.push_str("Doctor passed: ");
+            "Doctor passed:"
         }
     } else {
-        out.push_str("Doctor found issues: ");
-    }
+        "Doctor found issues:"
+    };
     out.push_str(&format!(
-        "{}, {}",
-        format_count(checks, "check", "checks"),
-        format_count(failures, "issue", "issues")
+        "{} {}, {}",
+        paint(summary_style, prefix),
+        paint(palette.count, format_count(checks, "check", "checks")),
+        paint(palette.count, format_count(failures, "issue", "issues")),
     ));
     out
 }
@@ -1631,9 +1700,12 @@ fn prepare_lake_packages_for_build(root: &Utf8Path, offline: bool) -> Result<(),
     Ok(())
 }
 
-fn refresh_lake_package_cache_after_success(root: &Utf8Path) {
+fn refresh_lake_package_cache_after_success(root: &Utf8Path, palette: &Palette) {
     if let Err(err) = try_refresh_lake_package_cache_after_success(root) {
-        eprintln!("warning: failed to refresh Lake package cache: {err}");
+        anstream::eprintln!(
+            "{} failed to refresh Lake package cache: {err}",
+            paint(palette.warning_prefix, "warning:"),
+        );
     }
 }
 
@@ -2153,77 +2225,125 @@ fn format_audit_report(
     root: &Utf8Path,
     report: &tama_audit::AuditReport,
     deny_warnings: bool,
+    palette: &Palette,
 ) -> String {
     let mut out = String::new();
-    out.push_str("Audit scope:\n");
-    out.push_str(&format!("  project: {root}\n"));
-    out.push_str(&format!("  manifests: {}\n", report.summary.manifest_dir));
+    out.push_str(&format!("{}\n", paint(palette.header, "Audit scope:")));
+    out.push_str(&format!("  {}: {root}\n", paint(palette.dim, "project")));
     out.push_str(&format!(
-        "  contracts: {}\n",
-        audit_contracts_summary(&report.summary.contracts)
+        "  {}: {}\n",
+        paint(palette.dim, "manifests"),
+        report.summary.manifest_dir,
     ));
     out.push_str(&format!(
-        "  warnings: {}\n",
-        if deny_warnings { "fail" } else { "report" }
+        "  {}: {}\n",
+        paint(palette.dim, "contracts"),
+        audit_contracts_summary(&report.summary.contracts),
     ));
-    out.push_str("\nChecks:\n");
+    out.push_str(&format!(
+        "  {}: {}\n",
+        paint(palette.dim, "warnings"),
+        if deny_warnings { "fail" } else { "report" },
+    ));
+    out.push_str(&format!("\n{}\n", paint(palette.header, "Checks:")));
     for check in &report.summary.checks {
         let (errors, warnings, infos) = audit_issue_counts(report, *check);
         let status = audit_check_status(errors, warnings, infos, deny_warnings);
+        let style = audit_status_style(status, palette);
+        let padded_status = format!("{status:<4}");
         out.push_str(&format!(
-            "  {status:<4} {:<15} {}{}\n",
+            "  {} {:<15} {}{}\n",
+            paint(style, padded_status),
             check.as_str(),
             check.description(),
-            audit_count_suffix(errors, warnings, infos)
+            audit_count_suffix(errors, warnings, infos),
         ));
     }
 
     if !report.issues.is_empty() {
         out.push_str(&format!(
-            "\nFindings ({}):\n",
-            format_count(report.issues.len(), "issue", "issues")
+            "\n{} ({}):\n",
+            paint(palette.header, "Findings"),
+            paint(
+                palette.count,
+                format_count(report.issues.len(), "issue", "issues")
+            ),
         ));
         for issue in &report.issues {
+            let severity_style = severity_style(issue.severity, palette);
             out.push_str(&format!(
                 "  {} {} {}",
-                severity_label(issue.severity),
+                paint(severity_style, severity_label(issue.severity)),
                 issue.check,
-                issue.code
+                issue.code,
             ));
             if let Some(contract) = &issue.contract {
                 out.push_str(&format!(" ({contract})"));
             }
             out.push_str(&format!(": {}\n", issue.message));
             if let Some(path) = &issue.path {
-                out.push_str(&format!("    path: {path}\n"));
+                out.push_str(&format!("    {}: {path}\n", paint(palette.dim, "path"),));
             }
         }
     }
 
     let (errors, warnings, infos) = total_audit_issue_counts(report);
     out.push('\n');
-    if report.has_failures(deny_warnings) {
-        out.push_str("Audit failed: ");
+    let (summary_prefix, summary_style) = if report.has_failures(deny_warnings) {
+        ("Audit failed:", palette.fail)
     } else if warnings > 0 {
-        out.push_str("Audit passed with warnings: ");
+        ("Audit passed with warnings:", palette.warn)
     } else {
-        out.push_str("Audit passed: ");
-    }
+        ("Audit passed:", palette.ok)
+    };
+    out.push_str(&format!("{} ", paint(summary_style, summary_prefix)));
     out.push_str(&format!(
         "{}, {}, {}",
-        format_count(report.summary.checks.len(), "check", "checks"),
-        format_count(report.summary.contracts.len(), "contract", "contracts"),
-        format_count(report.issues.len(), "issue", "issues")
+        paint(
+            palette.count,
+            format_count(report.summary.checks.len(), "check", "checks")
+        ),
+        paint(
+            palette.count,
+            format_count(report.summary.contracts.len(), "contract", "contracts")
+        ),
+        paint(
+            palette.count,
+            format_count(report.issues.len(), "issue", "issues")
+        ),
     ));
     if !report.issues.is_empty() {
         out.push_str(&format!(
             " ({}, {}, {})",
-            format_count(errors, "error", "errors"),
-            format_count(warnings, "warning", "warnings"),
-            format_count(infos, "info", "info")
+            paint(
+                palette.severity_error,
+                format_count(errors, "error", "errors")
+            ),
+            paint(
+                palette.severity_warning,
+                format_count(warnings, "warning", "warnings")
+            ),
+            paint(palette.severity_info, format_count(infos, "info", "info")),
         ));
     }
     out
+}
+
+fn audit_status_style(status: &str, palette: &Palette) -> anstyle::Style {
+    match status {
+        "fail" => palette.fail,
+        "warn" => palette.warn,
+        "info" => palette.info,
+        _ => palette.ok,
+    }
+}
+
+fn severity_style(severity: tama_audit::Severity, palette: &Palette) -> anstyle::Style {
+    match severity {
+        tama_audit::Severity::Error => palette.severity_error,
+        tama_audit::Severity::Warning => palette.severity_warning,
+        tama_audit::Severity::Info => palette.severity_info,
+    }
 }
 
 fn audit_contracts_summary(contracts: &[String]) -> String {
@@ -2423,7 +2543,7 @@ fn record_clean_entry(report: &mut CleanReport, path: Utf8PathBuf, removed: bool
     });
 }
 
-fn format_clean_report(report: &CleanReport) -> String {
+fn format_clean_report(report: &CleanReport, palette: &Palette) -> String {
     let removed = report
         .entries
         .iter()
@@ -2431,22 +2551,34 @@ fn format_clean_report(report: &CleanReport) -> String {
         .count();
     let clean = report.entries.len().saturating_sub(removed);
     let mut out = String::new();
-    out.push_str("Cleaned:\n");
+    out.push_str(&format!("{}\n", paint(palette.header, "Cleaned:")));
     for entry in &report.entries {
-        let status = match entry.action {
-            CleanAction::Removed => "ok",
-            CleanAction::AlreadyClean => "skip",
+        let (status, style) = match entry.action {
+            CleanAction::Removed => ("ok  ", palette.ok),
+            CleanAction::AlreadyClean => ("skip", palette.skip),
         };
         let detail = match entry.action {
             CleanAction::Removed => "removed",
             CleanAction::AlreadyClean => "already clean",
         };
-        out.push_str(&format!("  {status:<4} {:<32} {detail}\n", entry.path));
+        let path = format!("{:<32}", entry.path);
+        out.push_str(&format!(
+            "  {} {} {detail}\n",
+            paint(style, status),
+            paint(palette.path, path),
+        ));
     }
     out.push_str(&format!(
-        "Clean completed: {}, {}",
-        format_count(removed, "target removed", "targets removed"),
-        format_count(clean, "already clean", "already clean")
+        "{} {}, {}",
+        paint(palette.header, "Clean completed:"),
+        paint(
+            palette.count,
+            format_count(removed, "target removed", "targets removed")
+        ),
+        paint(
+            palette.count,
+            format_count(clean, "already clean", "already clean")
+        ),
     ));
     out
 }
@@ -2831,7 +2963,12 @@ mod tests {
             },
         };
 
-        let output = format_audit_report(Utf8Path::new("/tmp/project"), &report, false);
+        let output = format_audit_report(
+            Utf8Path::new("/tmp/project"),
+            &report,
+            false,
+            &Palette::plain(),
+        );
 
         assert!(output.contains("Audit scope:"));
         assert!(output.contains("project: /tmp/project"));
@@ -2857,7 +2994,12 @@ mod tests {
             },
         };
 
-        let output = format_audit_report(Utf8Path::new("/tmp/project"), &report, false);
+        let output = format_audit_report(
+            Utf8Path::new("/tmp/project"),
+            &report,
+            false,
+            &Palette::plain(),
+        );
 
         assert!(output.contains("ok   structure"));
         assert!(output.contains("ok   trust-boundary"));
@@ -2867,12 +3009,13 @@ mod tests {
 
     #[test]
     fn command_progress_line_is_scan_friendly() {
+        let plain = anstyle::Style::new();
         assert_eq!(
-            command_progress_line("run", "cache", "prepare Lake package checkouts"),
+            command_progress_line("run", plain, "cache", "prepare Lake package checkouts"),
             "  run  cache        prepare Lake package checkouts"
         );
         assert_eq!(
-            command_progress_line("skip", "forge", "offline; forge-std not installed"),
+            command_progress_line("skip", plain, "forge", "offline; forge-std not installed"),
             "  skip forge        offline; forge-std not installed"
         );
     }
@@ -2901,7 +3044,7 @@ mod tests {
             notes: Vec::new(),
         };
 
-        let output = format_doctor_report(&report, false);
+        let output = format_doctor_report(&report, false, &Palette::plain());
 
         assert!(output.contains("ok   forge           1.6.0"));
         assert!(output.contains("ok   solc            0.8.33"));
@@ -2924,7 +3067,7 @@ mod tests {
             ],
         };
 
-        let output = format_clean_report(&report);
+        let output = format_clean_report(&report, &Palette::plain());
 
         assert!(output.contains("ok   artifacts/yul"));
         assert!(output.contains("skip cache"));
@@ -3956,6 +4099,7 @@ mod tests {
             offline: false,
             json: false,
             verbose: 0,
+            color: ColorChoice::Never,
             no_color: false,
             command: Command::Build(BuildArgs {
                 no_solc: true,
@@ -4005,6 +4149,7 @@ mod tests {
             offline: false,
             json: false,
             verbose: 0,
+            color: ColorChoice::Never,
             no_color: false,
             command: Command::Doctor { fix: true },
         })

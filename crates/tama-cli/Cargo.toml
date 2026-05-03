@@ -11,6 +11,8 @@ name = "tama"
 path = "src/main.rs"
 
 [dependencies]
+anstream.workspace = true
+anstyle.workspace = true
 camino.workspace = true
 clap.workspace = true
 semver.workspace = true

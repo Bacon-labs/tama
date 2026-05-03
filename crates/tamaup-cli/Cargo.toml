@@ -11,6 +11,8 @@ name = "tamaup"
 path = "src/main.rs"
 
 [dependencies]
+anstream.workspace = true
+anstyle.workspace = true
 camino.workspace = true
 clap.workspace = true
 flate2.workspace = true

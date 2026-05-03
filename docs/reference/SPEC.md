@@ -415,7 +415,7 @@ Global flags:
 --offline           Do not access the network
 --json              Emit machine-readable output where supported
 --verbose, -v       Increase logging verbosity
---no-color          Disable colored output
+--color <when>      Control colored output (auto, always, never; default auto)
 ```
 
 Environment:
@@ -444,7 +444,18 @@ TAMA_LAKE_PACKAGE_CACHE
                     at the exact clean revision before invoking Lake.
                     The cache is a performance optimization only; release and
                     locked builds must remain reproducible from an empty cache.
+
+NO_COLOR            If set to a non-empty value, disables colored output.
+CLICOLOR            If set to `0`, disables colored output.
+CLICOLOR_FORCE      If set to a non-empty value, enables colored output even
+                    when the destination is not a terminal.
 ```
+
+`--color=auto` (the default) emits ANSI sequences only when the destination is
+a terminal and `NO_COLOR`/`CLICOLOR=0` are not set. `--color=always` forces
+color on regardless of the destination; `--color=never` forces it off. The
+deprecated `--no-color` flag is accepted as an alias for `--color=never`.
+`--json` always disables color so machine-readable output remains parseable.
 
 ### `tama init [path]`
 
