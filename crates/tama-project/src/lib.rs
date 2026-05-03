@@ -13,6 +13,7 @@ const DEFAULT_VERITY_REV: &str = "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e";
 const DEFAULT_LEAN_TOOLCHAIN: &str = "leanprover/lean4:v4.22.0";
 const DEFAULT_SOLC: &str = "0.8.33";
 const STARTER_LAKE_MANIFEST: &str = include_str!("templates/starter-lake-manifest.json");
+const STARTER_CI_WORKFLOW: &str = include_str!("templates/starter-ci.yml");
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -90,6 +91,7 @@ pub fn init(path: &Utf8Path, opts: InitOptions) -> Result<()> {
         "artifacts/lean",
         "artifacts/trust-probe",
         "docs",
+        ".github/workflows",
     ] {
         fs::create_dir_all(path.join(dir))
             .map_err(|source| tama_common::io_error(path.join(dir), source))?;
@@ -138,6 +140,8 @@ pub fn init(path: &Utf8Path, opts: InitOptions) -> Result<()> {
         ERC20LITE_DEPLOYER_SOL,
     )?;
     write_string(&path.join("docs/README.md"), STARTER_README)?;
+    write_string(&path.join(".github/workflows/ci.yml"), STARTER_CI_WORKFLOW)?;
+    write_string(&path.join(".gitignore"), STARTER_GITIGNORE)?;
 
     let mut lock = TamaLock {
         version: 1,
@@ -523,6 +527,8 @@ solc_version = "0.8.33"
 fs_permissions = [{ access = "read", path = "./artifacts" }]
 "#;
 
+const STARTER_GITIGNORE: &str = "/.lake/\n/artifacts/\n/cache/\n/lib/\n/out/\nfoundry.lock\n";
+
 const ERC20LITE_LEAN: &str = r#"import Contracts.Common
 
 namespace src
@@ -869,6 +875,13 @@ forge script script/ERC20Lite.s.sol:DeployERC20Lite --broadcast --rpc-url <url>
 ```
 
 Set `ERC20LITE_OWNER=<address>` to choose an owner other than Foundry's sender.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs `tama doctor`, `tama check`, `tama build
+--locked`, `tama test`, and `tama audit` on every push and pull request. The
+first run installs Lean (elan), Foundry, solc 0.8.33, and Tama; later runs
+reuse caches keyed on `lake-manifest.json` and `tama.lock`.
 "#;
 
 #[cfg(test)]
@@ -1017,6 +1030,72 @@ metadata_bytecode_hash = "none"
         );
         assert!(lock.inputs.contains_key("lake-manifest.json"));
         assert!(tama_config::lock_drift(&root, &lock).unwrap().is_empty());
+    }
+
+    #[test]
+    fn init_creates_github_actions_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        init(&root, InitOptions::default()).unwrap();
+        let workflow_path = root.join(".github/workflows/ci.yml");
+        assert!(workflow_path.is_file());
+        let workflow = read_to_string(&workflow_path).unwrap();
+        for needle in [
+            "name: CI",
+            "tama doctor",
+            "tama check",
+            "tama build --locked",
+            "tama test",
+            "tama audit",
+            "foundry-rs/foundry-toolchain",
+            "solc-select",
+            "https://tama.tools/install.sh",
+        ] {
+            assert!(
+                workflow.contains(needle),
+                "starter workflow missing `{needle}`"
+            );
+        }
+        let starter_readme = read_to_string(&root.join("docs/README.md")).unwrap();
+        assert!(starter_readme.contains("Continuous integration"));
+        assert!(starter_readme.contains(".github/workflows/ci.yml"));
+    }
+
+    #[test]
+    fn init_creates_gitignore() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
+        init(&root, InitOptions::default()).unwrap();
+        let gitignore = read_to_string(&root.join(".gitignore")).unwrap();
+        for entry in [
+            "/.lake/",
+            "/artifacts/",
+            "/cache/",
+            "/lib/",
+            "/out/",
+            "foundry.lock",
+        ] {
+            assert!(
+                gitignore.contains(entry),
+                "starter .gitignore missing `{entry}`"
+            );
+        }
+    }
+
+    #[test]
+    fn starter_ci_workflow_is_valid_yaml() {
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(STARTER_CI_WORKFLOW).expect("starter-ci.yml must be valid YAML");
+        let steps = parsed
+            .get("jobs")
+            .and_then(|jobs| jobs.get("verify"))
+            .and_then(|verify| verify.get("steps"))
+            .and_then(|steps| steps.as_sequence())
+            .expect("starter-ci.yml must declare jobs.verify.steps as a sequence");
+        assert!(
+            !steps.is_empty(),
+            "starter-ci.yml jobs.verify.steps must not be empty"
+        );
     }
 
     #[test]
