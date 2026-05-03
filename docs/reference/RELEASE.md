@@ -22,11 +22,10 @@ The CI workflow lives in `.github/workflows/ci.yml` and includes:
 
 ## Artifacts
 
-Build four platform archives:
+Build three platform archives:
 
 - `linux-x86_64`
 - `linux-aarch64`
-- `macos-x86_64`
 - `macos-aarch64`
 
 Each archive contains `tama` and `tamaup`. No Windows archive is published for v0.1.

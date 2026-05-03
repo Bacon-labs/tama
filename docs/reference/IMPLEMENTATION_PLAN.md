@@ -12,7 +12,7 @@ Tama v0.1 is production-ready when it is reliable inside its declared scope, not
 
 ### In scope for v0.1
 
-- Linux x86_64, Linux aarch64, macOS x86_64, macOS aarch64.
+- Linux x86_64, Linux aarch64, macOS aarch64.
 - No Windows support.
 - Flat Verity project layout:
   - `verity/src/Foo.lean`
@@ -1134,7 +1134,7 @@ If Verity cannot support one of these features, the phase must not fake it. The 
 #### Work
 
 1. POSIX shell; ShellCheck clean.
-2. Supports Linux/macOS x86_64/aarch64 only.
+2. Supports Linux x86_64/aarch64 and macOS aarch64 only.
 3. Downloads:
    - `manifest.json`
    - `manifest.json.minisig`
