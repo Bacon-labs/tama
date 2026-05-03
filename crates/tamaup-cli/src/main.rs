@@ -10,12 +10,10 @@ use camino::{Utf8Path, Utf8PathBuf};
 use clap::CommandFactory;
 use clap::{Parser, Subcommand};
 use flate2::read::GzDecoder;
-use minisign_verify::{PublicKey, Signature};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const DEFAULT_BASE_URL: &str = "https://tama.tools";
-const EMBEDDED_PUBLIC_KEY: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+const DEFAULT_BASE_URL: &str = "https://github.com/bacon-labs/tama/releases/latest/download";
 const DEFAULT_LEAN_TOOLCHAIN: &str = "leanprover/lean4:v4.22.0";
 const DEFAULT_LEAN_VERSION: &str = "4.22.0";
 const DEFAULT_SOLC_VERSION: &str = "0.8.33";
@@ -184,39 +182,15 @@ fn install_with_bootstrap(
     bootstrap: BootstrapOptions,
     bootstrap_toolchain: impl FnOnce(BootstrapOptions) -> Result<(), String>,
 ) -> Result<(), String> {
-    install_with_hooks(
-        version,
-        manifest_file,
-        bootstrap,
-        bootstrap_toolchain,
-        verify_manifest_signature,
-    )
-}
-
-fn install_with_hooks(
-    version: &str,
-    manifest_file: Option<Utf8PathBuf>,
-    bootstrap: BootstrapOptions,
-    bootstrap_toolchain: impl FnOnce(BootstrapOptions) -> Result<(), String>,
-    verify_signature: impl FnOnce(&[u8], &[u8]) -> Result<(), String>,
-) -> Result<(), String> {
     let local_manifest = manifest_file.is_some();
-    let (manifest_bytes, signature_bytes) = if let Some(path) = manifest_file {
-        let sig = manifest_signature_path(&path);
-        (
-            fs::read(&path).map_err(|err| err.to_string())?,
-            fs::read(&sig).map_err(|err| err.to_string())?,
-        )
+    let manifest_bytes = if let Some(path) = manifest_file {
+        fs::read(&path).map_err(|err| err.to_string())?
     } else {
         if bootstrap.offline {
             return Err("offline install requires --manifest-file".to_string());
         }
-        (
-            download(&format!("{DEFAULT_BASE_URL}/manifest.json"))?,
-            download(&format!("{DEFAULT_BASE_URL}/manifest.json.minisig"))?,
-        )
+        download(&format!("{DEFAULT_BASE_URL}/manifest.json"))?
     };
-    verify_signature(&manifest_bytes, &signature_bytes)?;
     let manifest: ReleaseManifest =
         serde_json::from_slice(&manifest_bytes).map_err(|err| err.to_string())?;
     validate_release_manifest(&manifest)?;
@@ -240,10 +214,6 @@ fn install_with_hooks(
     use_version_at(&home, &selected_version)?;
     println!("Installed Tama {selected_version}");
     Ok(())
-}
-
-fn manifest_signature_path(path: &Utf8Path) -> Utf8PathBuf {
-    Utf8PathBuf::from(format!("{path}.minisig"))
 }
 
 fn select_artifact(
@@ -539,14 +509,6 @@ fn remove_file_if_exists(path: &Utf8Path) -> Result<(), String> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(format!("failed to remove `{path}`: {err}")),
     }
-}
-
-fn verify_manifest_signature(manifest: &[u8], signature: &[u8]) -> Result<(), String> {
-    let key = PublicKey::from_base64(EMBEDDED_PUBLIC_KEY).map_err(|err| err.to_string())?;
-    let sig_text = std::str::from_utf8(signature).map_err(|err| err.to_string())?;
-    let sig = Signature::decode(sig_text).map_err(|err| err.to_string())?;
-    key.verify(manifest, &sig, false)
-        .map_err(|err| err.to_string())
 }
 
 fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), String> {
@@ -1622,7 +1584,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let manifest = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).unwrap();
         fs::write(&manifest, br#"{"version":"0.1.0","artifacts":[]}"#).unwrap();
-        fs::write(manifest.with_extension("json.minisig"), b"not a signature").unwrap();
         let mut bootstrap_called = false;
 
         let err = install_with_bootstrap(
@@ -1645,94 +1606,6 @@ mod tests {
 
         assert!(!bootstrap_called);
         assert!(!err.is_empty());
-    }
-
-    #[test]
-    fn install_rejects_bad_signature_before_artifact_read() {
-        let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let home = root.join("home");
-        let _home_guard = EnvVarGuard::set("TAMAUP_HOME", home.as_std_path().as_os_str());
-        let manifest_path = root.join("manifest.json");
-        let missing_archive = root.join("missing.tar.gz");
-        let manifest = serde_json::json!({
-            "schema": RELEASE_MANIFEST_SCHEMA,
-            "stable": "0.1.0",
-            "releases": [{
-                "version": "0.1.0",
-                "artifacts": [{
-                    "platform": platform().unwrap(),
-                    "url": format!("file://{missing_archive}"),
-                    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
-                }]
-            }]
-        });
-        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-        fs::write(manifest_path.with_extension("json.minisig"), b"bad").unwrap();
-        let mut bootstrap_called = false;
-
-        let err = install_with_hooks(
-            "stable",
-            Some(manifest_path),
-            BootstrapOptions {
-                yes: true,
-                offline: true,
-                no_modify_path: true,
-                no_install_lean: true,
-                no_install_foundry: true,
-                no_install_solc: true,
-            },
-            |_| {
-                bootstrap_called = true;
-                Ok(())
-            },
-            |_, _| Err("bad test signature".to_string()),
-        )
-        .unwrap_err();
-
-        assert_eq!(err, "bad test signature");
-        assert!(!bootstrap_called);
-        assert!(!home.exists());
-    }
-
-    #[test]
-    fn manifest_file_uses_literal_minisig_suffix() {
-        let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let home = root.join("home");
-        let _home_guard = EnvVarGuard::set("TAMAUP_HOME", home.as_std_path().as_os_str());
-        let manifest_path = root.join("release-manifest");
-        fs::write(&manifest_path, b"{}").unwrap();
-        fs::write(root.join("release-manifest.minisig"), b"fake-signature").unwrap();
-        let mut bootstrap_called = false;
-
-        let err = install_with_hooks(
-            "stable",
-            Some(manifest_path),
-            BootstrapOptions {
-                yes: true,
-                offline: true,
-                no_modify_path: true,
-                no_install_lean: true,
-                no_install_foundry: true,
-                no_install_solc: true,
-            },
-            |_| {
-                bootstrap_called = true;
-                Ok(())
-            },
-            |_, signature_bytes| {
-                assert_eq!(signature_bytes, b"fake-signature");
-                Err("signature gate reached".to_string())
-            },
-        )
-        .unwrap_err();
-
-        assert_eq!(err, "signature gate reached");
-        assert!(!bootstrap_called);
-        assert!(!home.exists());
     }
 
     #[test]
@@ -1762,10 +1635,9 @@ mod tests {
             }]
         });
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-        fs::write(manifest_path.with_extension("json.minisig"), b"fake").unwrap();
         let mut bootstrap_called = false;
 
-        let err = install_with_hooks(
+        let err = install_with_bootstrap(
             "stable",
             Some(manifest_path),
             BootstrapOptions {
@@ -1780,7 +1652,6 @@ mod tests {
                 bootstrap_called = true;
                 Ok(())
             },
-            |_, _| Ok(()),
         )
         .unwrap_err();
 
@@ -1810,10 +1681,9 @@ mod tests {
             }]
         });
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-        fs::write(manifest_path.with_extension("json.minisig"), b"fake").unwrap();
         let mut bootstrap_called = false;
 
-        let err = install_with_hooks(
+        let err = install_with_bootstrap(
             "stable",
             Some(manifest_path),
             BootstrapOptions {
@@ -1828,7 +1698,6 @@ mod tests {
                 bootstrap_called = true;
                 Ok(())
             },
-            |_, _| Ok(()),
         )
         .unwrap_err();
 
@@ -1838,7 +1707,7 @@ mod tests {
     }
 
     #[test]
-    fn fake_signed_manifest_installs_local_fake_artifact() {
+    fn manifest_file_installs_local_fake_artifact() {
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -1869,14 +1738,9 @@ mod tests {
             serde_json::to_vec_pretty(&manifest).unwrap(),
         )
         .unwrap();
-        fs::write(
-            manifest_path.with_extension("json.minisig"),
-            b"fake-signature",
-        )
-        .unwrap();
         let mut bootstrap_called = false;
 
-        install_with_hooks(
+        install_with_bootstrap(
             "stable",
             Some(manifest_path),
             BootstrapOptions {
@@ -1889,13 +1753,6 @@ mod tests {
             },
             |_| {
                 bootstrap_called = true;
-                Ok(())
-            },
-            |manifest_bytes, signature_bytes| {
-                assert!(std::str::from_utf8(manifest_bytes)
-                    .unwrap()
-                    .contains(RELEASE_MANIFEST_SCHEMA));
-                assert_eq!(signature_bytes, b"fake-signature");
                 Ok(())
             },
         )

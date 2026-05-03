@@ -438,20 +438,13 @@ jobs:
           path: dist
           pattern: tama-*
           merge-multiple: true
-      - name: Install release tools
-        run: sudo apt-get update && sudo apt-get install -y minisign
       - name: Build manifest
-        env:
-          TAMA_MINISIGN_PUBLIC_KEY: ${{ secrets.TAMA_MINISIGN_PUBLIC_KEY }}
         shell: bash
         run: |
           set -euxo pipefail
           version="${GITHUB_REF_NAME#v}"
-          test -n "$TAMA_MINISIGN_PUBLIC_KEY"
           previous_manifest=""
           if curl -fsSL https://github.com/bacon-labs/tama/releases/latest/download/manifest.json -o dist/previous-manifest.json; then
-            curl -fsSL https://github.com/bacon-labs/tama/releases/latest/download/manifest.json.minisig -o dist/previous-manifest.json.minisig
-            minisign -V -P "$TAMA_MINISIGN_PUBLIC_KEY" -m dist/previous-manifest.json -x dist/previous-manifest.json.minisig
             previous_manifest="dist/previous-manifest.json"
           fi
           python3 - "$version" "$previous_manifest" dist/*.tar.gz > dist/manifest.json <<'PY'
@@ -601,20 +594,6 @@ jobs:
               manifest["nightly"] = nightly
           print(json.dumps(manifest, indent=2))
           PY
-      - name: Sign manifest
-        env:
-          TAMA_MINISIGN_SECRET_KEY: ${{ secrets.TAMA_MINISIGN_SECRET_KEY }}
-          TAMA_MINISIGN_PUBLIC_KEY: ${{ secrets.TAMA_MINISIGN_PUBLIC_KEY }}
-        shell: bash
-        run: |
-          set -euxo pipefail
-          test -n "$TAMA_MINISIGN_SECRET_KEY"
-          test -n "$TAMA_MINISIGN_PUBLIC_KEY"
-          grep -Fq "$TAMA_MINISIGN_PUBLIC_KEY" crates/tamaup-cli/src/main.rs
-          printf '%s\n' "$TAMA_MINISIGN_SECRET_KEY" > dist/minisign.sec
-          minisign -S -s dist/minisign.sec -m dist/manifest.json -x dist/manifest.json.minisig -W
-          minisign -V -P "$TAMA_MINISIGN_PUBLIC_KEY" -m dist/manifest.json -x dist/manifest.json.minisig
-          rm dist/minisign.sec
       - name: Prepare Pages bundle
         shell: bash
         run: |
@@ -623,7 +602,6 @@ jobs:
           cp -R docs/. public/
           cp installer/install.sh public/install.sh
           cp dist/manifest.json public/manifest.json
-          cp dist/manifest.json.minisig public/manifest.json.minisig
           cp dist/*.tar.gz public/releases/
       - name: Check Pages links
         shell: bash
@@ -676,4 +654,3 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/manifest.json
-            dist/manifest.json.minisig

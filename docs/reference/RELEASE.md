@@ -31,26 +31,17 @@ Build four platform archives:
 
 Each archive contains `tama` and `tamaup`. No Windows archive is published for v0.1.
 
-## Signing
+## Manifest
 
-The release workflow writes a cumulative `manifest.json` with `schema = "tama.release-manifest.v1"`, a `stable` version, an optional `nightly` version preserved from the previous signed manifest, and a `releases[]` list. It computes SHA-256 for every new archive, preserves older release entries only after verifying the previously published manifest signature and rejecting unknown fields, empty release artifact lists, duplicate release versions, duplicate platform artifacts, dangling channel references, or mixed manifest shapes, signs the new manifest, and publishes the manifest, signature, and archives.
+The release workflow writes a cumulative `manifest.json` with `schema = "tama.release-manifest.v1"`, a `stable` version, an optional `nightly` version preserved from the previous published manifest, and a `releases[]` list. It computes SHA-256 for every new archive, preserves older release entries only after rejecting unknown fields, empty release artifact lists, duplicate release versions, duplicate platform artifacts, dangling channel references, or mixed manifest shapes, and publishes the manifest plus archives to the GitHub Release.
 
-The schema-less legacy `version` plus `artifacts[]` manifest shape is accepted only for local/offline tests. Installers reject cumulative manifests that omit `releases[]`, include release entries without artifacts, or mix the legacy and cumulative shapes.
+The schema-less legacy `version` plus `artifacts[]` manifest shape is accepted only by `tamaup --manifest-file` for local/offline tests. Installers reject cumulative manifests that omit `releases[]`, include release entries without artifacts, or mix the legacy and cumulative shapes.
 
-Published artifact URLs must use `https://` with a host. Absolute-path `file://`
-artifact URLs are accepted only for signed local/offline manifests used by
-installer tests or manual recovery.
+Published artifact URLs must use `https://` with a host. Absolute-path `file://` artifact URLs are accepted only for local/offline manifests passed via `tamaup --manifest-file`.
 
-`tamaup` verifies the manifest signature in process and verifies archive SHA-256 before extraction. `installer/install.sh` is a thin TLS-only bootstrap (matching the Foundry installer model): it accepts no flags or environment overrides, fetches the cumulative manifest from `https://github.com/bacon-labs/tama/releases/latest/download/manifest.json`, validates manifest field safety, and verifies archive SHA-256 against the manifest before installing the latest stable release. It does not require `minisign`.
+Both `installer/install.sh` and `tamaup` use the Foundry installer trust model: TLS to GitHub for the manifest, then SHA-256 verification of every downloaded archive against the SHA-256 carried in the manifest. There is no separate manifest signature; trust is anchored at GitHub Releases. No external signing key, public key, or signature-verifier binary is required.
 
-`tamaup install` also checks Lean/Lake, Foundry, and solc. Missing or incompatible tools fail closed unless the user passes the matching `--no-install-*` opt-out, or passes `--yes` to allow bootstrap installation. Bootstrap installation is disabled in `--offline` mode.
-
-The release workflow lives in `.github/workflows/release.yml`. Configure these repository secrets before tagging a release:
-
-- `TAMA_MINISIGN_SECRET_KEY`: unencrypted minisign secret key used only by CI signing.
-- `TAMA_MINISIGN_PUBLIC_KEY`: public key matching the embedded `tamaup` verifier key.
-
-Rotate keys by updating the repository secrets, the `tamaup` embedded public key, and the published release docs in one release.
+The release workflow lives in `.github/workflows/release.yml` and requires no repository secrets beyond the default `GITHUB_TOKEN`.
 
 ## Website
 
@@ -62,12 +53,12 @@ The release workflow publishes the static GitHub Pages site at `https://tama.too
 curl -L https://tama.tools/install.sh | sh
 ```
 
-- links to quickstart, command reference, audit guide, generated-artifact rules, troubleshooting, Verity compatibility, limitations, release artifacts, `install.sh`, and the GitHub Releases-hosted `manifest.json` and `manifest.json.minisig`;
+- links to quickstart, command reference, audit guide, generated-artifact rules, troubleshooting, Verity compatibility, limitations, release artifacts, `install.sh`, and the GitHub Releases-hosted `manifest.json`;
 - links to the telemetry-free privacy statement;
 - no Windows installation path for v0.1.
 
 ## Installer Safety
 
-Installation must reject unknown or unsafe manifest fields, bad signatures, bad hashes, absolute archive paths, `..` traversal, duplicate binary entries, and unexpected archive file names before any binary is installed.
+Installation must reject unknown or unsafe manifest fields, bad hashes, absolute archive paths, `..` traversal, duplicate binary entries, and unexpected archive file names before any binary is installed.
 
 `tamaup uninstall` removes the active `tama` binary and active marker, but keeps `tamaup` available so users can reinstall or switch versions later.
