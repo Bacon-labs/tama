@@ -29,6 +29,10 @@ By the end of this tutorial you will have:
 - `tama` installed (see [Install](/install)).
 - Comfort reading Solidity. You do **not** need prior Lean or Verity experience.
 - About 20 minutes.
+
+The [Verity EDSL reference](https://veritylang.com/core) explains the
+language we'll be writing in if you'd like a deeper look at any line
+along the way.
 </Callout>
 
 ## Step 1 — Scaffold a project
@@ -187,6 +191,8 @@ Each theorem says: *if the invariant holds before the call, it holds
 after the call.* The `by simp [...]` is the proof — Lean's simplifier
 unfolds the definitions and the lemmas listed, and Verity's standard
 library takes care of the mapping arithmetic.
+[Verity's debugging-proofs guide](https://veritylang.com/guides/debugging-proofs)
+catalogues the tactics and error messages you'll meet most often.
 
 The two `@[tama.mirror "..."]` annotations point at a Foundry test
 we'll write next. This is what links a proven property to an executable
@@ -333,3 +339,7 @@ with one keystroke.
 - **[Writing proof obligations](/guides/proofs)** — patterns for spec
   decomposition, frame conditions, and helper lemmas.
 - **[CLI reference](/reference/cli)** — every flag for every command.
+- **[Verity EDSL reference](https://veritylang.com/core)** — the language
+  we wrote the contract in, in detail.
+- **[Verity examples](https://veritylang.com/examples)** — the upstream
+  contracts, each one introducing a new pattern.

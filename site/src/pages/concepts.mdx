@@ -10,14 +10,15 @@ import Callout from "../components/Callout.astro";
 
 ## What is Verity?
 
-**Verity is a way of writing smart contracts where the contract and its
+**[Verity](https://veritylang.com) is a way of writing smart contracts where the contract and its
 intended behavior are written down separately, and a machine checks
 that they agree.**
 
 Three layers, in one project:
 
 1. **Implementation** — the code that runs on the EVM.
-   Written in a Lean DSL that looks much like Solidity, compiled to Yul, then to bytecode.
+   Written in a [Lean EDSL](https://veritylang.com/core) that looks much
+   like Solidity, compiled to Yul, then to bytecode.
 2. **Specification** — what the implementation must do. Invariants
    ("the total never exceeds the cap"), postconditions ("after `transfer`,
    the sender's balance drops by exactly the amount"), frame conditions
@@ -182,3 +183,7 @@ Every term above is a piece of that promise.
 - [Your first contract](/start) — the tutorial that uses every term above.
 - [CLI reference](/reference/cli) — what each command actually does.
 - [Manifest schema](/reference/manifest) — the canonical JSON shape.
+- [Verity EDSL reference](https://veritylang.com/core) — the storage,
+  state, and `require` primitives every implementation is built from.
+- [Writing a Verity contract](https://veritylang.com/guides/first-contract)
+  — the upstream walkthrough through spec, implementation, and proof.
