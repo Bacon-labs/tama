@@ -43,9 +43,11 @@ jobs:
 
       - name: Add toolchain bin directories to PATH
         run: |
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.tama/bin" >> "$GITHUB_PATH"
+          {
+            echo "$HOME/.elan/bin"
+            echo "$HOME/.foundry/bin"
+            echo "$HOME/.tama/bin"
+          } >> "$GITHUB_PATH"
 
       - name: Install elan (Lean toolchain manager)
         run: |
@@ -72,10 +74,16 @@ jobs:
           venv="$RUNNER_TEMP/solc-select-venv"
           python3 -m venv "$venv"
           for attempt in 1 2 3 4; do
-            "$venv/bin/pip" install --upgrade solc-select && break || sleep $((attempt * 5))
+            if "$venv/bin/pip" install --upgrade solc-select; then
+              break
+            fi
+            sleep $((attempt * 5))
           done
           for attempt in 1 2 3 4; do
-            "$venv/bin/solc-select" install 0.8.33 && break || sleep $((attempt * 5))
+            if "$venv/bin/solc-select" install 0.8.33; then
+              break
+            fi
+            sleep $((attempt * 5))
           done
           "$venv/bin/solc-select" use 0.8.33
           echo "$venv/bin" >> "$GITHUB_PATH"
