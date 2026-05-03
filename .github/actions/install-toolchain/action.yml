@@ -13,8 +13,11 @@ runs:
     - name: Add elan and pip-user bin to PATH
       shell: bash
       run: |
+        set -euo pipefail
         echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        # pip --user installs scripts to ~/.local/bin on Linux and
+        # ~/Library/Python/X.Y/bin on macOS — query Python for the truth.
+        python3 -c "import site; print(site.getuserbase() + '/bin')" >> "$GITHUB_PATH"
 
     - name: Install elan (Lean toolchain manager)
       shell: bash
