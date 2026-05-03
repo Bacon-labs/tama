@@ -120,6 +120,7 @@ emit_env("VERSION", selected_artifact[0])
 emit_env("URL", selected_artifact[1])
 emit_env("SHA256", selected_artifact[2])
 PY
+# shellcheck source=/dev/null
 . "$INSTALL_TMPDIR/artifact.env"
 
 case "$VERSION" in

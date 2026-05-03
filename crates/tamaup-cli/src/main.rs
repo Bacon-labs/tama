@@ -1171,7 +1171,10 @@ mod tests {
             fs::read_to_string(root.join("installer/install.sh").as_std_path()).unwrap();
         let installer_base_url = installer
             .lines()
-            .find_map(|line| line.strip_prefix("BASE_URL=\"").and_then(|s| s.strip_suffix('"')))
+            .find_map(|line| {
+                line.strip_prefix("BASE_URL=\"")
+                    .and_then(|s| s.strip_suffix('"'))
+            })
             .expect("installer/install.sh must declare BASE_URL=\"...\" on a single line");
         assert_eq!(
             installer_base_url, DEFAULT_BASE_URL,
