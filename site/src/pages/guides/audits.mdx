@@ -1,0 +1,200 @@
+---
+layout: ../../layouts/DocLayout.astro
+title: Reading audit output
+eyebrow: Guide
+description: A walkthrough of every check tama audit performs, what its failures look like in real output, and what to change to make them pass.
+---
+
+import Callout from "../../components/Callout.astro";
+
+## What `tama audit` is for
+
+`tama audit` is a release-time gate that runs after a successful
+`tama build`. Each check inspects the build artifacts (manifests,
+generated bridges, bytecode files, trust probes) and asks one focused
+question. The full suite is:
+
+```text
+structure        Required files and bytecode hashes
+selectors        Function/event/error selectors agree everywhere
+storage-layout   Slot allocation is sane and consistent
+coverage         Public obligations have mirrors or proof-only reasons
+trust-boundary   Lean axioms, sorry, unresolved declarations
+```
+
+Run them all with `tama audit`. Run one with `tama audit <check>`. Pass
+`--deny-warnings` in CI to fail on warning-severity findings.
+
+## structure
+
+What it inspects:
+
+- Every contract has the expected `verity/src/`, `verity/spec/`,
+  `verity/proof/`, `test/verity/` files.
+- Every manifest's referenced artifacts (Yul, solc JSON, bytecode,
+  generated interface, generated deployer) exist on disk.
+- The `bytecode_hash` recorded in each manifest matches the SHA-256 of
+  the actual creation bytecode file.
+- The bytecode embedded in each generated `Deployer.sol` matches the
+  bytecode the manifest points to.
+
+A real failure:
+
+```text
+structure: error
+  ERC20Lite: deployer bytecode does not match manifest
+
+    expected (manifest.bytecode_hash):
+      9c…3e
+    actual (src/generated/verity/ERC20LiteDeployer.sol embedded):
+      a1…77
+
+  This usually means the deployer was regenerated, then the bytecode
+  was rebuilt without re-running bridge generation. Run `tama build`
+  again.
+```
+
+The fix is almost always `tama build`. If that doesn't clear it, you
+have a hand-edited generated file — see
+[Generated artifacts](/reference/artifacts).
+
+## selectors
+
+What it inspects:
+
+- Function selectors derived from Verity declarations.
+- Function selectors recorded in the manifest ABI.
+- Function selectors declared by the generated Solidity interface.
+- Function selectors used in the generated Yul dispatcher.
+- The keccak-derived expected selector from the canonical signature.
+
+All five must agree. Custom error selectors and event topic0 values
+go through the same check.
+
+A real failure:
+
+```text
+selectors: error
+  TipJar.deposit: selector mismatch
+
+    Verity declaration: 0xd0e30db0   deposit()
+    Manifest entry:     0xd0e30db0
+    Solidity iface:     0xd0e30db1   ← mismatch
+    Yul dispatcher:     0xd0e30db0
+```
+
+This is almost always evidence that a generated file was hand-edited.
+Restore the file and run `tama build`.
+
+## storage-layout
+
+What it inspects:
+
+- Each storage variable's declared slot is a valid uint256.
+- No two variables share a slot (unless the offsets and widths permit it).
+- Mapping/array encoding tags are recognized by Tama.
+- The compiler's reported layout matches the manifest layout.
+
+A real failure:
+
+```text
+storage-layout: error
+  TipJar: slot 0x01 used by both `balances` and `total`
+
+  balances : mapping(address, uint256)  slot 0x01 offset 0  width 32
+  total    : uint256                    slot 0x01 offset 0  width 32
+
+  Edit the source so each variable has a distinct base slot, or use
+  Verity's storage layout helpers to pack them explicitly.
+```
+
+## coverage
+
+What it inspects:
+
+- Every theorem tagged `@[tama.obligation]` either has a
+  `@[tama.mirror "..."]` annotation that points at a valid Foundry
+  symbol, or is tagged `@[tama.proof_only "<reason>"]` with a non-empty
+  reason.
+- Mirror paths exist under Foundry's configured test directory.
+- Mirror function names start with `testFuzz` or `invariant_`.
+- Mirror contract names match an actual Foundry test contract in the file.
+
+A real failure:
+
+```text
+coverage: error
+  TipJarProof.deposit_preserves_invariant: mirror not found
+
+    declared mirror:
+      test/verity/TipJar.t.sol:TipJarTest.invariant_totalTracksBalances
+
+    test/verity/TipJar.t.sol contains:
+      TipJarTest.testFuzz_deposit
+      TipJarTest.invariant_totalTracksBalances  ✓ (this one)
+
+    The contract name in the annotation is wrong: file declares
+    `TipJarTest`, annotation says `TipJarTest`. Check capitalization.
+```
+
+## trust-boundary
+
+What it inspects:
+
+- For every `@[tama.obligation]` theorem, the closure of axioms,
+  unsafe declarations, and unresolved names that the proof transitively
+  depends on (via Lean's `collectAxioms`).
+- Compiler trust-surface artifacts (`artifacts/trust-report.json`,
+  `artifacts/assumption-report.json`).
+
+A real failure:
+
+```text
+trust-boundary: error
+  TipJarProof.withdraw_preserves_invariant
+    depends on: sorryAx
+
+  `sorry` is denied for any obligation. Replace the sorry with a real
+  proof, or move the theorem out of obligation status.
+
+trust-boundary: warning
+  TipJarProof.deposit_preserves_invariant
+    depends on: Classical.choice (not in [trust.allow_axioms])
+
+  Add to tama.toml:
+
+    [trust.allow_axioms]
+    "Classical.choice" = "accepted Lean classical reasoning"
+```
+
+<Callout kind="proof" title="The seal">
+A green <code>trust-boundary</code> is the strongest claim Tama can make
+about your contract: every public obligation is proven, modulo a small
+explicit list of named assumptions you have signed off on in
+<code>tama.toml</code>.
+</Callout>
+
+## CI patterns
+
+Standard CI:
+
+```yaml
+- run: tama build --locked
+- run: tama test
+- run: tama audit
+```
+
+Stricter release CI:
+
+```yaml
+- run: tama doctor
+- run: tama build --locked
+- run: tama test
+- run: tama audit --deny-warnings
+- run: tama audit trust-boundary
+- run: tama audit coverage
+```
+
+The two extra individual `tama audit <check>` calls produce focused
+output and exit codes when the suite is being driven by a release
+pipeline that wants to record per-check results separately.

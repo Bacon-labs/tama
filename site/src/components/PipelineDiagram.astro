@@ -1,0 +1,165 @@
+---
+// Pipeline diagram: Verity source → proof → Yul → bytecode → bridge → Foundry,
+// with audit checks branching off as small jade dots.
+---
+
+<figure class="pipe">
+  <svg
+    viewBox="0 0 920 280"
+    xmlns="http://www.w3.org/2000/svg"
+    role="img"
+    aria-labelledby="pipe-title pipe-desc"
+  >
+    <title id="pipe-title">Tama pipeline</title>
+    <desc id="pipe-desc">
+      Verity source flows through Lean proof, Verity codegen to Yul, solc to
+      bytecode, generated Solidity bridge files, and Foundry build. Audit
+      checks branch off the manifest, bridge, and trust probe.
+    </desc>
+
+    <defs>
+      <linearGradient id="line-jade" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#1f5f4f" stop-opacity="0.0" />
+        <stop offset="0.05" stop-color="#1f5f4f" stop-opacity="0.7" />
+        <stop offset="0.95" stop-color="#1f5f4f" stop-opacity="0.7" />
+        <stop offset="1" stop-color="#1f5f4f" stop-opacity="0.0" />
+      </linearGradient>
+      <radialGradient id="node-jade" cx="0.5" cy="0.4" r="0.6">
+        <stop offset="0" stop-color="#a4c5b8" />
+        <stop offset="0.6" stop-color="#3d8073" />
+        <stop offset="1" stop-color="#0c3a31" />
+      </radialGradient>
+      <radialGradient id="node-brass" cx="0.5" cy="0.4" r="0.6">
+        <stop offset="0" stop-color="#e1c98e" />
+        <stop offset="0.6" stop-color="#a78947" />
+        <stop offset="1" stop-color="#5e4924" />
+      </radialGradient>
+      <radialGradient id="node-shu" cx="0.5" cy="0.4" r="0.6">
+        <stop offset="0" stop-color="#e69079" />
+        <stop offset="0.6" stop-color="#b9442e" />
+        <stop offset="1" stop-color="#6c2517" />
+      </radialGradient>
+      <filter id="soft-glow" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur stdDeviation="2.4" />
+      </filter>
+    </defs>
+
+    <line x1="40" y1="120" x2="880" y2="120" stroke="url(#line-jade)" stroke-width="1.6" />
+
+    <g class="node" transform="translate(80,120)">
+      <circle r="18" fill="url(#node-jade)" />
+      <text y="-32" text-anchor="middle" class="lbl">Verity</text>
+      <text y="44" text-anchor="middle" class="sub">.lean</text>
+    </g>
+    <g class="node" transform="translate(220,120)">
+      <circle r="18" fill="url(#node-brass)" />
+      <text y="-32" text-anchor="middle" class="lbl">Proof</text>
+      <text y="44" text-anchor="middle" class="sub">Lean elaborates</text>
+    </g>
+    <g class="node" transform="translate(360,120)">
+      <circle r="18" fill="url(#node-jade)" />
+      <text y="-32" text-anchor="middle" class="lbl">Yul</text>
+      <text y="44" text-anchor="middle" class="sub">codegen</text>
+    </g>
+    <g class="node" transform="translate(500,120)">
+      <circle r="18" fill="url(#node-jade)" />
+      <text y="-32" text-anchor="middle" class="lbl">Bytecode</text>
+      <text y="44" text-anchor="middle" class="sub">solc</text>
+    </g>
+    <g class="node" transform="translate(640,120)">
+      <circle r="18" fill="url(#node-jade)" />
+      <text y="-32" text-anchor="middle" class="lbl">Bridge</text>
+      <text y="44" text-anchor="middle" class="sub">.sol</text>
+    </g>
+    <g class="node" transform="translate(800,120)">
+      <circle r="18" fill="url(#node-jade)" />
+      <text y="-32" text-anchor="middle" class="lbl">Foundry</text>
+      <text y="44" text-anchor="middle" class="sub">forge build</text>
+    </g>
+
+    <!-- Manifest spine: a translucent slab the line passes through -->
+    <rect
+      x="200" y="92" width="460" height="56" rx="12" ry="12"
+      fill="rgba(141, 184, 171, 0.10)"
+      stroke="rgba(31, 95, 79, 0.25)"
+      stroke-dasharray="2 4"
+    />
+    <text x="430" y="84" text-anchor="middle" class="caption">manifest — single source of truth</text>
+
+    <!-- Audit branches -->
+    <g class="audit">
+      <line x1="220" y1="138" x2="220" y2="220" stroke="rgba(167,137,71,0.45)" stroke-width="1" />
+      <circle cx="220" cy="220" r="6" fill="url(#node-brass)" />
+      <text x="220" y="248" text-anchor="middle" class="audit-lbl">trust-boundary</text>
+
+      <line x1="360" y1="138" x2="360" y2="220" stroke="rgba(31,95,79,0.45)" stroke-width="1" />
+      <circle cx="360" cy="220" r="6" fill="url(#node-jade)" />
+      <text x="360" y="248" text-anchor="middle" class="audit-lbl">selectors</text>
+
+      <line x1="500" y1="138" x2="500" y2="220" stroke="rgba(31,95,79,0.45)" stroke-width="1" />
+      <circle cx="500" cy="220" r="6" fill="url(#node-jade)" />
+      <text x="500" y="248" text-anchor="middle" class="audit-lbl">storage-layout</text>
+
+      <line x1="640" y1="138" x2="640" y2="220" stroke="rgba(185,68,46,0.45)" stroke-width="1" />
+      <circle cx="640" cy="220" r="6" fill="url(#node-shu)" />
+      <text x="640" y="248" text-anchor="middle" class="audit-lbl">structure</text>
+
+      <line x1="800" y1="138" x2="800" y2="220" stroke="rgba(31,95,79,0.45)" stroke-width="1" />
+      <circle cx="800" cy="220" r="6" fill="url(#node-jade)" />
+      <text x="800" y="248" text-anchor="middle" class="audit-lbl">coverage</text>
+    </g>
+
+    <text x="40" y="44" class="step-lbl">source</text>
+    <text x="880" y="44" text-anchor="end" class="step-lbl">artifact</text>
+  </svg>
+</figure>
+
+<style>
+  .pipe {
+    margin: 0;
+    width: 100%;
+    padding: var(--s-5) 0;
+  }
+  .pipe svg {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+  .lbl {
+    font-family: var(--font-display);
+    font-size: 16px;
+    fill: var(--ink);
+    font-weight: 500;
+  }
+  .sub {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    fill: var(--ink-mute);
+    text-transform: uppercase;
+  }
+  .audit-lbl {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    fill: var(--ink-mute);
+    letter-spacing: 0.06em;
+  }
+  .caption {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: 12px;
+    fill: var(--jade-700);
+  }
+  .step-lbl {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    fill: var(--ink-mute);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .lbl { fill: var(--ink); }
+    .caption { fill: var(--jade-300); }
+  }
+</style>

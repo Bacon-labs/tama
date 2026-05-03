@@ -1,0 +1,133 @@
+---
+layout: ../../layouts/DocLayout.astro
+title: Foundry interop
+eyebrow: Guide
+description: How a Tama project lives inside a Foundry project, when to call forge directly, and how the two configs stay non-overlapping.
+---
+
+import Callout from "../../components/Callout.astro";
+
+## A Tama project is a Foundry project
+
+`tama init` produces a directory that Foundry recognizes:
+
+```text
+my-protocol/
+├── foundry.toml         # standard Foundry config
+├── lib/                 # Foundry deps (forge-std as a git submodule)
+├── src/                 # Solidity sources (incl. src/generated/verity/)
+├── script/              # Foundry deployment scripts
+├── test/                # Foundry tests, incl. test/verity/ mirrors
+├── out/                 # Foundry build output
+└── cache/               # Foundry cache
+```
+
+…plus the Verity layers (`verity/src`, `verity/spec`, `verity/proof`)
+and the Tama-owned bits (`tama.toml`, `tama.lock`, `lakefile.toml`,
+`artifacts/`).
+
+You can `cd` into the project and run **any** `forge` command. Tama
+does not wrap or reinterpret Foundry; the `tama test` command is exactly
+`forge test [args]` with no injected filters.
+
+## Who owns which file
+
+| File                          | Owned by              | Edited by                       |
+| ----------------------------- | --------------------- | ------------------------------- |
+| `foundry.toml`                | You                   | You                             |
+| `tama.toml`                   | You                   | You                             |
+| `tama.lock`                   | Tama                  | `tama init`, `build`, `update`  |
+| `lakefile.toml`               | You (after init)      | You; `tama install`/`remove`/`update`/`doctor --fix` |
+| `lake-manifest.json`          | Lake                  | `lake update` (via Tama)        |
+| `lean-toolchain`              | You                   | You                             |
+| `src/generated/verity/*`      | Tama                  | `tama build`                    |
+| `artifacts/**`                | Tama                  | `tama build`, `tama audit`      |
+| `test/verity/*`               | You                   | You                             |
+| `lib/**`                      | Foundry               | `forge install`, `forge update` |
+
+The two configs are **intentionally non-overlapping**:
+
+- Solidity compilation, fuzzing, RPC endpoints, profiles, remappings →
+  `foundry.toml`.
+- Verity paths, generated bridge paths, Yul `solc` settings, trust-boundary
+  policy → `tama.toml`.
+
+Tama does not read `foundry.toml` to configure Yul compilation. Foundry
+does not read `tama.toml`. They share the project on disk, not in memory.
+
+## When to use `forge` directly
+
+| Task                             | Command                                |
+| -------------------------------- | -------------------------------------- |
+| Run all tests                    | `tama test` *(or `forge test`)*        |
+| Run a specific test              | `tama test --match-contract FooTest`   |
+| Run with verbosity               | `tama test -vvv`                       |
+| Install a Solidity dep           | `forge install owner/repo`             |
+| Remove a Solidity dep            | `forge remove owner/repo`              |
+| Update Solidity deps             | `forge update`                         |
+| Inspect a non-Verity contract    | `forge inspect Foo abi`                |
+| Run a script                     | `forge script ...`                     |
+| Test gas snapshots               | `forge snapshot`                       |
+
+Use `tama test` whenever you would have used `forge test` — it preserves
+all arguments, exit codes, and output. Tama's `--offline` flag is the
+one thing translated to `forge`'s `--offline`.
+
+For inspecting Verity-generated contracts, use `tama inspect`, which
+reads the manifest. For inspecting plain Solidity contracts, use
+`forge inspect`.
+
+## Mirror tests run in plain Foundry
+
+A mirror test is just a Foundry test under `test/verity/`. It imports
+the generated `Iface` and `Deployer` and exercises the real Verity
+bytecode. The `@[tama.mirror "..."]` annotation in the proof file is
+the metadata link — `forge test` does not need to know about it.
+
+```solidity
+import {TipJarIface} from "src/generated/verity/TipJarIface.sol";
+import {TipJarDeployer} from "src/generated/verity/TipJarDeployer.sol";
+
+contract TipJarTest is Test {
+    TipJarIface jar;
+
+    function setUp() public { jar = TipJarDeployer.deploy(); }
+
+    function invariant_totalTracksBalances() public view {
+        assertEq(address(jar).balance, jar.total());
+    }
+}
+```
+
+`tama audit coverage` is what closes the loop: it reads the mirror
+annotation and checks that the named Foundry symbol exists.
+
+## Generated files are off-limits
+
+Files under `src/generated/verity/` start with:
+
+```solidity
+// GENERATED by tama; do not edit.
+```
+
+Tama refuses to overwrite a generated file whose first line has been
+altered — this is a safety net so a hand edit isn't silently lost. But
+a clean regeneration during the next `tama build` *will* overwrite it.
+Don't put logic in generated files. Move it into `verity/src/Foo.lean`
+(if it's contract logic) or into a user-owned Solidity file (if it's
+adapter glue).
+
+<Callout kind="warning" title="Don't compile Verity Yul with Foundry">
+Foundry will happily compile generated Yul if you let it. Don't.
+Tama compiles Verity Yul with <code>solc</code> using the
+<code>[yul]</code> block in <code>tama.toml</code>, with deterministic
+metadata-bytecode-hash off. If Foundry compiles the Yul too, the two
+bytecodes will differ and the audit will fail with a hash mismatch.
+The generated bridges import the embedded bytecode by reference, not by
+recompilation, which is how this stays consistent.
+</Callout>
+
+## A simple mental model
+
+> Tama owns Verity. Foundry owns Solidity. The two meet at the manifest
+> and the generated bridge files. Everything else is one or the other.

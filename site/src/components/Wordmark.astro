@@ -1,0 +1,61 @@
+---
+interface Props {
+  size?: "sm" | "md" | "lg" | "xl";
+  href?: string;
+  showKanji?: boolean;
+}
+const { size = "md", href = "/", showKanji = true } = Astro.props;
+---
+
+<a class={`wordmark wordmark-${size}`} href={href} aria-label="Tama — home">
+  <span class="wordmark-text">Tama</span>
+  {showKanji && (
+    <span class="wordmark-kanji" aria-hidden="true">玉魂</span>
+  )}
+</a>
+
+<style>
+  .wordmark {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5em;
+    font-family: var(--font-display);
+    font-weight: 500;
+    color: var(--ink);
+    text-decoration: none;
+    line-height: 1;
+    letter-spacing: -0.01em;
+  }
+  .wordmark:hover { color: var(--jade-800); }
+
+  .wordmark-text {
+    font-style: italic;
+    font-feature-settings: "liga" 1, "dlig" 1;
+  }
+  .wordmark-kanji {
+    font-family: var(--font-jp);
+    font-style: normal;
+    color: var(--jade-700);
+    font-size: 0.55em;
+    letter-spacing: 0.08em;
+    transform: translateY(-0.1em);
+  }
+
+  .wordmark-sm { font-size: 1.1rem; }
+  .wordmark-md { font-size: 1.45rem; }
+  .wordmark-lg { font-size: 2.4rem; }
+  .wordmark-xl {
+    font-size: var(--t-display);
+    letter-spacing: -0.025em;
+  }
+  .wordmark-xl .wordmark-kanji {
+    font-size: 0.18em;
+    letter-spacing: 0.4em;
+    transform: translateY(-0.6em);
+    color: var(--shu);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .wordmark-kanji { color: var(--jade-300); }
+  }
+</style>

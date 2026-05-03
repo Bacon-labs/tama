@@ -1,0 +1,526 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Wordmark from "../components/Wordmark.astro";
+import Button from "../components/Button.astro";
+import RuneTerminal from "../components/RuneTerminal.astro";
+import PipelineDiagram from "../components/PipelineDiagram.astro";
+import JadeSlab from "../components/JadeSlab.astro";
+import HankoSeal from "../components/ornaments/HankoSeal.astro";
+import Kintsugi from "../components/ornaments/Kintsugi.astro";
+
+const frames = [
+  {
+    prompt: "$",
+    body: "tama init my-protocol\n  ✓ scaffolded ERC20Lite\n  ✓ wrote tama.toml, lakefile.toml\n  ✓ pinned verity 0.5.0",
+    caption: "scaffold a project",
+  },
+  {
+    prompt: "$",
+    body: "tama build\n  run  proof       Lean elaborates\n  ok   proof       modules accepted\n  run  codegen     Yul + manifest\n  ok   solc         bytecode written\n  ok   forge        Foundry built",
+    caption: "verify and compile",
+  },
+  {
+    prompt: "$",
+    body: "tama audit\n  ✓ structure       all artifacts present\n  ✓ selectors       6 functions agree\n  ✓ storage-layout  no overlap\n  ✓ coverage        every obligation has a mirror\n  ✓ trust-boundary  no sorry, axioms allowlisted",
+    caption: "audit before release",
+  },
+];
+---
+
+<BaseLayout
+  title="Tama"
+  ogTitle="Tama — verified smart contracts"
+  description="Tama is the Verity developer toolchain. Write a smart contract, prove what it must do, and ship the same bytecode you proved about — all from one CLI."
+>
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-text">
+      <p class="eyebrow">
+        <HankoSeal kanji="玉" size={26} rotate={-6} />
+        <span>Verity developer toolchain</span>
+      </p>
+
+      <h1 class="hero-title">
+        <span class="title-tama">Tama</span>
+        <span class="title-kanji" aria-hidden="true">玉魂</span>
+      </h1>
+
+      <p class="tag-jp" aria-hidden="true">玉の如く堅く、魂の如く真。</p>
+
+      <p class="lede">
+        <em>Tama</em> means <em>jade</em> and <em>soul</em>.
+        Hard, beautiful, and the inner truth of a thing.
+      </p>
+
+      <p class="hero-body">
+        Tama is the developer toolchain for <a href="/concepts">Verity</a> — a way of
+        writing smart contracts where you also write down, mathematically,
+        what the contract must do, and a machine checks the proof.
+        One CLI takes you from source, through proof and codegen,
+        to the same audited bytecode you ship on-chain.
+      </p>
+
+      <div class="cta-row">
+        <Button href="/start">Write your first contract</Button>
+        <Button href="/concepts" variant="ghost">What is Verity?</Button>
+      </div>
+
+      <div class="install-mini" aria-label="Install command">
+        <code class="install-cmd">curl -L https://tama.tools/install.sh | sh</code>
+        <a class="install-link" href="/install">Install →</a>
+      </div>
+    </div>
+
+    <div class="hero-rune">
+      <RuneTerminal frames={frames} />
+    </div>
+  </section>
+
+  <Kintsugi />
+
+  <!-- The promise -->
+  <section class="promise">
+    <p class="ja" aria-hidden="true">真</p>
+    <h2>Three layers, one truth.</h2>
+    <p class="promise-lede">
+      A Verity contract is written three times — as code, as a specification, and as
+      a proof that the two agree. Tama keeps all three in one project, in one build,
+      in one verifiable artifact.
+    </p>
+    <div class="layers">
+      <JadeSlab kanji="實" title="Implementation" tone="jade">
+        <p>The Lean EDSL describing what the contract <em>does</em>.
+        Familiar shape: storage, functions, requires, returns.
+        Compiles to Yul, then to EVM bytecode.</p>
+      </JadeSlab>
+      <JadeSlab kanji="法" title="Specification" tone="brass">
+        <p>What the contract <em>must</em> do. Invariants,
+        postconditions, frame conditions — the rules a correct
+        implementation has to satisfy.</p>
+      </JadeSlab>
+      <JadeSlab kanji="證" title="Proof" tone="ink">
+        <p>A machine-checked argument that the implementation
+        satisfies the specification. No hand-waving, no
+        "trust the developer." Lean checks every step.</p>
+      </JadeSlab>
+    </div>
+  </section>
+
+  <Kintsugi />
+
+  <!-- Pipeline -->
+  <section class="section">
+    <div class="section-head">
+      <p class="eyebrow eyebrow-line">The pipeline</p>
+      <h2>From a Lean theorem to a hex string you can deploy.</h2>
+      <p>
+        Tama coordinates Lean, the Verity compiler, <code>solc</code>, and Foundry,
+        and threads the manifest — a single JSON record per contract — through every
+        stage. Audits read the same manifest, so the bytecode you ship and the
+        properties you proved about it cannot drift apart.
+      </p>
+    </div>
+    <PipelineDiagram />
+  </section>
+
+  <Kintsugi />
+
+  <!-- Why -->
+  <section class="why">
+    <div class="why-head">
+      <p class="eyebrow eyebrow-line">Why bother</p>
+      <h2>Tests find the bugs you thought of. Proofs cover the ones you didn't.</h2>
+    </div>
+    <div class="why-grid">
+      <div class="why-item">
+        <span class="why-num">一</span>
+        <h3>The bytecode you proved <em>is</em> the bytecode you ship.</h3>
+        <p>Tama compiles Verity to Yul, then to bytecode, and records a
+        SHA-256 of the result in the manifest. The deployer that goes
+        on-chain embeds those exact bytes — not a Solidity reimplementation.</p>
+      </div>
+      <div class="why-item">
+        <span class="why-num">二</span>
+        <h3>Foundry stays. Forge tests, fuzzers, scripts, RPCs — unchanged.</h3>
+        <p>A Tama project <em>is</em> a Foundry project. Run <code>forge test</code>
+        directly. Your invariant fuzz tests double as mirrors for the
+        proven obligations, so the two views back each other up.</p>
+      </div>
+      <div class="why-item">
+        <span class="why-num">三</span>
+        <h3>The trust boundary is small, named, and on the page.</h3>
+        <p><code>tama audit trust-boundary</code> walks the Lean proof and
+        refuses any reliance on <code>sorry</code> or unallowlisted axioms.
+        Every assumption has a name, a reason, and an entry in
+        <code>tama.toml</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <Kintsugi />
+
+  <!-- Install band -->
+  <section class="band">
+    <div class="band-text">
+      <HankoSeal kanji="入" size={64} rotate={-5} label="install seal" />
+      <div>
+        <h2>Install in one command.</h2>
+        <p>Detects your platform, fetches the signed release manifest,
+        verifies the SHA-256, and drops <code>tama</code> + <code>tamaup</code>
+        into <code>~/.tama/bin</code>. No flags, no surprises.</p>
+      </div>
+    </div>
+    <div class="band-cmd">
+      <pre><code>curl -L https://tama.tools/install.sh | sh</code></pre>
+      <p class="band-note">
+        Linux and macOS, x86_64 and aarch64. <a href="/install">Read what it does first →</a>
+      </p>
+    </div>
+  </section>
+
+  <!-- Closing -->
+  <section class="closing">
+    <p class="closing-jp">玉魂</p>
+    <p class="closing-en">
+      Hard like jade. The soul of a system you can hold in your hand.
+    </p>
+    <div class="closing-cta">
+      <Button href="/start">Begin →</Button>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  /* ───────── Hero ───────── */
+  .hero {
+    max-width: var(--col-max);
+    margin: 0 auto;
+    padding: var(--s-9) var(--s-5) var(--s-8);
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    gap: var(--s-9);
+    align-items: center;
+  }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-3);
+    font-family: var(--font-mono);
+    font-size: var(--t-xs);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--jade-700);
+    margin: 0 0 var(--s-5);
+  }
+  .eyebrow-line {
+    margin-bottom: var(--s-4);
+  }
+  @media (prefers-color-scheme: dark) {
+    .eyebrow { color: var(--jade-300); }
+  }
+
+  .hero-title {
+    margin: 0;
+    line-height: 0.9;
+    display: flex;
+    align-items: baseline;
+    gap: var(--s-5);
+    flex-wrap: wrap;
+  }
+  .title-tama {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 500;
+    font-size: clamp(4.5rem, 11vw, 8rem);
+    letter-spacing: -0.025em;
+    color: var(--ink);
+    background: linear-gradient(180deg, var(--ink) 0%, var(--jade-900) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+  .title-kanji {
+    font-family: var(--font-jp);
+    font-size: clamp(1.6rem, 3.6vw, 2.6rem);
+    color: var(--shu);
+    letter-spacing: 0.16em;
+    transform: translateY(-0.3em);
+  }
+
+  .tag-jp {
+    margin: var(--s-3) 0 var(--s-5);
+    font-family: var(--font-jp);
+    font-size: var(--t-md);
+    color: var(--jade-700);
+    letter-spacing: 0.05em;
+  }
+  @media (prefers-color-scheme: dark) {
+    .title-tama {
+      background: linear-gradient(180deg, var(--washi-bright) 0%, var(--jade-300) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .tag-jp { color: var(--jade-300); }
+  }
+
+  .lede {
+    margin: 0 0 var(--s-4);
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: clamp(1.3rem, 2vw, 1.7rem);
+    color: var(--ink);
+    line-height: 1.4;
+    max-width: 28ch;
+  }
+  .lede em {
+    font-style: italic;
+    color: var(--jade-800);
+    font-weight: 500;
+  }
+  .hero-body {
+    margin: 0 0 var(--s-6);
+    font-size: var(--t-md);
+    color: var(--ink-soft);
+    line-height: 1.7;
+    max-width: 56ch;
+  }
+
+  .cta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-3);
+    margin-bottom: var(--s-6);
+  }
+
+  .install-mini {
+    display: flex;
+    align-items: center;
+    gap: var(--s-4);
+    flex-wrap: wrap;
+    padding: var(--s-3) var(--s-4);
+    border-radius: var(--r);
+    background: var(--bg-soft);
+    border: 1px dashed var(--rule-strong);
+    font-size: var(--t-sm);
+  }
+  .install-cmd {
+    font-family: var(--font-mono);
+    background: transparent;
+    border: 0;
+    padding: 0;
+    color: var(--jade-900);
+    font-size: var(--t-sm);
+  }
+  .install-link {
+    margin-left: auto;
+    color: var(--ink-mute);
+    text-decoration: none;
+  }
+  .install-link:hover { color: var(--shu); }
+  @media (prefers-color-scheme: dark) {
+    .install-cmd { color: var(--jade-200); }
+  }
+
+  .hero-rune {
+    width: 100%;
+  }
+
+  @media (max-width: 980px) {
+    .hero {
+      grid-template-columns: 1fr;
+      gap: var(--s-7);
+      padding-top: var(--s-7);
+    }
+  }
+
+  /* ───────── Promise ───────── */
+  .promise {
+    max-width: var(--col-max);
+    margin: 0 auto;
+    padding: var(--s-7) var(--s-5);
+    text-align: center;
+    position: relative;
+  }
+  .promise .ja {
+    font-family: var(--font-jp);
+    font-size: 7rem;
+    line-height: 1;
+    margin: 0 0 var(--s-3);
+    color: var(--jade-700);
+    opacity: 0.10;
+    letter-spacing: 0;
+  }
+  .promise h2 {
+    font-size: clamp(2rem, 4vw, 3rem);
+    max-width: 22ch;
+    margin: 0 auto var(--s-4);
+  }
+  .promise-lede {
+    max-width: 60ch;
+    margin: 0 auto var(--s-7);
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: var(--t-lg);
+    color: var(--ink-soft);
+  }
+  .layers {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--s-5);
+    text-align: left;
+    margin-top: var(--s-5);
+  }
+  @media (max-width: 880px) {
+    .layers { grid-template-columns: 1fr; }
+    .promise .ja { font-size: 4.5rem; }
+  }
+
+  /* ───────── Section (pipeline) ───────── */
+  .section {
+    max-width: var(--col-max);
+    margin: 0 auto;
+    padding: var(--s-7) var(--s-5);
+  }
+  .section-head h2 {
+    font-size: clamp(1.8rem, 3.2vw, 2.6rem);
+    max-width: 30ch;
+    margin: 0 0 var(--s-4);
+  }
+  .section-head p {
+    max-width: 68ch;
+    color: var(--ink-soft);
+    font-size: var(--t-md);
+  }
+
+  /* ───────── Why ───────── */
+  .why {
+    max-width: var(--col-max);
+    margin: 0 auto;
+    padding: var(--s-7) var(--s-5);
+  }
+  .why-head h2 {
+    font-size: clamp(1.8rem, 3.2vw, 2.4rem);
+    max-width: 28ch;
+    margin: 0 0 var(--s-6);
+  }
+  .why-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--s-6);
+  }
+  .why-item h3 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: var(--t-lg);
+    margin: var(--s-3) 0 var(--s-2);
+    color: var(--ink);
+    line-height: 1.3;
+  }
+  .why-item h3 em {
+    font-style: italic;
+    color: var(--jade-800);
+  }
+  .why-item p {
+    color: var(--ink-soft);
+    font-size: var(--t-sm);
+    line-height: 1.7;
+  }
+  .why-num {
+    display: inline-grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: var(--r-pill);
+    background: var(--jade-mist);
+    color: var(--jade-800);
+    font-family: var(--font-jp);
+    font-size: 1rem;
+    border: 1px solid color-mix(in oklab, var(--jade-500) 30%, transparent);
+  }
+  @media (prefers-color-scheme: dark) {
+    .why-num { color: var(--jade-200); }
+    .why-item h3 em { color: var(--jade-300); }
+  }
+  @media (max-width: 880px) {
+    .why-grid { grid-template-columns: 1fr; gap: var(--s-5); }
+  }
+
+  /* ───────── Install band ───────── */
+  .band {
+    max-width: var(--col-max);
+    margin: 0 auto;
+    padding: var(--s-7) var(--s-5);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+    gap: var(--s-7);
+    align-items: center;
+  }
+  .band-text {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--s-5);
+  }
+  .band h2 {
+    font-size: clamp(1.6rem, 2.6vw, 2.2rem);
+    margin: 0 0 var(--s-3);
+  }
+  .band p {
+    color: var(--ink-soft);
+    font-size: var(--t-md);
+  }
+  .band-cmd pre {
+    margin: 0;
+    background: linear-gradient(160deg, #0e261f 0%, #08191a 100%);
+    color: #d8efe6;
+    padding: var(--s-5) var(--s-5);
+    border-radius: var(--r-lg);
+    border: 1px solid rgba(141, 184, 171, 0.18);
+    box-shadow: var(--shadow-deep);
+    font-size: var(--t-sm);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+  .band-note {
+    margin: var(--s-3) 0 0;
+    font-size: var(--t-sm);
+    color: var(--ink-mute);
+  }
+  @media (max-width: 880px) {
+    .band { grid-template-columns: 1fr; }
+  }
+
+  /* ───────── Closing ───────── */
+  .closing {
+    max-width: var(--col-max);
+    margin: var(--s-9) auto 0;
+    padding: var(--s-9) var(--s-5);
+    text-align: center;
+    border-top: 1px solid var(--rule);
+  }
+  .closing-jp {
+    margin: 0 0 var(--s-3);
+    font-family: var(--font-jp);
+    font-size: 4rem;
+    color: var(--jade-700);
+    letter-spacing: 0.2em;
+    line-height: 1;
+  }
+  .closing-en {
+    margin: 0 auto var(--s-6);
+    max-width: 36ch;
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: var(--t-lg);
+    color: var(--ink-soft);
+  }
+  .closing-cta {
+    display: inline-flex;
+    gap: var(--s-3);
+  }
+  @media (prefers-color-scheme: dark) {
+    .closing-jp { color: var(--jade-300); }
+  }
+</style>

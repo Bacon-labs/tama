@@ -1,0 +1,254 @@
+@import "@fontsource/eb-garamond/latin-400.css";
+@import "@fontsource/eb-garamond/latin-500.css";
+@import "@fontsource/eb-garamond/latin-600.css";
+@import "@fontsource/eb-garamond/latin-400-italic.css";
+@import "@fontsource/inter/latin-400.css";
+@import "@fontsource/inter/latin-500.css";
+@import "@fontsource/inter/latin-600.css";
+@import "@fontsource/inter/latin-700.css";
+@import "@fontsource/jetbrains-mono/latin-400.css";
+@import "@fontsource/jetbrains-mono/latin-500.css";
+
+/* Noto Serif JP is intentionally NOT bundled — its CJK subset is several
+ * MB for the ~30 kanji we actually render. Modern OSes ship a serif
+ * Japanese font (Hiragino Mincho on macOS/iOS, Yu Mincho on Windows,
+ * Noto Serif CJK on most Linux distros), which is what `--font-jp`
+ * falls back to. */
+
+@import "./tokens.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: var(--t-base);
+  line-height: 1.65;
+  color: var(--ink);
+  background: var(--bg);
+  background-image:
+    radial-gradient(
+      900px 600px at 12% -10%,
+      rgba(61, 128, 115, 0.10),
+      transparent 60%
+    ),
+    radial-gradient(
+      720px 540px at 100% 0%,
+      rgba(167, 137, 71, 0.08),
+      transparent 65%
+    );
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1, "ss01" 1;
+}
+
+::selection {
+  background: var(--jade-700);
+  color: var(--washi-bright);
+}
+
+a {
+  color: var(--jade-800);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: color var(--dur-fast) var(--ease-quiet);
+}
+
+a:hover {
+  color: var(--shu);
+}
+
+@media (prefers-color-scheme: dark) {
+  a {
+    color: var(--jade-300);
+  }
+  a:hover {
+    color: var(--shu);
+  }
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  margin: 0 0 var(--s-4);
+  line-height: 1.12;
+}
+
+h1 {
+  font-size: var(--t-4xl);
+}
+
+h2 {
+  font-size: var(--t-2xl);
+}
+
+h3 {
+  font-size: var(--t-xl);
+  font-weight: 600;
+}
+
+h4 {
+  font-size: var(--t-md);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+p {
+  margin: 0 0 var(--s-4);
+}
+
+p, li {
+  color: var(--ink-soft);
+}
+
+strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  font-feature-settings: "calt" 1, "ss02" 1;
+}
+
+:not(pre) > code {
+  padding: 0.12em 0.42em;
+  border-radius: var(--r-sm);
+  background: var(--jade-mist);
+  color: var(--jade-900);
+  border: 1px solid color-mix(in oklab, var(--jade-300) 30%, transparent);
+  font-size: 0.88em;
+}
+
+@media (prefers-color-scheme: dark) {
+  :not(pre) > code {
+    background: rgba(141, 184, 171, 0.10);
+    color: var(--jade-200);
+    border-color: rgba(141, 184, 171, 0.18);
+  }
+}
+
+pre {
+  margin: var(--s-5) 0;
+  padding: var(--s-4) var(--s-5);
+  overflow-x: auto;
+  border-radius: var(--r);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 1px 0 rgba(17, 21, 15, 0.04);
+  font-size: var(--t-sm);
+  line-height: 1.65;
+}
+
+@media (prefers-color-scheme: dark) {
+  pre {
+    background: #0b1310;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+}
+
+pre code {
+  font-family: var(--font-mono);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+hr {
+  border: 0;
+  height: 1px;
+  background: var(--rule);
+  margin: var(--s-7) 0;
+}
+
+blockquote {
+  margin: var(--s-5) 0;
+  padding: var(--s-3) var(--s-5);
+  border-left: 2px solid var(--jade-500);
+  background: var(--jade-mist);
+  color: var(--ink-soft);
+  border-radius: 0 var(--r) var(--r) 0;
+}
+
+ul, ol {
+  padding-left: 1.4em;
+}
+
+li {
+  margin: var(--s-2) 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--s-5) 0;
+  font-size: var(--t-sm);
+}
+
+th, td {
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--t-sm);
+  color: var(--jade-900);
+  background: var(--jade-mist);
+  letter-spacing: 0.02em;
+}
+
+@media (prefers-color-scheme: dark) {
+  th {
+    color: var(--jade-200);
+  }
+}
+
+img, svg {
+  max-width: 100%;
+  height: auto;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--jade-600);
+  outline-offset: 3px;
+  border-radius: var(--r-sm);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

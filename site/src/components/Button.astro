@@ -1,0 +1,88 @@
+---
+interface Props {
+  href: string;
+  variant?: "primary" | "ghost" | "ink";
+  external?: boolean;
+}
+const { href, variant = "primary", external = false } = Astro.props;
+const rel = external ? "noopener" : undefined;
+const target = external ? "_blank" : undefined;
+---
+
+<a
+  class={`btn btn-${variant}`}
+  href={href}
+  rel={rel}
+  target={target}
+>
+  <slot />
+  {variant === "primary" && (
+    <span class="arrow" aria-hidden="true">→</span>
+  )}
+</a>
+
+<style>
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55em;
+    padding: 0.78em 1.25em;
+    border-radius: var(--r);
+    font-family: var(--font-body);
+    font-weight: 500;
+    font-size: var(--t-sm);
+    letter-spacing: 0.02em;
+    text-decoration: none;
+    transition:
+      transform var(--dur-fast) var(--ease-spring),
+      box-shadow var(--dur) var(--ease-quiet),
+      background var(--dur) var(--ease-quiet);
+    border: 1px solid transparent;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+
+  .btn-primary {
+    background:
+      radial-gradient(180% 120% at 0% 0%, #3d8073 0%, #1f5f4f 50%, #0c3a31 100%);
+    color: var(--washi-bright);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.18),
+      0 1px 0 rgba(12, 58, 49, 0.4),
+      0 14px 28px -14px rgba(12, 58, 49, 0.6);
+  }
+  .btn-primary:hover {
+    color: var(--washi-bright);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.25),
+      0 1px 0 rgba(12, 58, 49, 0.4),
+      0 18px 36px -14px rgba(12, 58, 49, 0.7);
+  }
+  .arrow {
+    transition: transform var(--dur) var(--ease-spring);
+  }
+  .btn-primary:hover .arrow { transform: translateX(3px); }
+
+  .btn-ghost {
+    background: transparent;
+    color: var(--ink);
+    border-color: var(--rule-strong);
+  }
+  .btn-ghost:hover {
+    background: var(--jade-mist);
+    color: var(--jade-900);
+    border-color: color-mix(in oklab, var(--jade-500) 30%, transparent);
+  }
+
+  .btn-ink {
+    background: var(--sumi);
+    color: var(--washi-bright);
+    box-shadow: var(--shadow-sm);
+  }
+  .btn-ink:hover { color: var(--washi-bright); background: #1c2520; }
+
+  @media (prefers-color-scheme: dark) {
+    .btn-ghost { color: var(--ink); border-color: var(--rule-strong); }
+    .btn-ghost:hover { background: var(--jade-mist); color: var(--jade-100); }
+  }
+</style>

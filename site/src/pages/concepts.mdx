@@ -1,0 +1,184 @@
+---
+layout: ../layouts/MarkLayout.astro
+title: Concepts
+eyebrow: Read this once
+kanji: 理
+description: What Verity is, how it differs from "just write Solidity," and definitions of every term Tama uses elsewhere in the docs. Read this once and the rest of the docs make sense.
+---
+
+import Callout from "../components/Callout.astro";
+
+## What is Verity?
+
+**Verity is a way of writing smart contracts where the contract and its
+intended behavior are written down separately, and a machine checks
+that they agree.**
+
+Three layers, in one project:
+
+1. **Implementation** — the code that runs on the EVM.
+   Written in a Lean DSL that looks much like Solidity, compiled to Yul, then to bytecode.
+2. **Specification** — what the implementation must do. Invariants
+   ("the total never exceeds the cap"), postconditions ("after `transfer`,
+   the sender's balance drops by exactly the amount"), frame conditions
+   ("only these storage slots changed"). Written in Lean.
+3. **Proof** — a machine-checked argument that the implementation
+   satisfies the specification. Written in Lean's tactic language.
+   Lean accepts it or rejects it; there is no middle ground.
+
+A Solidity project gives you (1) and a fuzz test that *probes* (2).
+Verity gives you (1), (2), and a *proof* that (1) satisfies (2) on every
+possible input — not just the ones the fuzzer happened to try.
+
+## What is Tama?
+
+Tama is the developer toolchain that orchestrates Verity. It's a single
+Rust binary (`tama`) plus a version manager (`tamaup`), styled after
+Foundry's `forge` and `foundryup`.
+
+`tama` knows how to:
+
+- scaffold a Verity-shaped Foundry project (`tama init`, `tama new`),
+- run the fast Lean check while you're iterating (`tama check`),
+- run the full pipeline — proofs, codegen, `solc`, bridge generation,
+  `forge build` — and produce one **manifest** per contract (`tama build`),
+- run release-time audits over the manifest and artifacts (`tama audit`),
+- inspect any artifact (`tama inspect`),
+- manage Verity dependencies and lock state (`tama install`,
+  `tama remove`, `tama update`, `tama doctor`).
+
+Everything Tama produces is reproducible from `tama.toml` and `tama.lock`.
+
+## Why prove anything?
+
+Tests find the bugs you thought of. Proofs cover the bugs you didn't.
+
+A unit test for `transfer` covers the inputs you wrote down. A property
+test covers a few thousand random samples. A proof that *for all senders,
+amounts, and prior states, total supply is preserved* covers every input
+the contract will ever see — at design time, before deployment, before
+the auditor reads a line.
+
+This is not a replacement for tests. The Foundry mirror tests are still
+there, exercising the actual bytecode. The proof is an additional layer
+that closes the gaps tests can't reach.
+
+## The terms you'll encounter
+
+### Implementation, spec, proof
+
+Three Lean files per contract, by convention:
+
+- `verity/src/Foo.lean` — the implementation.
+- `verity/spec/FooSpec.lean` — the specification.
+- `verity/proof/FooProof.lean` — the proof.
+
+Tama's "fast check" elaborates only the first two. The full build
+elaborates all three.
+
+### Obligation
+
+A **public contract obligation** is a theorem in the proof file marked
+with `@[tama.obligation]`. Tama treats it as part of the contract's
+public surface: it must be either covered by a Foundry mirror test or
+explicitly marked proof-only with a stated reason. Helper lemmas are
+*not* obligations — they're internal scaffolding.
+
+### Mirror test
+
+A Foundry test marked as the executable shadow of an obligation, via
+`@[tama.mirror "test/verity/Foo.t.sol:FooTest.invariant_…"]` on the
+theorem. The mirror function must be a fuzz test (`testFuzz*`) or a
+Foundry invariant (`invariant_*`) — not a one-shot example test.
+
+This is how a property and a fuzz test are bound together: the proof
+says "for all inputs, P holds"; the mirror exercises the same P on the
+real bytecode under random inputs.
+
+### Manifest
+
+A single JSON file per contract, written to `artifacts/manifest/Foo.json`,
+schema `tama.contract-manifest.v1`. It records:
+
+- ABI (functions, events, errors, selectors),
+- storage layout,
+- generated artifact paths and the SHA-256 of the creation bytecode,
+- public obligations and their mirror coverage.
+
+The manifest is the **single source of truth** that ties every other
+artifact together. Generated bridges are built from it, audits read it,
+`tama inspect` queries it.
+
+### Generated bridge (interface + deployer)
+
+For each Verity contract, Tama emits two Solidity files into
+`src/generated/verity/`:
+
+- `FooIface.sol` — the ABI-level Solidity interface.
+- `FooDeployer.sol` — a library that deploys the *exact bytecode*
+  Verity emitted, embedded as a `bytes` literal.
+
+Tests, scripts, and other Solidity contracts import these. They are
+regenerated on every `tama build`. Don't edit them — Tama refuses to
+overwrite a generated file whose first line has been altered, but
+your edits will be overwritten the next time the file is regenerated
+cleanly.
+
+### Trust boundary
+
+Lean is a foundational system. Every theorem either reduces to its
+axioms, or it doesn't. The **trust boundary** is the set of axioms,
+unsafe declarations, and external compiler assumptions that a given
+proof depends on.
+
+`tama audit trust-boundary` walks each obligation's dependency set
+and refuses any reliance on:
+
+- `sorryAx` (the marker Lean uses for incomplete proofs — always denied),
+- axioms not listed in `tama.toml` under `[trust.allow_axioms]`,
+- unresolved Lean declarations,
+- compiler trust-surface flags reported by the Verity framework.
+
+The point is to make every assumption *named* and *visible*, not to
+eliminate them entirely. `Classical.choice` and `Quot.sound` are
+typically allowlisted; project-specific ones get a one-line reason.
+
+### `tama.toml`
+
+Project marker, Verity version pin, path overrides, Yul compilation
+settings, and audit policy. Strict — unknown keys are errors, not
+warnings. Sibling to (and intentionally non-overlapping with)
+`foundry.toml`.
+
+### `tama.lock`
+
+The resolved state of a build: Verity revision, Lean toolchain, `solc`
+version, hashes of every input config file. Refreshed on `tama build`,
+checked by `tama build --locked` and CI.
+
+### Lakefile
+
+Lake is Lean's build tool. `lakefile.toml` is generated by `tama init`,
+then yours to edit. Tama touches it only on explicit dependency commands
+(`tama install`, `remove`, `update`, `doctor --fix`), and uses
+formatting-preserving edits.
+
+### Foundry interop
+
+A Tama project *is* a Foundry project. `tama test` is sugar for
+`forge test`. Forge handles Solidity compilation, fuzzing, scripting,
+and RPC — Tama doesn't replace any of that. The two configs are kept
+non-overlapping: Verity-side concerns live in `tama.toml`, Solidity-side
+concerns live in `foundry.toml`.
+
+<Callout kind="seal" title="One sentence to hold on to">
+Tama keeps three layers — implementation, spec, proof — in one project,
+in one build, with one manifest tying them to the bytecode you ship.
+Every term above is a piece of that promise.
+</Callout>
+
+## See also
+
+- [Your first contract](/start) — the tutorial that uses every term above.
+- [CLI reference](/reference/cli) — what each command actually does.
+- [Manifest schema](/reference/manifest) — the canonical JSON shape.

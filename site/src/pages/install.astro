@@ -1,0 +1,95 @@
+---
+import MarkLayout from "../layouts/MarkLayout.astro";
+import Callout from "../components/Callout.astro";
+---
+
+<MarkLayout
+  title="Install Tama"
+  eyebrow="Get the toolchain"
+  kanji="入"
+  description="Tama is a single Rust binary plus a small companion (tamaup) that manages versions. The installer fetches a signed release manifest, verifies the SHA-256 of the artifact for your platform, and drops both binaries into ~/.tama/bin."
+>
+  <h2>One command</h2>
+
+  <pre><code>curl -L https://tama.tools/install.sh | sh</code></pre>
+
+  <p>
+    The installer takes no flags. It detects your platform
+    (<code>linux-x86_64</code>, <code>linux-aarch64</code>,
+    <code>macos-x86_64</code>, <code>macos-aarch64</code>),
+    fetches the latest signed manifest from the Tama GitHub Releases page,
+    verifies the SHA-256 of the artifact it intends to install,
+    and writes <code>tama</code> + <code>tamaup</code> into
+    <code>~/.tama/bin</code>. Add that directory to your <code>PATH</code> if it
+    isn't already.
+  </p>
+
+  <Callout kind="seal" title="Trust model">
+    The bootstrap script trusts TLS for the GitHub Releases endpoint plus the
+    SHA-256s carried in the signed release manifest. It refuses to place a
+    binary on <code>$PATH</code> if the artifact hash doesn't match.
+    Set <code>TAMAUP_HOME</code> to install into a different prefix.
+  </Callout>
+
+  <h2>Switch versions</h2>
+
+  <p>
+    Once <code>tamaup</code> is installed, use it to install, switch, and
+    remove specific Tama releases:
+  </p>
+
+  <pre><code>tamaup install 0.1.3      # install a specific release
+tamaup use 0.1.3          # switch the active version
+tamaup install nightly    # install the nightly channel
+tamaup list               # show installed versions
+tamaup self update        # update tamaup itself
+tamaup uninstall          # remove tama (keeps tamaup)</code></pre>
+
+  <h2>What gets installed</h2>
+
+  <ul>
+    <li><code>~/.tama/bin/tama</code> — shim or symlink to the active version.</li>
+    <li><code>~/.tama/bin/tamaup</code> — version manager.</li>
+    <li><code>~/.tama/versions/&lt;version&gt;/bin/tama</code> — the actual binary for each installed release.</li>
+  </ul>
+
+  <h2>External tools</h2>
+
+  <p>
+    Tama drives <code>lake</code> (Lean's build tool), the Verity Lean
+    framework, <code>solc</code>, and <code>forge</code>. <code>tamaup</code>
+    checks for compatible versions of <code>lean</code>/<code>lake</code>
+    and <code>forge</code> on your <code>PATH</code> and offers to install
+    them via <code>elan</code> and <code>foundryup</code>. Pass
+    <code>--no-install-lean</code> or <code>--no-install-foundry</code> to
+    opt out of the auto-install.
+  </p>
+
+  <p>
+    Inside a Tama project, the project's <code>lean-toolchain</code>
+    file always wins — <code>tamaup</code> only provisions tools, it does
+    not override your project pin.
+  </p>
+
+  <h2>Verify your install</h2>
+
+  <pre><code>tama --version
+tama doctor</code></pre>
+
+  <p>
+    <code>tama doctor</code> prints the resolved versions of every external
+    tool, the project's <code>tama.toml</code> resolution, and a
+    drift report. If anything is missing or mismatched, it tells you exactly
+    what to do.
+  </p>
+
+  <h2>Uninstall</h2>
+
+  <pre><code>tamaup uninstall          # removes tama, keeps tamaup
+rm -rf ~/.tama            # removes everything</code></pre>
+
+  <Callout kind="note" title="Windows">
+    Native Windows is not supported in v0.1. Use WSL2 with the Linux x86_64
+    installer.
+  </Callout>
+</MarkLayout>

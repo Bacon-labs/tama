@@ -1,0 +1,371 @@
+---
+layout: ../../layouts/DocLayout.astro
+title: CLI commands
+eyebrow: Reference
+description: Every tama and tamaup subcommand, every flag, with a small example. Linkable per-command anchors.
+---
+
+import Callout from "../../components/Callout.astro";
+
+## Global flags
+
+```text
+--root <path>       Run as if invoked from another project root
+--locked            Fail if the lockfile or tracked inputs are stale
+--offline           Do not access the network
+--json              Emit JSON for Tama-owned output
+--verbose, -v       Increase logging verbosity
+--no-color          Disable colored output
+```
+
+`-v` raises Tama-owned diagnostics to debug; `-vv` to trace. External
+tool output follows the invoked tool's own behavior. Without `RUST_LOG`,
+Tama defaults to info.
+
+## Environment
+
+`TAMA_LAKE_PACKAGE_CACHE` — directory of trusted reusable Lake package
+checkouts. Defaults to the platform user cache directory:
+`~/Library/Caches/tama/lake-packages` on macOS, `$XDG_CACHE_HOME/tama/lake-packages`
+or `~/.cache/tama/lake-packages` elsewhere. Set to `off` to disable.
+`TAMA_SOLC` — override the resolved `solc` binary path. Useful for
+locked-version development environments.
+
+---
+
+## `tama init [path]` <a id="init"></a>
+
+Scaffold a new Tama/Foundry project with the `ERC20Lite` starter.
+
+```sh
+tama init my-protocol
+```
+
+Writes `tama.toml`, `tama.lock`, `foundry.toml`, `lakefile.toml`,
+`lake-manifest.json`, `lean-toolchain`, the aggregate Lean modules,
+the commented `verity/src/`, `verity/spec/`, `verity/proof/` files,
+the `script/ERC20Lite.s.sol` deployment script, the Foundry mirror
+test, and the generated bridge paths. Installs `forge-std` as a
+shallow git submodule.
+
+The starter is a real Verity project — it builds and audits cleanly
+without hand edits.
+
+---
+
+## `tama new <Name>` <a id="new"></a>
+
+Add a new Verity contract scaffold.
+
+```sh
+tama new TipJar
+```
+
+Creates:
+
+- `verity/src/TipJar.lean`
+- `verity/spec/TipJarSpec.lean`
+- `verity/proof/TipJarProof.lean`
+- `test/verity/TipJar.t.sol`
+
+Updates the aggregate Lean modules. Does **not** edit `lakefile.toml`
+— the initial Lake targets must already cover new files under the
+configured paths. If `[paths]` has been customized after init, the
+user-owned Lakefile must already map the `src`, `spec`, and `proof`
+libraries to those roots; Tama refuses before writing if not.
+
+The proof scaffold contains `sorry` placeholders for the public
+obligations. `tama check` passes; `tama audit trust-boundary` rejects
+them until they're discharged.
+
+---
+
+## `tama check` <a id="check"></a>
+
+Fast Lean elaboration of implementation + spec aggregate modules only.
+
+```sh
+tama check
+```
+
+Equivalent to `lake build TamaSrc TamaSpec`. Proofs, Verity codegen,
+`solc`, and Foundry are not run. This is the inner-loop command —
+typically completes in seconds.
+
+`tama check` does not run `lake update`, but it will seed missing
+packages from `TAMA_LAKE_PACKAGE_CACHE`. With `--offline`, it fails
+before invoking Lake if any pinned git package is missing, dirty, or
+at a different revision than `lake-manifest.json` says it should be.
+
+`--json` returns:
+
+```json
+{ "status": "ok", "targets": ["TamaSrc", "TamaSpec"] }
+```
+
+---
+
+## `tama build` <a id="build"></a>
+
+The full pipeline.
+
+```sh
+tama build
+```
+
+Steps:
+
+1. `lake build TamaProof` — Lean elaborates implementation, spec, and proof.
+2. `lake exe verity-compiler` — emits Yul, ABI, storage, trust reports.
+3. Tama adapts compiler output into `tama.contract-manifest.v1` files.
+4. Lean records proof dependencies into `artifacts/trust-probe/axioms.json`.
+5. Tama validates each manifest's schema and artifact paths.
+6. `solc --standard-json` compiles each Yul into bytecode per `[yul]`.
+7. Tama generates Solidity interfaces and deployers from the manifests.
+8. `forge build` compiles user Solidity, generated bridges, and tests.
+9. `tama.lock` is refreshed.
+
+Useful flags:
+
+```text
+--locked              Fail if lockfile or inputs are stale; do not refresh
+--offline             Do not access the network
+--no-solc             Stop after Yul/manifest generation
+--no-forge            Stop after bridge generation
+--contract <Name>     Build only one Verity contract
+```
+
+`--no-solc` and `--no-forge` are local development escape hatches, not
+release gates. `--no-solc` removes downstream solc JSON, bytecode, and
+generated bridge files for the selected contracts so stale outputs
+can't masquerade as fresh.
+
+`--json` returns the generated manifest paths:
+
+```json
+{ "manifests": ["artifacts/manifest/ERC20Lite.json"] }
+```
+
+---
+
+## `tama test [forge-args...]` <a id="test"></a>
+
+Pure passthrough to `forge test`.
+
+```sh
+tama test
+tama test -vvv
+tama test --match-contract ERC20LiteTest
+tama test --match-path test/verity/ERC20Lite.t.sol
+```
+
+Forge stdout, stderr, and exit code are preserved. Tama-owned JSON
+output never wraps Foundry passthrough.
+
+The Tama global `--offline` flag is translated to Forge's `--offline`.
+All other Forge arguments are passed through unchanged. Coverage
+enforcement belongs to `tama audit coverage`, not to `tama test`.
+
+---
+
+## `tama audit [check]` <a id="audit"></a>
+
+Run release-time audits over the manifests and artifacts produced by
+`tama build`.
+
+```sh
+tama audit
+tama audit selectors
+tama audit trust-boundary
+```
+
+Without `[check]`, the full suite runs:
+
+```text
+structure        Required files, aggregate imports, generated paths, bytecode hashes
+selectors        ABI selectors and topics, Solidity declarations, Yul dispatch
+storage-layout   Storage slots, overlap, encodings, compiler layout drift
+coverage         Public obligations have Foundry mirrors or proof-only reasons
+trust-boundary   Lean axioms, sorryAx, unresolved declarations, trust reports
+```
+
+Aliases: `storage` → `storage-layout`, `trust` → `trust-boundary`.
+
+`--deny-warnings` treats warning-severity findings as failures.
+`--json` emits stable issue records for CI consumers.
+
+See [Reading audit output](/guides/audits) for what each check inspects
+and what its failures look like in real output.
+
+---
+
+## `tama inspect <Contract> <field>` <a id="inspect"></a>
+
+`forge inspect` analog for Verity artifacts.
+
+```sh
+tama inspect TipJar manifest
+tama inspect TipJar selectors
+tama inspect TipJar obligations
+```
+
+Fields:
+
+```text
+manifest
+selectors          function selectors, error selectors, event topic0
+abi
+storage-layout
+yul
+bytecode
+runtime-bytecode
+theorems
+obligations
+mirrors
+trust
+```
+
+For non-Verity Solidity contracts, use `forge inspect` directly.
+
+---
+
+## `tama clean [--deep]` <a id="clean"></a>
+
+Removes generated outputs.
+
+```sh
+tama clean
+```
+
+Cleans:
+
+```text
+artifacts/yul/                src/generated/verity/
+artifacts/bytecode/           out/
+artifacts/solc-json/          cache/
+artifacts/manifest/
+artifacts/lean/
+```
+
+If Foundry's `out` or `cache_path` is customized in `foundry.toml`,
+those directories are used instead of the defaults.
+
+`--deep` also removes Lake dependency/build cache state under
+`.lake/packages`.
+
+---
+
+## `tama install <repo>[@<version>]` <a id="install-cmd"></a>
+
+Add a Tama package as a Lean dependency.
+
+```sh
+tama install lfglabs-dev/verity-erc20
+tama install lfglabs-dev/verity-erc20@v0.2.0
+tama install lfglabs-dev/verity-erc20@some-branch
+```
+
+The target repo must contain `tama.toml`. Tama appends or updates a
+`require` block in `lakefile.toml` using formatting-preserving edits,
+runs `lake update`, and refreshes `tama.lock`. Without `@version`, the
+default branch head is resolved and pinned.
+
+For Solidity-side dependencies, use `forge install` directly.
+
+`--offline` is rejected because `lake update` must run.
+
+---
+
+## `tama remove <package>` <a id="remove"></a>
+
+Remove a Tama/Lake dependency.
+
+```sh
+tama remove verity-erc20
+```
+
+Edits `lakefile.toml`, runs `lake update`, refreshes `tama.lock`.
+For Solidity-side dependencies, use `forge remove` directly.
+
+---
+
+## `tama update` <a id="update"></a>
+
+Refresh resolved dependency state.
+
+```sh
+tama update
+```
+
+Default behavior:
+
+1. Ensure the `verity` `require` block in `lakefile.toml` matches `tama.toml`.
+2. Run `lake update`.
+3. Run `forge update`.
+4. Recompute `tama.lock`.
+
+Useful flags:
+
+```text
+--locked            Fail instead of updating if anything is stale
+--no-forge          Skip forge update
+--no-lake           Skip lake update
+--package <name>    Update one named dependency
+```
+
+`--offline` is allowed only when both `--no-lake` and `--no-forge` are
+set. To bump Verity, edit `tama.toml` and run `tama update`.
+
+---
+
+## `tama doctor` <a id="doctor"></a>
+
+Print versions, config resolution, and drift checks.
+
+```sh
+$ tama doctor
+✓ tama          0.1.0
+✓ verity        0.5.0    matches tama.toml and lakefile.toml
+✓ lean          4.22.0   matches lean-toolchain
+✓ lake          5.0.0
+✓ forge         1.5.2
+✓ solc          0.8.33   matches tama.toml [yul]
+✓ lockfile      current
+```
+
+`tama doctor --fix` may:
+
+- update stale `tama.lock` hashes;
+- update the Verity `require` block in `lakefile.toml` to match `tama.toml`;
+- repair missing generated artifact directories and the configured Lake build directory;
+- warn about — but not overwrite — user-authored config it cannot safely edit.
+
+`--json` emits per-tool entries with explicit `status` and `details`.
+
+---
+
+## `tamaup` <a id="tamaup"></a>
+
+Version manager for `tama`.
+
+```text
+tamaup                    install/update latest stable
+tamaup install nightly    install nightly channel
+tamaup install 0.1.3      install specific version
+tamaup use 0.1.3          switch active version
+tamaup list               installed versions
+tamaup self update        update tamaup itself
+tamaup uninstall          remove tama (keep tamaup)
+```
+
+`tamaup` checks for compatible `lean`, `lake`, and `forge` on `$PATH`.
+It installs `elan` (which provides Lean) and `foundryup` if absent and
+the `--no-install-lean` / `--no-install-foundry` flags weren't passed.
+Project-local `lean-toolchain` always wins inside a project.
+
+<Callout kind="seal" title="Trust model">
+The bootstrap installer trusts TLS plus the SHA-256s carried in the
+signed release manifest. <code>tamaup</code> uses the same model. The
+schema-less legacy single-version manifest shape is accepted only via
+<code>tamaup --manifest-file</code> for local/offline tests.
+</Callout>

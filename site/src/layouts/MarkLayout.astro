@@ -1,0 +1,112 @@
+---
+import BaseLayout from "./BaseLayout.astro";
+import Kintsugi from "../components/ornaments/Kintsugi.astro";
+
+interface Props {
+  title?: string;
+  description?: string;
+  eyebrow?: string;
+  kanji?: string;
+  width?: "prose" | "narrow" | "wide";
+  frontmatter?: {
+    title?: string;
+    description?: string;
+    eyebrow?: string;
+    kanji?: string;
+    width?: "prose" | "narrow" | "wide";
+  };
+}
+const fm = Astro.props.frontmatter ?? {};
+const title = Astro.props.title ?? fm.title ?? "Untitled";
+const description = Astro.props.description ?? fm.description;
+const eyebrow = Astro.props.eyebrow ?? fm.eyebrow;
+const kanji = Astro.props.kanji ?? fm.kanji;
+const width = Astro.props.width ?? fm.width ?? "prose";
+---
+
+<BaseLayout title={title} description={description}>
+  <article class={`mark width-${width}`}>
+    <header class="mark-head">
+      {eyebrow && <p class="eyebrow">{eyebrow}</p>}
+      <div class="title-row">
+        <h1>{title}</h1>
+        {kanji && <span class="title-kanji" aria-hidden="true">{kanji}</span>}
+      </div>
+      {description && <p class="lede">{description}</p>}
+    </header>
+    <Kintsugi variant="short" />
+    <div class="mark-body">
+      <slot />
+    </div>
+  </article>
+</BaseLayout>
+
+<style>
+  .mark {
+    margin: 0 auto;
+    padding: var(--s-8) var(--s-5) var(--s-7);
+  }
+  .width-prose { max-width: var(--col-prose); }
+  .width-narrow { max-width: var(--col-narrow); }
+  .width-wide { max-width: var(--col-wide); }
+
+  .eyebrow {
+    margin: 0 0 var(--s-3);
+    font-family: var(--font-mono);
+    font-size: var(--t-xs);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--jade-700);
+  }
+  .title-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s-4);
+    flex-wrap: wrap;
+  }
+  .mark h1 {
+    font-size: clamp(2.4rem, 5vw, 3.6rem);
+    font-weight: 500;
+    margin: 0;
+  }
+  .title-kanji {
+    font-family: var(--font-jp);
+    color: var(--jade-700);
+    font-size: 0.5em;
+    letter-spacing: 0.06em;
+  }
+  .lede {
+    margin: var(--s-4) 0 0;
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: var(--t-lg);
+    color: var(--ink-soft);
+    max-width: 64ch;
+  }
+
+  .mark-body :global(h2) {
+    margin-top: var(--s-7);
+    padding-top: var(--s-5);
+    border-top: 1px solid var(--rule);
+  }
+  .mark-body :global(h2:first-child) {
+    border-top: 0;
+    padding-top: 0;
+    margin-top: 0;
+  }
+  .mark-body :global(h3) {
+    margin-top: var(--s-6);
+  }
+  .mark-body :global(p),
+  .mark-body :global(li) {
+    font-size: var(--t-md);
+    line-height: 1.72;
+  }
+  .mark-body :global(.callout) {
+    margin: var(--s-5) 0;
+  }
+  @media (prefers-color-scheme: dark) {
+    .eyebrow { color: var(--jade-300); }
+    .title-kanji { color: var(--jade-300); }
+  }
+</style>

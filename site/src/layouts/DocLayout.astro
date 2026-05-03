@@ -1,0 +1,193 @@
+---
+import BaseLayout from "./BaseLayout.astro";
+import { docsNav } from "../lib/nav.ts";
+
+interface Props {
+  title?: string;
+  description?: string;
+  eyebrow?: string;
+  frontmatter?: {
+    title?: string;
+    description?: string;
+    eyebrow?: string;
+  };
+}
+const fm = Astro.props.frontmatter ?? {};
+const title = Astro.props.title ?? fm.title ?? "Untitled";
+const description = Astro.props.description ?? fm.description;
+const eyebrow = Astro.props.eyebrow ?? fm.eyebrow;
+const path = Astro.url.pathname.replace(/\/$/, "") || "/";
+---
+
+<BaseLayout title={title} description={description}>
+  <div class="doc-shell">
+    <aside class="sidebar" aria-label="Documentation sections">
+      <nav>
+        {docsNav.map((section) => (
+          <div class="sec">
+            <h3>{section.title}</h3>
+            <ul>
+              {section.items.map((it) => {
+                const active = path === it.href;
+                return (
+                  <li>
+                    <a href={it.href} class={active ? "active" : ""}>
+                      <span class="lbl">{it.label}</span>
+                      {it.summary && <span class="sm">{it.summary}</span>}
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </nav>
+    </aside>
+
+    <article class="article">
+      <header class="article-head">
+        {eyebrow && <p class="eyebrow">{eyebrow}</p>}
+        <h1>{title}</h1>
+        {description && <p class="lede">{description}</p>}
+      </header>
+      <div class="article-body">
+        <slot />
+      </div>
+    </article>
+  </div>
+</BaseLayout>
+
+<style>
+  .doc-shell {
+    max-width: var(--col-max);
+    margin: 0 auto;
+    padding: var(--s-6) var(--s-5) var(--s-7);
+    display: grid;
+    grid-template-columns: 248px minmax(0, 1fr);
+    gap: var(--s-7);
+    align-items: start;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 80px;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    padding-right: var(--s-3);
+    font-size: var(--t-sm);
+    border-right: 1px solid var(--rule);
+  }
+  .sidebar nav { display: grid; gap: var(--s-5); }
+  .sidebar .sec h3 {
+    font-family: var(--font-mono);
+    font-size: var(--t-xs);
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--jade-700);
+    margin: 0 0 var(--s-2);
+    padding: 0 var(--s-3);
+  }
+  .sidebar ul { list-style: none; padding: 0; margin: 0; }
+  .sidebar li { margin: 0; }
+  .sidebar a {
+    display: block;
+    padding: 6px var(--s-3);
+    border-radius: var(--r-sm);
+    text-decoration: none;
+    color: var(--ink-soft);
+    line-height: 1.35;
+  }
+  .sidebar a:hover {
+    background: var(--jade-mist);
+    color: var(--jade-900);
+  }
+  .sidebar a.active {
+    background: var(--jade-mist);
+    color: var(--jade-900);
+    font-weight: 500;
+    box-shadow: inset 2px 0 0 var(--shu);
+  }
+  .sidebar .lbl { display: block; }
+  .sidebar .sm {
+    display: block;
+    font-size: var(--t-xs);
+    color: var(--ink-mute);
+    font-family: var(--font-mono);
+    letter-spacing: 0.04em;
+  }
+
+  .article {
+    max-width: var(--col-prose);
+    min-width: 0;
+  }
+  .article-head { margin-bottom: var(--s-6); }
+  .eyebrow {
+    margin: 0 0 var(--s-3);
+    font-family: var(--font-mono);
+    font-size: var(--t-xs);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--jade-700);
+  }
+  .article h1 {
+    font-size: clamp(2rem, 4vw, 3rem);
+    font-weight: 500;
+    margin: 0;
+  }
+  .lede {
+    margin: var(--s-3) 0 0;
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: var(--t-lg);
+    color: var(--ink-soft);
+    max-width: 64ch;
+  }
+  .article-body :global(h2) {
+    margin: var(--s-7) 0 var(--s-3);
+    font-size: var(--t-2xl);
+    padding-top: var(--s-4);
+    border-top: 1px solid var(--rule);
+  }
+  .article-body :global(h2:first-child) {
+    margin-top: 0;
+    border-top: 0;
+    padding-top: 0;
+  }
+  .article-body :global(h3) {
+    margin: var(--s-6) 0 var(--s-2);
+    font-size: var(--t-xl);
+  }
+  .article-body :global(p),
+  .article-body :global(li) {
+    font-size: var(--t-md);
+    line-height: 1.72;
+  }
+
+  @media (max-width: 920px) {
+    .doc-shell {
+      grid-template-columns: 1fr;
+      gap: var(--s-5);
+    }
+    .sidebar {
+      position: static;
+      max-height: none;
+      border-right: 0;
+      border-bottom: 1px solid var(--rule);
+      padding: 0 0 var(--s-4);
+    }
+    .sidebar nav {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--s-3);
+    }
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .sidebar .sec h3 { color: var(--jade-300); }
+    .sidebar a:hover,
+    .sidebar a.active {
+      color: var(--jade-100);
+    }
+  }
+</style>
