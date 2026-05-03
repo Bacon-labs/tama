@@ -1,0 +1,335 @@
+---
+layout: ../layouts/MarkLayout.astro
+title: Your first contract
+eyebrow: Tutorial · 20 minutes
+kanji: 始
+description: A guided walk from "I've never written Verity" to "I've shipped a smart contract whose key property is mathematically proven." We'll build a tiny TipJar, prove that it never loses anyone's money, and watch the audit confirm it.
+---
+
+import Callout from "../components/Callout.astro";
+
+## What we're going to build
+
+A `TipJar` contract: people send ETH, the contract records who paid in
+and how much, and only those people can withdraw what they put in.
+The property we want to prove is the obvious one and the one every
+real exploit violates:
+
+> **The sum of recorded balances is exactly the amount of ETH the contract holds.**
+> Nothing is created. Nothing disappears.
+
+By the end of this tutorial you will have:
+
+- a working Tama project with the `TipJar` contract,
+- a Lean proof of that invariant, machine-checked,
+- a Foundry mirror test that exercises the same property as a fuzz test,
+- a green `tama audit` report you could attach to a release.
+
+<Callout kind="note" title="What you need">
+- `tama` installed (see [Install](/install)).
+- Comfort reading Solidity. You do **not** need prior Lean or Verity experience.
+- About 20 minutes.
+</Callout>
+
+## Step 1 — Scaffold a project
+
+```sh
+tama init tipjar-protocol
+cd tipjar-protocol
+```
+
+`tama init` writes a Foundry-shaped project plus the Verity layers:
+
+```text
+tipjar-protocol/
+├── tama.toml          # project marker, Verity pin, audit policy
+├── tama.lock          # resolved versions
+├── foundry.toml       # standard Foundry config
+├── lakefile.toml      # Lake build config (yours to edit)
+├── lean-toolchain     # pinned Lean version
+├── verity/
+│   ├── src/           # Verity contracts
+│   ├── spec/          # specifications and invariants
+│   └── proof/         # machine-checked proofs
+├── src/generated/     # generated Solidity bridges (do not edit)
+├── test/verity/       # Foundry mirror tests
+└── artifacts/         # build outputs
+```
+
+The starter ships with a real `ERC20Lite` example that already builds and audits.
+Verify your toolchain by running:
+
+```sh
+tama doctor
+tama check
+```
+
+`tama check` runs the fast Lean elaboration of implementation + spec — proofs
+come later in `tama build`. This should finish in seconds.
+
+## Step 2 — Add the TipJar
+
+```sh
+tama new TipJar
+```
+
+This creates four files:
+
+```text
+verity/src/TipJar.lean         # implementation
+verity/spec/TipJarSpec.lean    # specification
+verity/proof/TipJarProof.lean  # proof
+test/verity/TipJar.t.sol       # Foundry mirror test
+```
+
+Open `verity/src/TipJar.lean` and replace the scaffold body with:
+
+```lean
+import Verity
+
+verity_contract TipJar where
+
+  storage
+    balances : mapping(address, uint256)
+    total    : uint256
+
+  function deposit() external payable do
+    let me  := msg.sender
+    let amt := msg.value
+    balances[me] := balances[me] + amt
+    total        := total + amt
+
+  function withdraw(amount : uint256) external do
+    let me := msg.sender
+    require balances[me] >= amount
+    balances[me] := balances[me] - amount
+    total        := total - amount
+    transfer me amount
+```
+
+This is the entire implementation. It looks like Solidity because that's the
+register Verity reaches for — `storage`, `function`, `require`, `transfer`.
+Underneath, every line is an expression in a Lean type theory that the
+compiler can reason about.
+
+## Step 3 — Write the specification
+
+Open `verity/spec/TipJarSpec.lean` and replace its body with:
+
+```lean
+import TipJar
+
+namespace TipJarSpec
+
+/-- The recorded `total` is always the sum of every balance. -/
+@[tama.invariant]
+def total_tracks_balances (s : TipJar.State) : Prop :=
+  s.total = s.balances.sumValues
+
+/-- After `deposit`, total grows by exactly `msg.value`. -/
+@[tama.postcondition TipJar.deposit]
+def deposit_increases_total
+    (pre post : TipJar.State) (call : TipJar.Call) : Prop :=
+  post.total = pre.total + call.value
+
+/-- After `withdraw`, total drops by exactly `amount`. -/
+@[tama.postcondition TipJar.withdraw]
+def withdraw_decreases_total
+    (pre post : TipJar.State) (amount : UInt256) : Prop :=
+  post.total = pre.total - amount
+
+end TipJarSpec
+```
+
+Three statements. The first is an **invariant** — a property the contract
+must preserve through every call. The next two are **postconditions** —
+properties of individual functions. Each is tagged with a `@[tama.…]`
+attribute so Tama knows to enforce coverage for it.
+
+<Callout kind="proof" title="Why bother writing this down?">
+This is the contract's *intent* in the strongest possible form. Every test
+you ever write is a finger pointing at one example of correct behavior.
+A specification points at every possible behavior at once.
+</Callout>
+
+## Step 4 — Discharge the proofs
+
+Open `verity/proof/TipJarProof.lean`:
+
+```lean
+import TipJarSpec
+
+namespace TipJarProof
+
+@[tama.obligation]
+@[tama.mirror "test/verity/TipJar.t.sol:TipJarTest.invariant_totalTracksBalances"]
+theorem deposit_preserves_invariant
+    (pre : TipJar.State) (call : TipJar.Call)
+    (h : TipJarSpec.total_tracks_balances pre) :
+    TipJarSpec.total_tracks_balances (TipJar.deposit pre call) := by
+  simp [TipJarSpec.total_tracks_balances, TipJar.deposit,
+        Mapping.sumValues_update_add]
+
+@[tama.obligation]
+@[tama.mirror "test/verity/TipJar.t.sol:TipJarTest.invariant_totalTracksBalances"]
+theorem withdraw_preserves_invariant
+    (pre : TipJar.State) (amount : UInt256)
+    (h : TipJarSpec.total_tracks_balances pre)
+    (k : pre.balances[msg.sender] ≥ amount) :
+    TipJarSpec.total_tracks_balances (TipJar.withdraw pre amount) := by
+  simp [TipJarSpec.total_tracks_balances, TipJar.withdraw,
+        Mapping.sumValues_update_sub k]
+
+end TipJarProof
+```
+
+Each theorem says: *if the invariant holds before the call, it holds
+after the call.* The `by simp [...]` is the proof — Lean's simplifier
+unfolds the definitions and the lemmas listed, and Verity's standard
+library takes care of the mapping arithmetic.
+
+The two `@[tama.mirror "..."]` annotations point at a Foundry test
+we'll write next. This is what links a proven property to an executable
+fuzz test that exercises the same property on the real bytecode.
+
+## Step 5 — Write the mirror test
+
+Open `test/verity/TipJar.t.sol` and replace the body:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {Test} from "forge-std/Test.sol";
+import {TipJarIface} from "src/generated/verity/TipJarIface.sol";
+import {TipJarDeployer} from "src/generated/verity/TipJarDeployer.sol";
+
+contract TipJarTest is Test {
+    TipJarIface jar;
+
+    function setUp() public {
+        jar = TipJarDeployer.deploy();
+    }
+
+    function invariant_totalTracksBalances() public view {
+        assertEq(address(jar).balance, jar.total());
+    }
+
+    function testFuzz_deposit(address who, uint96 amount) public {
+        vm.assume(who != address(0));
+        vm.deal(who, amount);
+        vm.prank(who);
+        jar.deposit{value: amount}();
+        assertEq(address(jar).balance, jar.total());
+    }
+}
+```
+
+The test imports `TipJarDeployer`, which Tama will generate in step 6.
+The deployer embeds the *exact bytecode* the Verity compiler produced for
+your contract — the same bytes you'd put on-chain. The fuzz test and the
+invariant check are the executable shadow of the proof you just wrote.
+
+## Step 6 — Build everything
+
+```sh
+tama build
+```
+
+You'll see something like:
+
+```text
+Build steps:
+  run  proof-check     Lean elaborates implementations, specs, and proofs
+  ok   proof-check     proof modules accepted by Lake
+  run  verity-codegen  Verity emits Yul, ABI, storage, and trust reports
+  ok   verity-codegen  compiler artifacts generated
+  run  manifest        Tama adapts Verity outputs into contract manifests
+  ok   manifest        2 manifests: ERC20Lite, TipJar
+  run  trust-probe     Lean records proof dependencies for audit
+  ok   trust-probe     trust-boundary inputs written
+  run  solc            TipJar Yul through solc 0.8.33 standard JSON
+  ok   solc            TipJar bytecode and hash written
+  run  bridge          TipJar Solidity interface and deployer
+  ok   bridge          TipJar bridge files generated
+  run  forge           Foundry compiles generated bridges and tests
+  ok   forge           forge build completed
+Build completed: 2 manifests
+```
+
+If `proof-check` fails with `unsolved goals`, your proof script needs more
+help — Lean is telling you exactly where. Almost always the fix is to add a
+lemma name to the `simp [...]` list, or `omega` for arithmetic, or
+to do a case split on a hypothesis.
+
+## Step 7 — Run the audit
+
+```sh
+tama audit
+```
+
+You should see the five checks pass:
+
+```text
+audit:
+  ✓ structure       all files present, bytecode hashes match
+  ✓ selectors       6 functions agree across Verity / manifest / Yul / Solidity
+  ✓ storage-layout  no overlap, all encodings recognized
+  ✓ coverage        every public obligation has a mirror
+  ✓ trust-boundary  no sorry, axioms allowlisted
+```
+
+The line that matters most is the last one. `trust-boundary` walks the
+Lean dependency graph of every theorem you tagged with `@[tama.obligation]`
+and refuses any reliance on `sorry` or unallowlisted axioms. That's the
+seal: the proofs are real, and they rest on a small set of named
+assumptions written down in `tama.toml`.
+
+## Step 8 — Watch the audit catch a bug
+
+Let's break the contract on purpose. Open `verity/src/TipJar.lean` and
+introduce a leak in `withdraw`:
+
+```lean
+function withdraw(amount : uint256) external do
+  let me := msg.sender
+  require balances[me] >= amount
+  balances[me] := balances[me] - amount
+  -- forgot to subtract from total!
+  transfer me amount
+```
+
+Now run:
+
+```sh
+tama build
+```
+
+You'll see:
+
+```text
+proof-check failed:
+  TipJarProof.withdraw_preserves_invariant: unsolved goals
+
+  pre.total - amount = (pre.total - amount).succ
+```
+
+Lean caught the inconsistency before any bytecode came out. The proof
+that the invariant survived `withdraw` is no longer true, because the
+implementation no longer matches the spec. Put the `total := total - amount`
+line back, rerun, and watch the build go green again.
+
+This is the loop. Implementation and spec are kept honest by the proof.
+The proof is kept honest by Lean. The bytecode is kept honest by the
+manifest hash. The audit ties all three to a Foundry test you can run
+with one keystroke.
+
+## Where to go next
+
+- **[Concepts](/concepts)** — every term used above (obligation, mirror,
+  manifest, trust boundary), defined plainly with examples.
+- **[Reading audit output](/guides/audits)** — what each check actually
+  inspects, what its failures look like, and how to fix them.
+- **[Writing proof obligations](/guides/proofs)** — patterns for spec
+  decomposition, frame conditions, and helper lemmas.
+- **[CLI reference](/reference/cli)** — every flag for every command.

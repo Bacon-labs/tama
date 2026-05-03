@@ -1,0 +1,90 @@
+---
+import Wordmark from "./Wordmark.astro";
+
+const path = Astro.url.pathname.replace(/\/$/, "") || "/";
+
+const items = [
+  { href: "/start", label: "Start", match: /^\/start/ },
+  { href: "/concepts", label: "Concepts", match: /^\/concepts/ },
+  { href: "/guides", label: "Guides", match: /^\/guides/ },
+  { href: "/reference/cli", label: "Reference", match: /^\/reference/ },
+];
+---
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <Wordmark size="md" />
+    <nav class="primary" aria-label="Primary">
+      {items.map((it) => (
+        <a
+          href={it.href}
+          class={it.match.test(path) ? "active" : ""}
+        >
+          {it.label}
+        </a>
+      ))}
+      <a class="ext" href="https://github.com/bacon-labs/tama" rel="noopener">
+        GitHub
+        <span aria-hidden="true">↗</span>
+      </a>
+    </nav>
+  </div>
+</header>
+
+<style>
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background: color-mix(in oklab, var(--bg) 88%, transparent);
+    backdrop-filter: saturate(140%) blur(10px);
+    -webkit-backdrop-filter: saturate(140%) blur(10px);
+    border-bottom: 1px solid var(--rule);
+  }
+  .topbar-inner {
+    max-width: var(--col-max);
+    margin: 0 auto;
+    padding: var(--s-3) var(--s-5);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-5);
+  }
+  .primary {
+    display: flex;
+    align-items: center;
+    gap: var(--s-4);
+    font-size: var(--t-sm);
+  }
+  .primary a {
+    color: var(--ink-soft);
+    text-decoration: none;
+    padding: 0.4em 0.6em;
+    border-radius: var(--r-sm);
+    transition: color var(--dur-fast) var(--ease-quiet),
+      background var(--dur-fast) var(--ease-quiet);
+  }
+  .primary a:hover,
+  .primary a.active {
+    color: var(--jade-900);
+    background: var(--jade-mist);
+  }
+  @media (prefers-color-scheme: dark) {
+    .primary a:hover,
+    .primary a.active {
+      color: var(--jade-200);
+    }
+  }
+  .primary .ext {
+    color: var(--ink-mute);
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.3em;
+  }
+  .primary .ext span { font-size: 0.85em; }
+
+  @media (max-width: 720px) {
+    .topbar-inner { flex-direction: column; align-items: flex-start; gap: var(--s-3); }
+    .primary { flex-wrap: wrap; gap: var(--s-2); }
+  }
+</style>

@@ -1,0 +1,54 @@
+---
+layout: ../layouts/MarkLayout.astro
+title: Privacy
+eyebrow: What we collect
+kanji: 静
+description: Tama and tamaup collect no telemetry. The website serves static files from GitHub Pages and sets no cookies.
+---
+
+## Tama and tamaup
+
+Tama and `tamaup` collect **no telemetry**. They make exactly two kinds
+of network requests, and only when you ask them to:
+
+- **Fetching releases** — `tamaup install <version>` and the bootstrap
+  `install.sh` fetch the signed release manifest and the artifact for
+  your platform from `https://github.com/bacon-labs/tama/releases/...`.
+  No user identifier is sent. GitHub's standard request log applies.
+- **Resolving dependencies** — `tama install`, `tama update`, and the
+  underlying `lake update` fetch git repositories pinned in
+  `lakefile.toml`. No user identifier is sent. The remote git host's
+  standard log applies.
+
+Tama writes only to the project directory and to `~/.tama` (or
+`$TAMAUP_HOME`), `~/.cache/tama` (or `$XDG_CACHE_HOME/tama`), and the
+platform-equivalent cache directory on macOS.
+
+`tama doctor`, `tama check`, `tama build`, `tama test`, `tama audit`,
+and `tama inspect` make no network calls beyond what the underlying
+tools (`lake`, `solc`, `forge`) already do.
+
+## The website
+
+`https://tama.tools` is served as static files from GitHub Pages.
+There is no analytics script, no tracking pixel, no first-party or
+third-party cookie set by the site. Self-hosted fonts are bundled into
+the build artifact — no Google Fonts CDN. Embedded GitHub links use
+standard browser navigation.
+
+GitHub's own logging applies to requests served by GitHub Pages.
+
+## What this means in practice
+
+You can run `tama` air-gapped after the initial install. Use
+`--offline` to make any Tama command refuse to touch the network:
+
+```sh
+tama build --offline
+tama check --offline
+tama audit --offline
+```
+
+`--offline` is rejected by `tama install`, `tama remove`, and the
+default `tama update`, because those commands exist to refresh remote
+state.

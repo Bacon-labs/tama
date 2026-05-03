@@ -1,0 +1,163 @@
+---
+layout: ../../layouts/DocLayout.astro
+title: Writing proof obligations
+eyebrow: Guide
+description: Patterns for turning a contract's intent into specs and proofs that Tama will treat as public obligations.
+---
+
+import Callout from "../../components/Callout.astro";
+
+## What counts as an obligation
+
+A **public contract obligation** is a theorem that part of your contract's
+contract-with-the-world depends on. In Verity terms: anything tagged
+`@[tama.obligation]` in `verity/proof/<Contract>Proof.lean`.
+
+`tama audit coverage` requires every public obligation to be either:
+
+- **mirrored** by a Foundry fuzz or invariant test, or
+- explicitly marked `@[tama.proof_only "<reason>"]` with a non-empty reason.
+
+Helper lemmas are *not* obligations and are not coverage-tracked. Mark
+them `@[tama.helper]` to be explicit, or just leave them untagged.
+
+## A repeatable shape
+
+For each contract, the spec file usually has three kinds of statements:
+
+1. **Invariants** — properties of the storage that hold between calls.
+2. **Per-function postconditions** — what is true after a successful call.
+3. **Frame conditions** — which storage slots a function may have changed.
+
+```lean
+namespace FooSpec
+
+@[tama.invariant]
+def total_in_range (s : Foo.State) : Prop :=
+  s.total ≤ s.cap
+
+@[tama.postcondition Foo.mint]
+def mint_increases_total
+    (pre post : Foo.State) (call : Foo.Call) : Prop :=
+  post.total = pre.total + call.amount
+
+@[tama.frame Foo.mint]
+def mint_only_touches_balances : FrameSet := ⟨{ "balances", "total" }⟩
+
+end FooSpec
+```
+
+Then in the proof file, prove that each function preserves each
+invariant, and that each call's postcondition follows from its inputs:
+
+```lean
+namespace FooProof
+
+@[tama.obligation]
+@[tama.mirror "test/verity/Foo.t.sol:FooTest.invariant_totalInRange"]
+theorem mint_preserves_total_in_range
+    (pre : Foo.State) (call : Foo.Call)
+    (h : FooSpec.total_in_range pre)
+    (k : pre.total + call.amount ≤ pre.cap) :
+    FooSpec.total_in_range (Foo.mint pre call) := by
+  simp [FooSpec.total_in_range, Foo.mint]
+  omega
+
+end FooProof
+```
+
+## Mirror tests, in detail
+
+Every `@[tama.mirror "path:Symbol"]` annotation must point at:
+
+- a file under Foundry's configured test directory (typically `test/`),
+- a contract-qualified Foundry symbol,
+- whose function name is **either** `testFuzz*` (a fuzz test) **or**
+  `invariant_*` (a Foundry invariant).
+
+Plain `test_*` example tests are smoke tests; they don't satisfy
+mirror coverage. The point is that mirrors are *property-shaped*: they
+exercise the same universal statement the proof made, on real bytecode,
+under random inputs.
+
+```lean
+@[tama.obligation]
+@[tama.mirror "test/verity/Foo.t.sol:FooTest.testFuzz_mintIncreasesTotal"]
+theorem mint_increases_total : ... := by ...
+```
+
+```solidity
+function testFuzz_mintIncreasesTotal(uint96 amount) public {
+    uint256 before = foo.total();
+    vm.assume(before + amount <= foo.cap());
+    foo.mint(amount);
+    assertEq(foo.total(), before + amount);
+}
+```
+
+## Proof-only obligations
+
+Some properties are intrinsically about symbolic state and have no
+useful executable shadow — for instance, "the storage encoding is
+collision-free for any pair of distinct mapping keys." Mark these:
+
+```lean
+@[tama.obligation]
+@[tama.proof_only "quantifies over all key pairs; no concrete fuzz schedule covers it"]
+theorem mapping_encoding_collision_free : ... := by ...
+```
+
+The reason is required and audit-visible. Empty reasons are a build-time error.
+
+## `sorry` is fine — until release
+
+Lean lets you write `sorry` in the middle of a proof to come back to it later.
+`tama check` and `tama build` accept `sorry`. **`tama audit trust-boundary`
+denies it, every time, no allowlist**.
+
+The intent: keep working contracts in a half-proven state during
+development; gate releases on a real proof.
+
+```lean
+@[tama.obligation]
+theorem withdraw_drops_total : ... := by
+  sorry  -- ok locally, will fail audit
+```
+
+<Callout kind="warning" title="Don't allowlist sorryAx">
+There is no `tama.toml` switch to permit `sorryAx`. The audit is hard-coded
+to deny it. If a release CI is failing because an obligation hasn't been
+discharged, the answer is to discharge it (or mark it
+`@[tama.proof_only "..."]` with a real reason), not to bypass the gate.
+</Callout>
+
+## Allowlisted axioms
+
+Lean's standard library uses a few classical axioms that are universally
+accepted in mathematics but not part of bare type theory. To allow them
+explicitly:
+
+```toml
+# tama.toml
+[trust.allow_axioms]
+"Classical.choice" = "accepted Lean classical reasoning"
+"Quot.sound"       = "accepted Lean quotient axiom"
+"propext"          = "function extensionality on propositions"
+```
+
+The string is the audit-visible reason. Don't allowlist anything you can't
+defend in two sentences.
+
+## Where to look when a proof won't close
+
+- **`tama check`** runs spec elaboration without proofs. If your spec
+  file has a type error, `tama check` finds it in seconds.
+- **`tama build`** with `--verbose` shows the Lake invocation and full
+  Lean output, including the goals at the failure site.
+- Inside Lean, `simp?` and `exact?` will often suggest the lemma name
+  you're missing; `omega` closes nearly all linear arithmetic goals;
+  `decide` closes small decidable propositions.
+- Read [the audit guide](/guides/audits) — many "proof failures" are
+  actually structural mistakes (e.g. an obligation pointing at a
+  non-existent mirror) that the audit reports more clearly than the
+  build does.

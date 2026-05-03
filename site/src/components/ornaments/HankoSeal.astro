@@ -1,0 +1,65 @@
+---
+// Vermillion hanko seal — a small red square with a white kanji.
+// Default kanji is 玉 (jade), the first half of the name.
+interface Props {
+  kanji?: string;
+  size?: number;
+  rotate?: number;
+  label?: string;
+}
+const { kanji = "玉", size = 56, rotate = -4, label = "tama hanko seal" } = Astro.props;
+const fontSize = Math.round(size * 0.62);
+---
+
+<span
+  class="hanko"
+  role="img"
+  aria-label={label}
+  style={`--size: ${size}px; --rot: ${rotate}deg; --fs: ${fontSize}px;`}
+>
+  <span class="hanko-kanji">{kanji}</span>
+  <span class="hanko-grain" aria-hidden="true"></span>
+</span>
+
+<style>
+  .hanko {
+    display: inline-grid;
+    place-items: center;
+    width: var(--size);
+    height: var(--size);
+    position: relative;
+    background:
+      radial-gradient(circle at 30% 30%, #d2533c, var(--shu) 60%, var(--shu-deep));
+    color: var(--washi-bright);
+    font-family: var(--font-jp);
+    font-weight: 600;
+    font-size: var(--fs);
+    line-height: 1;
+    border-radius: 4px;
+    transform: rotate(var(--rot));
+    box-shadow:
+      inset 0 0 0 2px rgba(255, 240, 230, 0.55),
+      0 2px 0 rgba(138, 45, 29, 0.3),
+      0 6px 18px -8px rgba(138, 45, 29, 0.6);
+    user-select: none;
+  }
+  .hanko-kanji {
+    position: relative;
+    z-index: 2;
+    text-shadow: 0 1px 0 rgba(138, 45, 29, 0.4);
+    padding-bottom: 0.06em;
+  }
+  .hanko-grain {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background-image:
+      radial-gradient(circle at 12% 22%, rgba(255, 250, 240, 0.10) 0 1px, transparent 1.5px),
+      radial-gradient(circle at 78% 64%, rgba(255, 250, 240, 0.10) 0 1px, transparent 1.5px),
+      radial-gradient(circle at 36% 80%, rgba(0, 0, 0, 0.08) 0 1px, transparent 1.5px),
+      radial-gradient(circle at 60% 10%, rgba(0, 0, 0, 0.08) 0 1px, transparent 1.5px);
+    mix-blend-mode: overlay;
+    opacity: 0.6;
+    pointer-events: none;
+  }
+</style>

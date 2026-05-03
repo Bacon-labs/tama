@@ -1,0 +1,43 @@
+---
+import DocLayout from "../../layouts/DocLayout.astro";
+import CommandCard from "../../components/CommandCard.astro";
+---
+
+<DocLayout
+  title="Guides"
+  eyebrow="Task-shaped how-tos"
+  description="Practical walkthroughs for the things you'll do most often after the tutorial."
+>
+  <p>
+    These pages are scenario-shaped: pick the one that matches the task
+    in front of you. Each one assumes you've worked through
+    <a href="/start">the tutorial</a> and read the
+    <a href="/concepts">concepts</a>.
+  </p>
+
+  <div class="grid">
+    <CommandCard
+      name="Writing proof obligations"
+      summary="Patterns for spec decomposition, frame conditions, and helper lemmas."
+      href="/guides/proofs"
+    />
+    <CommandCard
+      name="Reading audit output"
+      summary="What every check inspects, what its failures look like, and how to fix them."
+      href="/guides/audits"
+    />
+    <CommandCard
+      name="Foundry interop"
+      summary="When to use forge directly, how the two configs stay non-overlapping, and what tama test does."
+      href="/guides/foundry"
+    />
+  </div>
+</DocLayout>
+
+<style>
+  .grid {
+    display: grid;
+    gap: var(--s-3);
+    margin-top: var(--s-5);
+  }
+</style>

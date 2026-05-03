@@ -1,0 +1,59 @@
+---
+interface Props {
+  name: string;
+  summary: string;
+  href?: string;
+}
+const { name, summary, href } = Astro.props;
+const Tag = href ? "a" : "div";
+---
+
+<Tag class="cmd" href={href}>
+  <code class="cmd-name">{name}</code>
+  <span class="cmd-summary">{summary}</span>
+  {href && <span class="cmd-arrow" aria-hidden="true">→</span>}
+</Tag>
+
+<style>
+  .cmd {
+    display: grid;
+    grid-template-columns: minmax(0, 220px) 1fr auto;
+    gap: var(--s-4);
+    align-items: baseline;
+    padding: var(--s-3) var(--s-4);
+    border-radius: var(--r);
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    text-decoration: none;
+    color: var(--ink);
+    transition: border-color var(--dur) var(--ease-quiet),
+      transform var(--dur) var(--ease-quiet);
+  }
+  a.cmd:hover {
+    border-color: color-mix(in oklab, var(--jade-500) 35%, transparent);
+    background: color-mix(in oklab, var(--jade-mist) 70%, var(--surface));
+  }
+  .cmd-name {
+    font-family: var(--font-mono);
+    font-size: var(--t-sm);
+    color: var(--jade-900);
+    background: transparent;
+    border: 0;
+    padding: 0;
+  }
+  .cmd-summary {
+    color: var(--ink-soft);
+    font-size: var(--t-sm);
+    line-height: 1.5;
+  }
+  .cmd-arrow {
+    color: var(--ink-mute);
+    font-size: var(--t-sm);
+  }
+  @media (prefers-color-scheme: dark) {
+    .cmd-name { color: var(--jade-200); }
+  }
+  @media (max-width: 640px) {
+    .cmd { grid-template-columns: 1fr; gap: var(--s-1); }
+  }
+</style>

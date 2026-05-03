@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="jade" cx="0.4" cy="0.35" r="0.7">
+      <stop offset="0" stop-color="#a4c5b8"/>
+      <stop offset="0.55" stop-color="#3d8073"/>
+      <stop offset="1" stop-color="#0c3a31"/>
+    </radialGradient>
+  </defs>
+  <circle cx="32" cy="32" r="30" fill="url(#jade)"/>
+  <circle cx="32" cy="32" r="30" fill="none" stroke="#0c3a31" stroke-opacity="0.4" stroke-width="1.5"/>
+  <text
+    x="32" y="42"
+    text-anchor="middle"
+    font-family="Noto Serif JP, Hiragino Mincho ProN, Yu Mincho, serif"
+    font-weight="600"
+    font-size="34"
+    fill="#fbf7ed"
+    style="paint-order: stroke; stroke: rgba(12,58,49,0.4); stroke-width: 0.5"
+  >玉</text>
+</svg>

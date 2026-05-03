@@ -1,8 +1,14 @@
-# Tama
+# Tama 玉魂
 
-Tama is a developer toolchain for Verity smart-contract projects. It gives Verity developers one CLI for project scaffolding, Lean/Lake checks, Verity-to-Yul codegen, `solc` bytecode generation, Foundry mirror tests, artifact inspection, and audit checks.
+> *Tama* — jade and soul. The developer toolchain for Verity smart contracts.
 
-Tama projects are also Foundry projects, so users can run `forge` directly whenever that is useful.
+A Verity contract is written three times: as code that runs on the EVM, as a
+specification of what the code must do, and as a machine-checked proof that the
+two agree. **Tama** is the single CLI that builds, proves, compiles, audits,
+and inspects Verity projects — and a Tama project is a Foundry project, so
+`forge` keeps working as you expect.
+
+**Read the docs at https://tama.tools.**
 
 ## Install
 
@@ -10,53 +16,20 @@ Tama projects are also Foundry projects, so users can run `forge` directly whene
 curl -L https://tama.tools/install.sh | sh
 ```
 
-Use `tamaup install <version>` to install a specific signed release.
+Then `tamaup install <version>` to switch to a specific signed release.
 
-## Quickstart
-
-```sh
-tama init my-protocol
-cd my-protocol
-tama doctor
-tama check
-tama build
-tama test
-tama audit
-tama inspect ERC20Lite selectors
-```
-
-Add another Verity contract scaffold:
+## A few of the commands
 
 ```sh
-tama new TipJar
-tama check
+tama init my-protocol     # scaffold a project
+tama check                # fast Lean check (impl + spec only)
+tama build                # full pipeline: proofs → Yul → bytecode → bridge → forge
+tama test                 # passthrough to forge test
+tama audit                # release-time audits over manifests and artifacts
+tama inspect ERC20Lite manifest
 ```
 
-New contract scaffolds include TODO proofs, so `tama audit` will reject them until the public obligations are discharged.
-
-## Commands
-
-- `tama init`: create an ERC20Lite starter project.
-- `tama new <Name>`: add Verity source, spec, proof, and Foundry mirror-test files.
-- `tama check`: run the fast Lean check for implementation and spec modules.
-- `tama build`: run proofs, Verity codegen, manifest adaptation, `solc`, bridge generation, and `forge build`.
-- `tama test`: pass through to `forge test`.
-- `tama audit`: check structure, selectors, storage layout, coverage, and trust boundaries.
-- `tama inspect`: print generated manifests, selectors, ABI, bytecode, obligations, mirrors, and trust data.
-- `tamaup`: install, switch, list, update, and uninstall Tama versions.
-
-## Docs
-
-- [Quickstart](docs/reference/QUICKSTART.md)
-- [Command reference](docs/reference/COMMANDS.md)
-- [Generated artifacts](docs/reference/GENERATED_ARTIFACTS.md)
-- [Audit guide](docs/reference/AUDIT.md)
-- [Limitations](docs/reference/LIMITATIONS.md)
-- [Verity compatibility](docs/reference/VERITY_COMPAT.md)
-- [Release and installer notes](docs/reference/RELEASE.md)
-- [Privacy](docs/reference/PRIVACY.md)
-
-The full product specification lives in [docs/reference/SPEC.md](docs/reference/SPEC.md).
+The full CLI reference lives at https://tama.tools/reference/cli.
 
 ## Development
 
@@ -74,3 +47,7 @@ cargo +1.81.0 build --workspace
 cargo +1.81.0 test --workspace
 ```
 
+The website source is in [`site/`](site/) and is deployed to GitHub Pages by
+[`.github/workflows/deploy-docs.yml`](.github/workflows/deploy-docs.yml). The
+internal product specification and contributor docs live in
+[`docs/reference/`](docs/reference/).

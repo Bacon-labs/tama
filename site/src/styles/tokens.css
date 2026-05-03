@@ -1,0 +1,135 @@
+/*
+ * Tama design tokens.
+ *
+ * Palette is built around jade (玉) on washi paper, with sumi ink for body
+ * text, vermillion (朱) for the hanko seal, and brass for proof / verified
+ * accents.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Jade — primary */
+  --jade-950: #062b24;
+  --jade-900: #0c3a31;
+  --jade-800: #14503f;
+  --jade-700: #1f5f4f;
+  --jade-600: #2c7363;
+  --jade-500: #3d8073;
+  --jade-400: #6aa597;
+  --jade-300: #8db8ab;
+  --jade-200: #b3d0c5;
+  --jade-100: #dde9e3;
+  --jade-mist: #eef4f0;
+
+  /* Washi (paper) — neutral background */
+  --washi-deep: #ece3d0;
+  --washi: #f5efe2;
+  --washi-soft: #fbf7ed;
+  --washi-bright: #fffdf6;
+
+  /* Sumi (ink) — text */
+  --sumi: #11150f;
+  --sumi-soft: #2a3530;
+  --sumi-mute: #58655e;
+  --sumi-faint: #8a9690;
+
+  /* Accents */
+  --shu: #b9442e;       /* vermillion seal */
+  --shu-deep: #8a2d1d;
+  --brass: #a78947;     /* verified / proof aura */
+  --brass-deep: #7a6230;
+  --gold-leaf: #d2b471;
+
+  /* Semantic */
+  --bg: var(--washi);
+  --bg-soft: var(--washi-soft);
+  --surface: var(--washi-bright);
+  --ink: var(--sumi);
+  --ink-soft: var(--sumi-soft);
+  --ink-mute: var(--sumi-mute);
+  --rule: rgba(17, 21, 15, 0.10);
+  --rule-strong: rgba(17, 21, 15, 0.18);
+
+  /* Typography */
+  --font-display: "EB Garamond", "Noto Serif JP", "Cormorant Garamond",
+    ui-serif, Georgia, serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo,
+    Consolas, monospace;
+  --font-jp: "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", serif;
+
+  /* Type scale (modular ~1.22) */
+  --t-xs: 0.78rem;
+  --t-sm: 0.875rem;
+  --t-base: 1rem;
+  --t-md: 1.125rem;
+  --t-lg: 1.32rem;
+  --t-xl: 1.6rem;
+  --t-2xl: 2rem;
+  --t-3xl: 2.6rem;
+  --t-4xl: 3.4rem;
+  --t-5xl: 4.6rem;
+  --t-display: clamp(3rem, 8vw, 6.4rem);
+
+  /* Spacing */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 72px;
+  --s-9: 104px;
+  --s-10: 144px;
+
+  /* Radius */
+  --r-sm: 4px;
+  --r: 8px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+
+  /* Shadow — soft, like ink bleeding through paper */
+  --shadow-sm: 0 1px 2px rgba(17, 21, 15, 0.06);
+  --shadow: 0 8px 24px -8px rgba(17, 21, 15, 0.18),
+    0 2px 6px rgba(17, 21, 15, 0.06);
+  --shadow-deep: 0 24px 60px -20px rgba(12, 58, 49, 0.30),
+    0 6px 16px rgba(12, 58, 49, 0.10);
+
+  /* Layout */
+  --col-narrow: 680px;
+  --col-prose: 760px;
+  --col-wide: 1180px;
+  --col-max: 1280px;
+
+  /* Motion */
+  --ease-quiet: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fast: 140ms;
+  --dur: 240ms;
+  --dur-slow: 480ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #0a120f;
+    --bg-soft: #0f1916;
+    --surface: #142420;
+    --ink: #e8eee9;
+    --ink-soft: #c5cfc9;
+    --ink-mute: #8d9a93;
+    --rule: rgba(232, 238, 233, 0.08);
+    --rule-strong: rgba(232, 238, 233, 0.16);
+    --jade-mist: #142420;
+    --jade-100: #1a2a25;
+    --washi: #0a120f;
+    --washi-soft: #0f1916;
+    --washi-bright: #142420;
+    --shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.5),
+      0 2px 6px rgba(0, 0, 0, 0.3);
+    --shadow-deep: 0 24px 60px -20px rgba(0, 0, 0, 0.6);
+  }
+}

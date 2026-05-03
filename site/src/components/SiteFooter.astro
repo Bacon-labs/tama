@@ -1,0 +1,110 @@
+---
+import HankoSeal from "./ornaments/HankoSeal.astro";
+import Kintsugi from "./ornaments/Kintsugi.astro";
+const year = new Date().getFullYear();
+---
+
+<footer class="footer">
+  <Kintsugi variant="short" />
+  <div class="footer-row">
+    <div class="brand-end">
+      <HankoSeal kanji="玉" size={48} rotate={-6} />
+      <div class="lines">
+        <p class="line-jp">玉魂 — 玉の如く、魂の如く。</p>
+        <p class="line-en">As jade, as soul. Verified contracts you can hold in your hand.</p>
+      </div>
+    </div>
+    <nav class="footer-nav" aria-label="Footer">
+      <div>
+        <h4>Tama</h4>
+        <a href="/">Home</a>
+        <a href="/start">Get started</a>
+        <a href="/install">Install</a>
+      </div>
+      <div>
+        <h4>Learn</h4>
+        <a href="/concepts">Concepts</a>
+        <a href="/guides">Guides</a>
+        <a href="/reference/cli">CLI reference</a>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <a href="https://github.com/bacon-labs/tama" rel="noopener">GitHub</a>
+        <a href="/troubleshooting">Troubleshooting</a>
+        <a href="/privacy">Privacy</a>
+      </div>
+    </nav>
+  </div>
+  <p class="copyline">© {year} Bacon Labs · MIT License</p>
+</footer>
+
+<style>
+  .footer {
+    max-width: var(--col-max);
+    margin: var(--s-9) auto 0;
+    padding: var(--s-7) var(--s-5) var(--s-7);
+    color: var(--ink-mute);
+    font-size: var(--t-sm);
+  }
+  .footer-row {
+    display: grid;
+    grid-template-columns: 1.1fr 2fr;
+    gap: var(--s-7);
+    align-items: start;
+  }
+  .brand-end {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--s-4);
+  }
+  .lines { line-height: 1.5; }
+  .line-jp {
+    margin: 0 0 0.25em;
+    font-family: var(--font-jp);
+    color: var(--jade-800);
+    font-size: var(--t-sm);
+  }
+  .line-en {
+    margin: 0;
+    font-family: var(--font-display);
+    font-style: italic;
+    color: var(--ink-soft);
+  }
+  .footer-nav {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--s-5);
+  }
+  .footer-nav h4 {
+    font-family: var(--font-display);
+    font-size: var(--t-sm);
+    color: var(--jade-900);
+    margin: 0 0 var(--s-3);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .footer-nav a {
+    display: block;
+    color: var(--ink-soft);
+    text-decoration: none;
+    padding: 2px 0;
+  }
+  .footer-nav a:hover { color: var(--shu); }
+  .copyline {
+    margin: var(--s-7) 0 0;
+    font-size: var(--t-xs);
+    color: var(--ink-mute);
+    font-family: var(--font-mono);
+  }
+  @media (prefers-color-scheme: dark) {
+    .footer-nav h4 { color: var(--jade-200); }
+    .line-jp { color: var(--jade-300); }
+  }
+  @media (max-width: 760px) {
+    .footer-row { grid-template-columns: 1fr; }
+    .footer-nav { grid-template-columns: repeat(3, 1fr); gap: var(--s-4); }
+  }
+  @media (max-width: 480px) {
+    .footer-nav { grid-template-columns: 1fr 1fr; }
+  }
+</style>

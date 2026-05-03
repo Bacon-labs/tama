@@ -1,0 +1,50 @@
+---
+// A horizontal kintsugi-inspired seam used between sections.
+// A jagged thin gold line with two small leaf-flecks, evoking
+// the gold-veined repair of cracked pottery.
+interface Props {
+  variant?: "full" | "short";
+}
+const { variant = "full" } = Astro.props;
+---
+
+<div class={`kintsugi kintsugi-${variant}`} aria-hidden="true">
+  <svg viewBox="0 0 1200 24" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="gold" x1="0" x2="1" y1="0" y2="0">
+        <stop offset="0" stop-color="rgba(167,137,71,0)" />
+        <stop offset="0.15" stop-color="rgba(210,180,113,0.55)" />
+        <stop offset="0.5" stop-color="rgba(167,137,71,0.85)" />
+        <stop offset="0.85" stop-color="rgba(210,180,113,0.55)" />
+        <stop offset="1" stop-color="rgba(167,137,71,0)" />
+      </linearGradient>
+    </defs>
+    <path
+      d="M0 12 L120 11 L240 13 L300 10 L380 14 L500 11 L600 13 L720 10 L820 14 L940 11 L1080 13 L1200 12"
+      fill="none"
+      stroke="url(#gold)"
+      stroke-width="1.2"
+      stroke-linejoin="round"
+    />
+    <circle cx="300" cy="10" r="1.6" fill="rgba(210,180,113,0.7)" />
+    <circle cx="720" cy="10" r="1.4" fill="rgba(210,180,113,0.6)" />
+    <circle cx="940" cy="11" r="1.2" fill="rgba(210,180,113,0.5)" />
+  </svg>
+</div>
+
+<style>
+  .kintsugi {
+    width: 100%;
+    height: 24px;
+    display: block;
+    margin: var(--s-7) auto;
+  }
+  .kintsugi-short {
+    max-width: 360px;
+  }
+  .kintsugi svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+</style>

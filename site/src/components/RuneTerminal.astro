@@ -1,0 +1,204 @@
+---
+// Stylized terminal — code engraved as if into a jade slab.
+// Optionally cycles through multiple frames on a slow loop.
+interface Frame {
+  prompt?: string;
+  body: string;
+  caption?: string;
+}
+
+interface Props {
+  frames?: Frame[];
+  body?: string;
+  prompt?: string;
+  caption?: string;
+  intervalMs?: number;
+}
+
+const {
+  frames,
+  body,
+  prompt = "$",
+  caption,
+  intervalMs = 5200,
+} = Astro.props;
+
+const list: Frame[] = frames ?? [{ prompt, body: body ?? "", caption }];
+const id = `rune-${Math.random().toString(36).slice(2, 9)}`;
+---
+
+<figure class="rune" data-rune={id}>
+  <div class="rune-frame">
+    <div class="rune-bar" aria-hidden="true">
+      <span class="dot dot-shu"></span>
+      <span class="dot dot-brass"></span>
+      <span class="dot dot-jade"></span>
+      <span class="rune-host">tama ⟶ ~/projects/my-protocol</span>
+    </div>
+    <div class="rune-body">
+      {list.map((f, idx) => (
+        <pre class="rune-pre" data-idx={idx} data-active={idx === 0 ? "true" : "false"}>
+          <code><span class="prompt">{f.prompt ?? prompt}</span> {f.body}</code>
+        </pre>
+      ))}
+      <div class="rune-glow" aria-hidden="true"></div>
+      <div class="rune-sweep" aria-hidden="true"></div>
+    </div>
+  </div>
+  {list.some((f) => f.caption) && (
+    <figcaption class="rune-caption">
+      {list.map((f, idx) => (
+        <span data-cap={idx} data-active={idx === 0 ? "true" : "false"}>{f.caption ?? " "}</span>
+      ))}
+    </figcaption>
+  )}
+</figure>
+
+{list.length > 1 && (
+  <script is:inline define:vars={{ id, total: list.length, intervalMs }}>
+    (() => {
+      const root = document.querySelector(`[data-rune="${id}"]`);
+      if (!root) return;
+      const frames = root.querySelectorAll("[data-idx]");
+      const caps = root.querySelectorAll("[data-cap]");
+      let idx = 0;
+      const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reduce) return;
+      setInterval(() => {
+        frames[idx].setAttribute("data-active", "false");
+        if (caps[idx]) caps[idx].setAttribute("data-active", "false");
+        idx = (idx + 1) % total;
+        frames[idx].setAttribute("data-active", "true");
+        if (caps[idx]) caps[idx].setAttribute("data-active", "true");
+      }, intervalMs);
+    })();
+  </script>
+)}
+
+<style>
+  .rune {
+    margin: 0;
+    width: 100%;
+    color: var(--ink);
+  }
+  .rune-frame {
+    position: relative;
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    background:
+      linear-gradient(160deg, #11352c 0%, #0c2a23 60%, #082019 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(180, 220, 200, 0.08),
+      inset 0 0 0 1px rgba(141, 184, 171, 0.18),
+      0 30px 60px -28px rgba(8, 32, 25, 0.7),
+      0 8px 22px -10px rgba(8, 32, 25, 0.45);
+  }
+  .rune-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    padding: 12px 16px;
+    background: linear-gradient(to bottom, rgba(255,255,255,0.04), rgba(0,0,0,0.18));
+    border-bottom: 1px solid rgba(141, 184, 171, 0.14);
+    font-family: var(--font-mono);
+    font-size: var(--t-xs);
+    color: rgba(220, 235, 228, 0.55);
+    letter-spacing: 0.04em;
+  }
+  .rune-host {
+    margin-left: auto;
+  }
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: var(--r-pill);
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.25);
+  }
+  .dot-shu { background: var(--shu); }
+  .dot-brass { background: var(--brass); }
+  .dot-jade { background: var(--jade-400); }
+
+  .rune-body {
+    position: relative;
+    padding: var(--s-5) var(--s-5) var(--s-6);
+    min-height: 220px;
+  }
+  .rune-pre {
+    position: absolute;
+    inset: var(--s-5);
+    margin: 0;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    color: #d8efe6;
+    opacity: 0;
+    transition: opacity 600ms var(--ease-quiet);
+    font-family: var(--font-mono);
+    font-size: var(--t-sm);
+    line-height: 1.7;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .rune-pre[data-active="true"] { opacity: 1; }
+  .rune-pre code {
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    padding: 0;
+    border: 0;
+  }
+  .prompt {
+    color: var(--jade-300);
+    margin-right: 0.4em;
+    text-shadow: 0 0 12px rgba(141, 184, 171, 0.4);
+  }
+  .rune-glow {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(420px 200px at 20% 0%, rgba(141, 184, 171, 0.18), transparent 70%),
+      radial-gradient(360px 220px at 100% 100%, rgba(167, 137, 71, 0.10), transparent 70%);
+  }
+  .rune-sweep {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -40%;
+    width: 30%;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(220, 240, 232, 0.06) 40%,
+      rgba(220, 240, 232, 0.10) 50%,
+      rgba(220, 240, 232, 0.06) 60%,
+      transparent
+    );
+    transform: skewX(-12deg);
+    pointer-events: none;
+    animation: sweep 9s linear infinite;
+  }
+  @keyframes sweep {
+    0% { left: -40%; }
+    60% { left: 110%; }
+    100% { left: 110%; }
+  }
+
+  .rune-caption {
+    position: relative;
+    margin: var(--s-3) 0 0;
+    min-height: 1.3em;
+    font-family: var(--font-mono);
+    font-size: var(--t-xs);
+    letter-spacing: 0.08em;
+    color: var(--ink-mute);
+    text-transform: uppercase;
+  }
+  .rune-caption span {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 600ms var(--ease-quiet);
+  }
+  .rune-caption span[data-active="true"] { opacity: 1; }
+</style>

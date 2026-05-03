@@ -1,0 +1,89 @@
+---
+interface Props {
+  kind?: "note" | "proof" | "warning" | "seal";
+  title?: string;
+}
+const { kind = "note", title } = Astro.props;
+const labels: Record<string, string> = {
+  note: "Note",
+  proof: "Proof",
+  warning: "Watch out",
+  seal: "Sealed",
+};
+const kanji: Record<string, string> = {
+  note: "註",
+  proof: "證",
+  warning: "戒",
+  seal: "印",
+};
+---
+
+<aside class={`callout callout-${kind}`}>
+  <div class="callout-mark" aria-hidden="true">
+    <span class="kanji">{kanji[kind]}</span>
+  </div>
+  <div class="callout-body">
+    <p class="callout-title">{title ?? labels[kind]}</p>
+    <div class="callout-content">
+      <slot />
+    </div>
+  </div>
+</aside>
+
+<style>
+  .callout {
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    gap: var(--s-4);
+    padding: var(--s-4) var(--s-5);
+    border-radius: var(--r);
+    border: 1px solid var(--rule-strong);
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+  }
+  .callout-mark {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: var(--r-sm);
+    font-family: var(--font-jp);
+    font-size: 1.2rem;
+    color: var(--washi-bright);
+    background: var(--jade-700);
+    line-height: 1;
+  }
+  .callout-title {
+    margin: 0 0 var(--s-2);
+    font-family: var(--font-display);
+    font-size: var(--t-md);
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: 0;
+  }
+  .callout-content :global(p:last-child) {
+    margin-bottom: 0;
+  }
+  .callout-note { background: var(--jade-mist); }
+  .callout-note .callout-mark { background: var(--jade-700); }
+
+  .callout-proof { background: color-mix(in oklab, var(--brass) 6%, var(--surface)); }
+  .callout-proof .callout-mark { background: var(--brass-deep); }
+  .callout-proof .callout-title { color: var(--brass-deep); }
+
+  .callout-warning { background: color-mix(in oklab, var(--shu) 8%, var(--surface)); }
+  .callout-warning .callout-mark { background: var(--shu-deep); }
+  .callout-warning .callout-title { color: var(--shu-deep); }
+
+  .callout-seal { background: color-mix(in oklab, var(--shu) 10%, var(--surface)); }
+  .callout-seal .callout-mark { background: var(--shu); }
+  .callout-seal .callout-title { color: var(--shu); }
+
+  @media (prefers-color-scheme: dark) {
+    .callout-proof .callout-title { color: var(--gold-leaf); }
+    .callout-warning .callout-title,
+    .callout-seal .callout-title {
+      color: #f0a191;
+    }
+  }
+</style>

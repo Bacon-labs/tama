@@ -1,0 +1,193 @@
+---
+layout: ../../layouts/DocLayout.astro
+title: Contract manifest
+eyebrow: Reference
+description: The single JSON record per contract that ties source, proof, generated bridge, and bytecode together. Schema tama.contract-manifest.v1.
+---
+
+import Callout from "../../components/Callout.astro";
+
+## What it is
+
+For every Verity contract, `tama build` writes one manifest to:
+
+```text
+artifacts/manifest/<Contract>.json
+```
+
+The manifest is **the single source of truth** for that contract. Every
+downstream artifact reads from it: generated Solidity bridges, audits,
+`tama inspect`, CI reports.
+
+Schema string: `"schema": "tama.contract-manifest.v1"`.
+
+## Annotated example
+
+```jsonc
+{
+  "schema": "tama.contract-manifest.v1",
+  "contract": "ERC20Lite",
+
+  // Where the source files live in the project.
+  "source": {
+    "implementation": "verity/src/ERC20Lite.lean",
+    "spec":           "verity/spec/ERC20LiteSpec.lean",
+    "proof":          "verity/proof/ERC20LiteProof.lean"
+  },
+
+  // Lean module names (path -> module).
+  "lean": {
+    "implementation_module": "src.ERC20Lite",
+    "spec_module":           "spec.ERC20LiteSpec",
+    "proof_module":          "proof.ERC20LiteProof"
+  },
+
+  // ABI surface, including computed selectors.
+  "abi": {
+    "constructor": null,
+    "functions": [
+      {
+        "name":       "balanceOf",
+        "signature":  "balanceOf(address)",
+        "selector":   "0x70a08231",
+        "visibility": "external",
+        "mutability": "view",
+        "inputs":     [{ "name": "account", "type": "address" }],
+        "outputs":    [{ "name": "", "type": "uint256" }]
+      },
+      {
+        "name":       "transfer",
+        "signature":  "transfer(address,uint256)",
+        "selector":   "0xa9059cbb",
+        "visibility": "external",
+        "mutability": "nonpayable",
+        "inputs":     [
+          { "name": "to",     "type": "address" },
+          { "name": "amount", "type": "uint256" }
+        ],
+        "outputs":    [{ "name": "", "type": "bool" }]
+      }
+    ],
+    "events": [],
+    "errors": []
+  },
+
+  // Storage layout, slot-by-slot.
+  "storage": [
+    {
+      "name":        "balances",
+      "type":        "mapping(address => uint256)",
+      "slot":        "0x01",
+      "offset":      0,
+      "width_bytes": 32,
+      "encoding":    "mapping"
+    }
+  ],
+
+  // Generated artifact paths and the SHA-256 of the bytecode.
+  "artifacts": {
+    "yul":               "artifacts/yul/ERC20Lite.yul",
+    "solc_input":        "artifacts/solc-json/ERC20Lite.input.json",
+    "solc_output":       "artifacts/solc-json/ERC20Lite.output.json",
+    "creation_bytecode": "artifacts/bytecode/ERC20Lite.bin",
+    "runtime_bytecode":  "artifacts/bytecode/ERC20Lite.runtime.bin",
+    "bytecode_hash":     "9c…3e",
+    "interface":         "src/generated/verity/ERC20LiteIface.sol",
+    "deployer":          "src/generated/verity/ERC20LiteDeployer.sol"
+  },
+
+  // Public obligations and their mirror coverage.
+  "obligations": [
+    {
+      "id":        "ERC20Lite.transfer_preserves_total_supply",
+      "name":      "transfer_preserves_total_supply",
+      "kind":      "invariant",
+      "lean_decl": "proof.ERC20LiteProof.transfer_preserves_total_supply",
+      "contract":  "ERC20Lite",
+      "function":  "transfer",
+      "coverage": {
+        "disposition": "mirror",
+        "path": "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply",
+        "reason": null
+      }
+    }
+  ]
+}
+```
+
+## Field reference
+
+### `schema`
+
+Always `"tama.contract-manifest.v1"`. The `v1` suffix is part of the
+versioning contract — Tama refuses manifests with an unrecognized schema.
+
+### `contract`
+
+The contract name, matching the Lean module and the generated bridge filenames.
+
+### `source`
+
+Project-relative paths to the implementation, spec, and proof files.
+Used by `tama audit structure` to verify the layout is sane.
+
+### `lean`
+
+The Lean module names (dotted form). Tama's trust probe references
+these to resolve theorem dependencies.
+
+### `abi`
+
+Standard ABI surface. The `selector` field is the keccak-derived
+function selector, not just a copy of what `solc` produced — `tama audit
+selectors` checks all five sources agree (Verity, manifest, Yul,
+Solidity interface, computed).
+
+Custom errors and events follow the same shape, with `topic0` for events.
+
+### `storage`
+
+One entry per top-level storage variable. `slot` is hex; `offset` is
+the byte offset within the slot; `width_bytes` is the variable's
+width. `encoding` is one of `slot | mapping | dynamic_array | bytes |
+struct`. `tama audit storage-layout` verifies non-overlap and validates
+the encoding tag.
+
+### `artifacts`
+
+Pure file paths plus `bytecode_hash`. The hash is the SHA-256 of the
+**creation bytecode file contents** (raw bytes of the hex-encoded
+`.bin` file). `tama audit structure` rejects any mismatch between
+this hash and the file, or between the deployer's embedded bytecode
+and the file.
+
+If `--no-solc` was passed to `tama build`, `bytecode_hash` is `null`
+and the downstream artifacts are absent — bridge-dependent audits and
+release gates can't accidentally pass on stale outputs from an earlier
+full build.
+
+### `obligations`
+
+One entry per `@[tama.obligation]` theorem.
+
+| Field          | Meaning                                                        |
+| -------------- | -------------------------------------------------------------- |
+| `id`           | Stable identifier (`<Contract>.<theorem>`).                    |
+| `name`         | Theorem name as written.                                       |
+| `kind`         | `invariant | postcondition | frame`.                           |
+| `lean_decl`    | Fully qualified Lean declaration name.                         |
+| `function`     | The contract function the obligation is about (if applicable). |
+| `coverage`     | See below.                                                     |
+
+`coverage.disposition` is one of:
+
+- `mirror` — `path` points at a `testFuzz*` or `invariant_*` symbol.
+- `proof_only` — `reason` is a non-empty string explaining why no mirror exists.
+
+<Callout kind="seal" title="Why a manifest at all?">
+Without a manifest, every downstream audit would have to re-parse Verity
+source, recompile, and re-derive every fact independently. With one,
+the build commits to a single shape, and audits become focused
+correctness checks against that shape — fast, deterministic, and
+straightforward to reproduce in CI.
+</Callout>
