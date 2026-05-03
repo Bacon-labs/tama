@@ -66,6 +66,16 @@ jobs:
       - uses: ./.github/actions/install-toolchain
       - name: Build Tama
         run: cargo build --workspace
+      - name: Install actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/actionlint-bin"
+          curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused \
+            https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash \
+            -o "$RUNNER_TEMP/download-actionlint.bash"
+          bash "$RUNNER_TEMP/download-actionlint.bash" 1.7.12 "$RUNNER_TEMP/actionlint-bin"
+          echo "$RUNNER_TEMP/actionlint-bin" >> "$GITHUB_PATH"
       - name: Fresh starter quickstart
         shell: bash
         run: |
@@ -75,6 +85,9 @@ jobs:
           project="$tmp/my-protocol"
           tama init "$project"
           cd "$project"
+          test -f .github/workflows/ci.yml
+          test -f .gitignore
+          actionlint -color .github/workflows/ci.yml
           tama doctor
           tama check
           tama build --locked

@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TAMA_LAKE_PACKAGE_CACHE: ${{ github.workspace }}/.cache/tama/lake-packages
+
+jobs:
+  verify:
+    name: tama verify
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Lake packages and Tama artifacts
+        uses: actions/cache@v4
+        with:
+          path: .cache/tama
+          key: tama-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('lake-manifest.json', 'tama.lock') }}
+          restore-keys: |
+            tama-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Cache elan and Foundry toolchains
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            ~/.foundry
+          key: toolchain-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('lean-toolchain', 'tama.lock') }}
+          restore-keys: |
+            toolchain-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Add toolchain bin directories to PATH
+        run: |
+          {
+            echo "$HOME/.elan/bin"
+            echo "$HOME/.foundry/bin"
+            echo "$HOME/.tama/bin"
+          } >> "$GITHUB_PATH"
+
+      - name: Install elan (Lean toolchain manager)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused \
+                https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+                -o "$RUNNER_TEMP/elan-init.sh"; then
+              sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain none && exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "elan install failed after 4 attempts" >&2
+          exit 1
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1.6.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Install solc 0.8.33 via solc-select
+        run: |
+          set -euo pipefail
+          venv="$RUNNER_TEMP/solc-select-venv"
+          python3 -m venv "$venv"
+          for attempt in 1 2 3 4; do
+            if "$venv/bin/pip" install --upgrade solc-select; then
+              break
+            fi
+            sleep $((attempt * 5))
+          done
+          for attempt in 1 2 3 4; do
+            if "$venv/bin/solc-select" install 0.8.33; then
+              break
+            fi
+            sleep $((attempt * 5))
+          done
+          "$venv/bin/solc-select" use 0.8.33
+          echo "$venv/bin" >> "$GITHUB_PATH"
+
+      # Set TAMA_VERSION (e.g. "0.1.0") to pin a specific Tama release.
+      - name: Install Tama
+        env:
+          TAMA_VERSION: ""
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused \
+            https://tama.tools/install.sh | sh
+          if [ -n "$TAMA_VERSION" ]; then
+            "$HOME/.tama/bin/tamaup" install "$TAMA_VERSION"
+          fi
+
+      - name: Print toolchain versions
+        run: |
+          tama --version
+          forge --version
+          solc --version
+
+      - run: tama doctor
+      - run: tama check
+      - run: tama build --locked
+      - run: tama test
+      - run: tama audit
