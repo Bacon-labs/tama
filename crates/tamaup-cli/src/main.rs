@@ -1165,6 +1165,43 @@ mod tests {
     }
 
     #[test]
+    fn release_base_url_matches_across_installer_tamaup_workflow_and_site() {
+        let root = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let installer =
+            fs::read_to_string(root.join("installer/install.sh").as_std_path()).unwrap();
+        let installer_base_url = installer
+            .lines()
+            .find_map(|line| line.strip_prefix("BASE_URL=\"").and_then(|s| s.strip_suffix('"')))
+            .expect("installer/install.sh must declare BASE_URL=\"...\" on a single line");
+        assert_eq!(
+            installer_base_url, DEFAULT_BASE_URL,
+            "tamaup DEFAULT_BASE_URL must match installer/install.sh BASE_URL",
+        );
+
+        let workflow =
+            fs::read_to_string(root.join(".github/workflows/release.yml").as_std_path()).unwrap();
+        let manifest_url = format!("{installer_base_url}/manifest.json");
+        assert!(
+            workflow.contains(&manifest_url),
+            "release.yml must fetch the previous manifest from {manifest_url}",
+        );
+        let archive_url_prefix = installer_base_url
+            .strip_suffix("/latest/download")
+            .expect("BASE_URL must end with /latest/download");
+        let archive_url_template = format!("{archive_url_prefix}/download/v");
+        assert!(
+            workflow.contains(&archive_url_template),
+            "release.yml must publish artifact URLs under {archive_url_template}<version>/...",
+        );
+
+        let site = fs::read_to_string(root.join("docs/index.html").as_std_path()).unwrap();
+        assert!(
+            site.contains(&manifest_url),
+            "docs/index.html must link to {manifest_url}",
+        );
+    }
+
+    #[test]
     fn help_lists_command_descriptions() {
         let help = Cli::command().render_long_help().to_string();
         assert!(help.contains("Install a signed Tama release"));

@@ -601,7 +601,6 @@ jobs:
           mkdir -p public/releases
           cp -R docs/. public/
           cp installer/install.sh public/install.sh
-          cp dist/manifest.json public/manifest.json
           cp dist/*.tar.gz public/releases/
       - name: Check Pages links
         shell: bash
