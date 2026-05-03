@@ -527,7 +527,7 @@ solc_version = "0.8.33"
 fs_permissions = [{ access = "read", path = "./artifacts" }]
 "#;
 
-const STARTER_GITIGNORE: &str = "/.lake/\n/artifacts/\n/cache/\n/lib/\n/out/\nfoundry.lock\n";
+const STARTER_GITIGNORE: &str = "/.lake/\n/artifacts/\n/cache/\n/out/\nfoundry.lock\n";
 
 const ERC20LITE_LEAN: &str = r#"import Contracts.Common
 
@@ -1067,19 +1067,19 @@ metadata_bytecode_hash = "none"
         let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
         init(&root, InitOptions::default()).unwrap();
         let gitignore = read_to_string(&root.join(".gitignore")).unwrap();
-        for entry in [
-            "/.lake/",
-            "/artifacts/",
-            "/cache/",
-            "/lib/",
-            "/out/",
-            "foundry.lock",
-        ] {
+        for entry in ["/.lake/", "/artifacts/", "/cache/", "/out/", "foundry.lock"] {
             assert!(
                 gitignore.contains(entry),
                 "starter .gitignore missing `{entry}`"
             );
         }
+        assert!(
+            !gitignore.lines().any(|line| line.trim() == "/lib/"
+                || line.trim() == "lib/"
+                || line.trim() == "/lib"
+                || line.trim() == "lib"),
+            "starter .gitignore must not exclude lib/ — `forge install` adds submodules under it"
+        );
     }
 
     #[test]
