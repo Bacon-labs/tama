@@ -41,7 +41,7 @@ Published artifact URLs must use `https://` with a host. Absolute-path `file://`
 artifact URLs are accepted only for signed local/offline manifests used by
 installer tests or manual recovery.
 
-`tamaup` verifies the manifest signature in process and verifies archive SHA-256 before extraction. `installer/install.sh` is a thin TLS-only bootstrap (matching the Foundry installer model): it fetches the cumulative manifest from `https://github.com/bacon-labs/tama/releases/latest/download/manifest.json`, validates manifest field safety, and verifies archive SHA-256 against the manifest before installing. It does not require `minisign`.
+`tamaup` verifies the manifest signature in process and verifies archive SHA-256 before extraction. `installer/install.sh` is a thin TLS-only bootstrap (matching the Foundry installer model): it accepts no flags or environment overrides, fetches the cumulative manifest from `https://github.com/bacon-labs/tama/releases/latest/download/manifest.json`, validates manifest field safety, and verifies archive SHA-256 against the manifest before installing the latest stable release. It does not require `minisign`.
 
 `tamaup install` also checks Lean/Lake, Foundry, and solc. Missing or incompatible tools fail closed unless the user passes the matching `--no-install-*` opt-out, or passes `--yes` to allow bootstrap installation. Bootstrap installation is disabled in `--offline` mode.
 

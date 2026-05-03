@@ -5,7 +5,7 @@ Tama does not collect telemetry and does not phone home during normal project co
 Network access occurs only when the user runs commands that explicitly need external tools or dependencies:
 
 - `tamaup install` and `tamaup self update` download the signed release manifest and selected release archive. If required tools are missing or incompatible, `tamaup` may also download bootstrap installers/assets for Lean/Lake, Foundry, or solc after the user passes `--yes`; bootstrap downloads are disabled by `--offline` and by the matching `--no-install-*` opt-out.
-- `installer/install.sh` downloads the signed release manifest and selected release archive unless `--offline --manifest-file` is used.
+- `installer/install.sh` downloads the release manifest and the platform release archive from GitHub Releases over HTTPS, and verifies the archive SHA-256 against the manifest before extracting.
 - `tama init` runs `lake update` and a pinned `forge install foundry-rs/forge-std@v1.16.1 --shallow` unless `--offline` is used.
 - `tama install` validates remote Tama packages and runs `lake update`.
 - `tama remove` runs `lake update` after editing dependencies.
