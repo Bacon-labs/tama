@@ -10,14 +10,10 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Add elan and pip-user bin to PATH
+    - name: Add elan bin to PATH
       shell: bash
       run: |
-        set -euo pipefail
         echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-        # pip --user installs scripts to ~/.local/bin on Linux and
-        # ~/Library/Python/X.Y/bin on macOS — query Python for the truth.
-        python3 -c "import site; print(site.getuserbase() + '/bin')" >> "$GITHUB_PATH"
 
     - name: Install elan (Lean toolchain manager)
       shell: bash
@@ -39,17 +35,20 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
 
-    - name: Install solc-select and solc 0.8.33
+    - name: Install solc-select and solc 0.8.33 (in venv)
       shell: bash
       run: |
         set -euo pipefail
+        venv="$RUNNER_TEMP/solc-select-venv"
+        python3 -m venv "$venv"
         for attempt in 1 2 3 4; do
-          python3 -m pip install --user --upgrade solc-select && break || sleep $((attempt * 5))
+          "$venv/bin/pip" install --upgrade solc-select && break || sleep $((attempt * 5))
         done
         for attempt in 1 2 3 4; do
-          solc-select install 0.8.33 && break || sleep $((attempt * 5))
+          "$venv/bin/solc-select" install 0.8.33 && break || sleep $((attempt * 5))
         done
-        solc-select use 0.8.33
+        "$venv/bin/solc-select" use 0.8.33
+        echo "$venv/bin" >> "$GITHUB_PATH"
 
     - name: Print toolchain versions
       shell: bash
