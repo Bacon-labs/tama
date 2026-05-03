@@ -41,16 +41,16 @@ Published artifact URLs must use `https://` with a host. Absolute-path `file://`
 artifact URLs are accepted only for signed local/offline manifests used by
 installer tests or manual recovery.
 
-`tamaup` verifies the manifest signature in process and verifies archive SHA-256 before extraction. `installer/install.sh` may require an external signature verifier, but it must hard fail if verification is unavailable.
+`tamaup` verifies the manifest signature in process and verifies archive SHA-256 before extraction. `installer/install.sh` is a thin TLS-only bootstrap (matching the Foundry installer model): it fetches the cumulative manifest from `https://github.com/bacon-labs/tama/releases/latest/download/manifest.json`, validates manifest field safety, and verifies archive SHA-256 against the manifest before installing. It does not require `minisign`.
 
 `tamaup install` also checks Lean/Lake, Foundry, and solc. Missing or incompatible tools fail closed unless the user passes the matching `--no-install-*` opt-out, or passes `--yes` to allow bootstrap installation. Bootstrap installation is disabled in `--offline` mode.
 
 The release workflow lives in `.github/workflows/release.yml`. Configure these repository secrets before tagging a release:
 
 - `TAMA_MINISIGN_SECRET_KEY`: unencrypted minisign secret key used only by CI signing.
-- `TAMA_MINISIGN_PUBLIC_KEY`: public key matching the embedded `tamaup` verifier key and installer default.
+- `TAMA_MINISIGN_PUBLIC_KEY`: public key matching the embedded `tamaup` verifier key.
 
-Rotate keys by updating the repository secrets, the `tamaup` embedded public key, `installer/install.sh`, and the published release docs in one release.
+Rotate keys by updating the repository secrets, the `tamaup` embedded public key, and the published release docs in one release.
 
 ## Website
 
@@ -62,7 +62,7 @@ The release workflow publishes the static GitHub Pages site at `https://tama.too
 curl -L https://tama.tools/install.sh | sh
 ```
 
-- links to quickstart, command reference, audit guide, generated-artifact rules, troubleshooting, Verity compatibility, limitations, release artifacts, `install.sh`, `manifest.json`, and `manifest.json.minisig`;
+- links to quickstart, command reference, audit guide, generated-artifact rules, troubleshooting, Verity compatibility, limitations, release artifacts, `install.sh`, and the GitHub Releases-hosted `manifest.json` and `manifest.json.minisig`;
 - links to the telemetry-free privacy statement;
 - no Windows installation path for v0.1.
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-BASE_URL="${TAMA_BASE_URL:-https://tama.tools}"
+BASE_URL="${TAMA_BASE_URL:-https://github.com/bacon-labs/tama/releases/latest/download}"
 TAMAUP_HOME="${TAMAUP_HOME:-$HOME/.tama}"
 VERSION="stable"
 NO_MODIFY_PATH=0
@@ -29,12 +29,6 @@ case "$(uname -s):$(uname -m)" in
   *) echo "unsupported platform for Tama v0.1" >&2; exit 1 ;;
 esac
 
-if ! command -v minisign >/dev/null 2>&1; then
-  echo "minisign is required to verify the Tama release manifest" >&2
-  echo "Install minisign and rerun this installer, or use tamaup with a verified local manifest." >&2
-  exit 1
-fi
-
 if [ "$OFFLINE" -eq 1 ] && [ -z "$MANIFEST_FILE" ]; then
   echo "--offline requires --manifest-file" >&2
   exit 1
@@ -59,16 +53,11 @@ fetch() {
 
 if [ -n "$MANIFEST_FILE" ]; then
   cp "$MANIFEST_FILE" "$INSTALL_TMPDIR/manifest.json"
-  cp "$MANIFEST_FILE.minisig" "$INSTALL_TMPDIR/manifest.json.minisig"
   ALLOW_FILE_URLS=1
 else
   fetch "$BASE_URL/manifest.json" "$INSTALL_TMPDIR/manifest.json"
-  fetch "$BASE_URL/manifest.json.minisig" "$INSTALL_TMPDIR/manifest.json.minisig"
   ALLOW_FILE_URLS=0
 fi
-
-PUBLIC_KEY="${TAMA_MINISIGN_PUBLIC_KEY:-RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3}"
-minisign -Vm "$INSTALL_TMPDIR/manifest.json" -P "$PUBLIC_KEY" -x "$INSTALL_TMPDIR/manifest.json.minisig" >/dev/null
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required by the bootstrap installer to read the release manifest" >&2
