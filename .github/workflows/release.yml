@@ -369,8 +369,6 @@ jobs:
             os: ubuntu-22.04
           - platform: linux-aarch64
             os: ubuntu-24.04-arm
-          - platform: macos-x86_64
-            os: macos-13
           - platform: macos-aarch64
             os: macos-14
     steps:
@@ -431,7 +429,6 @@ jobs:
               "linux-aarch64",
               "linux-x86_64",
               "macos-aarch64",
-              "macos-x86_64",
           }
           for raw in sys.argv[3:]:
               path = pathlib.Path(raw)

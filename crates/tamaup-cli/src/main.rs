@@ -987,17 +987,12 @@ fn tama_home() -> Utf8PathBuf {
 }
 
 fn platform() -> Result<String, String> {
-    let os = match std::env::consts::OS {
-        "linux" => "linux",
-        "macos" => "macos",
-        other => return Err(format!("unsupported OS for Tama v0.1: {other}")),
-    };
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "x86_64",
-        "aarch64" => "aarch64",
-        other => return Err(format!("unsupported architecture for Tama v0.1: {other}")),
-    };
-    Ok(format!("{os}-{arch}"))
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Ok("linux-x86_64".to_string()),
+        ("linux", "aarch64") => Ok("linux-aarch64".to_string()),
+        ("macos", "aarch64") => Ok("macos-aarch64".to_string()),
+        (os, arch) => Err(format!("unsupported platform for Tama v0.1: {os}-{arch}")),
+    }
 }
 
 #[cfg(test)]
