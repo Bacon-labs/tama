@@ -1201,12 +1201,17 @@ mod tests {
     #[test]
     fn website_install_command_matches_spec() {
         let root = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let spec = fs::read_to_string(root.join("docs/SPEC.md").as_std_path()).unwrap();
-        let site = fs::read_to_string(root.join("site/index.html").as_std_path()).unwrap();
+        let spec = fs::read_to_string(root.join("docs/reference/SPEC.md").as_std_path()).unwrap();
+        let site = fs::read_to_string(root.join("docs/index.html").as_std_path()).unwrap();
+        let pages_installer =
+            fs::read_to_string(root.join("docs/install.sh").as_std_path()).unwrap();
+        let installer =
+            fs::read_to_string(root.join("installer/install.sh").as_std_path()).unwrap();
         let install_command = "curl -L https://tama.tools/install.sh | sh";
 
         assert!(spec.contains(install_command));
         assert!(site.contains(install_command));
+        assert_eq!(pages_installer, installer);
     }
 
     #[test]

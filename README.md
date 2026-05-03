@@ -47,16 +47,16 @@ New contract scaffolds include TODO proofs, so `tama audit` will reject them unt
 
 ## Docs
 
-- [Quickstart](docs/QUICKSTART.md)
-- [Command reference](docs/COMMANDS.md)
-- [Generated artifacts](docs/GENERATED_ARTIFACTS.md)
-- [Audit guide](docs/AUDIT.md)
-- [Limitations](docs/LIMITATIONS.md)
-- [Verity compatibility](docs/VERITY_COMPAT.md)
-- [Release and installer notes](docs/RELEASE.md)
-- [Privacy](docs/PRIVACY.md)
+- [Quickstart](docs/reference/QUICKSTART.md)
+- [Command reference](docs/reference/COMMANDS.md)
+- [Generated artifacts](docs/reference/GENERATED_ARTIFACTS.md)
+- [Audit guide](docs/reference/AUDIT.md)
+- [Limitations](docs/reference/LIMITATIONS.md)
+- [Verity compatibility](docs/reference/VERITY_COMPAT.md)
+- [Release and installer notes](docs/reference/RELEASE.md)
+- [Privacy](docs/reference/PRIVACY.md)
 
-The full product specification lives in [docs/SPEC.md](docs/SPEC.md).
+The full product specification lives in [docs/reference/SPEC.md](docs/reference/SPEC.md).
 
 ## Development
 

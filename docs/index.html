@@ -101,7 +101,7 @@ Build completed: 1 manifest</code></pre>
       <div class="docs-intro">
         <p class="eyebrow">Documentation</p>
         <h2 id="docs-title">Docs are rendered from the repo Markdown.</h2>
-        <p>The website reads the same <code>docs/*.md</code> files used by the repository, so release pages and source docs stay in sync.</p>
+        <p>The website reads the same <code>docs/reference/*.md</code> files used by the repository, so release pages and source docs stay in sync.</p>
       </div>
 
       <div class="doc-shell">
@@ -127,17 +127,17 @@ Build completed: 1 manifest</code></pre>
 
   <script>
     const docs = [
-      ["quickstart", "Quickstart", "docs/QUICKSTART.md"],
-      ["commands", "Command reference", "docs/COMMANDS.md"],
-      ["audit", "Audit", "docs/AUDIT.md"],
-      ["artifacts", "Generated artifacts", "docs/GENERATED_ARTIFACTS.md"],
-      ["troubleshooting", "Troubleshooting", "docs/TROUBLESHOOTING.md"],
-      ["compat", "Verity compatibility", "docs/VERITY_COMPAT.md"],
-      ["limits", "Limitations", "docs/LIMITATIONS.md"],
-      ["release", "Release", "docs/RELEASE.md"],
-      ["privacy", "Privacy", "docs/PRIVACY.md"],
-      ["spec", "Spec", "docs/SPEC.md"],
-      ["plan", "Implementation plan", "docs/IMPLEMENTATION_PLAN.md"]
+      ["quickstart", "Quickstart", "reference/QUICKSTART.md"],
+      ["commands", "Command reference", "reference/COMMANDS.md"],
+      ["audit", "Audit", "reference/AUDIT.md"],
+      ["artifacts", "Generated artifacts", "reference/GENERATED_ARTIFACTS.md"],
+      ["troubleshooting", "Troubleshooting", "reference/TROUBLESHOOTING.md"],
+      ["compat", "Verity compatibility", "reference/VERITY_COMPAT.md"],
+      ["limits", "Limitations", "reference/LIMITATIONS.md"],
+      ["release", "Release", "reference/RELEASE.md"],
+      ["privacy", "Privacy", "reference/PRIVACY.md"],
+      ["spec", "Spec", "reference/SPEC.md"],
+      ["plan", "Implementation plan", "reference/IMPLEMENTATION_PLAN.md"]
     ].map(([slug, title, path]) => ({ slug, title, path }));
 
     const reader = document.querySelector("#doc-reader");

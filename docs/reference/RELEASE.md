@@ -1,6 +1,6 @@
 # Release
 
-Release candidates must pass all non-negotiable gates in `docs/IMPLEMENTATION_PLAN.md`.
+Release candidates must pass all non-negotiable gates in `docs/reference/IMPLEMENTATION_PLAN.md`.
 
 ## Required Checks
 
@@ -54,9 +54,9 @@ Rotate keys by updating the repository secrets, the `tamaup` embedded public key
 
 ## Website
 
-The release workflow publishes the static GitHub Pages site at `https://tama.tools/`. The site lives under `site/` and includes:
+The release workflow publishes the static GitHub Pages site at `https://tama.tools/`. The site lives under `docs/` and includes:
 
-- installation instructions matching `docs/SPEC.md` section 12:
+- installation instructions matching `docs/reference/SPEC.md` section 12:
 
 ```sh
 curl -L https://tama.tools/install.sh | sh

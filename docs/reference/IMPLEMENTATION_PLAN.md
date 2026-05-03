@@ -44,7 +44,7 @@ Tama v0.1 is production-ready when it is reliable inside its declared scope, not
 - Background daemons, LSP integration, watch mode.
 - A public package registry.
 
-Unsupported Verity/Solidity features must be documented in `docs/LIMITATIONS.md`. Unsupported does not mean half-working. If a feature is unsupported, Tama must fail with a clear diagnostic before emitting misleading artifacts.
+Unsupported Verity/Solidity features must be documented in `docs/reference/LIMITATIONS.md`. Unsupported does not mean half-working. If a feature is unsupported, Tama must fail with a clear diagnostic before emitting misleading artifacts.
 
 ## Non-negotiable release gates
 
@@ -70,7 +70,7 @@ A release candidate cannot be tagged until every gate below is green.
 2. Virtual workspace at repo root. Member crates live under `crates/`.
 3. Public path APIs use `camino::Utf8PathBuf` / `&Utf8Path`. `std::path::Path` is allowed at OS/process boundaries only.
 4. Read-only TOML ingest uses `toml` + serde. Any Tama rewrite uses `toml_edit` and must preserve unrelated comments/order.
-5. `docs/SPEC.md` is updated to the revised spec before implementation. Stale spec text is not allowed to drive codegen.
+5. `docs/reference/SPEC.md` is updated to the revised spec before implementation. Stale spec text is not allowed to drive codegen.
 6. Flat contract files are retained, but Lake builds through generated aggregate modules: `TamaSrc.lean`, `TamaSpec.lean`, `TamaProof.lean`.
 7. `lakefile.toml` is generated at init and user-owned afterward. Tama may edit it only for explicit dependency commands (`install`, `remove`, `update`, `doctor --fix`) through formatting-preserving narrow edits.
 8. Lake output is configured with `buildDir = "artifacts/lean"`. `tama clean --deep` removes the configured Lake build dir, not hardcoded `.lake/build` unless that is the configured dir.
@@ -316,7 +316,7 @@ This phase happens before Rust implementation. It is a release blocker.
 #### Work
 
 1. Clone the exact upstream Verity repository/commit intended for v0.1.
-2. Record it in `docs/VERITY_COMPAT.md` with:
+2. Record it in `docs/reference/VERITY_COMPAT.md` with:
    - repository URL
    - commit SHA
    - Lean version from `lean-toolchain`
@@ -350,7 +350,7 @@ This phase happens before Rust implementation. It is a release blocker.
    - **Path A — upstream manifest:** Verity emits `tama.contract-manifest.v1` directly.
    - **Path B — Tama adapter:** Tama derives the manifest from real Verity outputs and Lean reflection/probe results.
    - **Path C — block:** Required data cannot be obtained reliably; implementation stops until upstream Verity changes land.
-10. Write `docs/VERITY_COMPAT.md` with the decision and exact commands that passed.
+10. Write `docs/reference/VERITY_COMPAT.md` with the decision and exact commands that passed.
 
 #### Pass/fail
 
@@ -360,7 +360,7 @@ Pass only if:
 - Counter compiles outside the Verity monorepo or the exact blocking Verity feature is documented and accepted as a v0.1 limitation.
 - A real path exists to produce complete v1 manifests.
 - Known compiler footguns are either fixed in the pinned Verity commit or accounted for by a deterministic compatibility decision.
-- All assumptions are in `docs/VERITY_COMPAT.md`.
+- All assumptions are in `docs/reference/VERITY_COMPAT.md`.
 
 Fail if:
 
@@ -373,7 +373,7 @@ Fail if:
 
 #### Work
 
-1. Replace `docs/SPEC.md` with the revised spec:
+1. Replace `docs/reference/SPEC.md` with the revised spec:
    - flat Lean-valid file layout
    - user-owned Lakefile after init
    - explicit `[yul]` config
@@ -383,22 +383,22 @@ Fail if:
    - trust allowlist in `tama.toml`
    - no Foundry default template contracts
    - Lake build output under `artifacts/lean`
-2. Add `docs/LIMITATIONS.md` from Phase -1.
-3. Add `docs/VERITY_COMPAT.md` from Phase -1.
-4. Add `docs/QUICKSTART.md` with the exact v0.1 happy path.
-5. Add `docs/COMMANDS.md` with command behavior and global flags.
-6. Add `docs/RELEASE.md` with signing, release, and installer instructions.
+2. Add `docs/reference/LIMITATIONS.md` from Phase -1.
+3. Add `docs/reference/VERITY_COMPAT.md` from Phase -1.
+4. Add `docs/reference/QUICKSTART.md` with the exact v0.1 happy path.
+5. Add `docs/reference/COMMANDS.md` with command behavior and global flags.
+6. Add `docs/reference/RELEASE.md` with signing, release, and installer instructions.
 
 #### Pass/fail
 
 Pass only if:
 
-- `docs/SPEC.md` no longer contains dotted file names like `Foo.spec.lean` / `Foo.proof.lean`.
-- `docs/SPEC.md` no longer says `tama check` maps to `lake build --no-build`.
-- `docs/SPEC.md` no longer says Lakefile is regenerated on build.
-- `docs/SPEC.md` no longer says Yul solc config is inherited from Foundry.
-- `docs/SPEC.md` no longer says commands are flagless.
-- `docs/SPEC.md` no longer starts from Foundry’s default template contracts.
+- `docs/reference/SPEC.md` no longer contains dotted file names like `Foo.spec.lean` / `Foo.proof.lean`.
+- `docs/reference/SPEC.md` no longer says `tama check` maps to `lake build --no-build`.
+- `docs/reference/SPEC.md` no longer says Lakefile is regenerated on build.
+- `docs/reference/SPEC.md` no longer says Yul solc config is inherited from Foundry.
+- `docs/reference/SPEC.md` no longer says commands are flagless.
+- `docs/reference/SPEC.md` no longer starts from Foundry’s default template contracts.
 
 ### Phase 0 — Workspace scaffold
 
@@ -1023,7 +1023,7 @@ trust
 4. `tama doctor`:
    - prints tool versions
    - validates lock drift
-   - validates Verity compatibility from `docs/VERITY_COMPAT.md` / embedded compatibility table
+   - validates Verity compatibility from `docs/reference/VERITY_COMPAT.md` / embedded compatibility table
    - validates solc version/path
    - validates generated dirs
 5. `doctor --fix` performs only safe repairs:
@@ -1211,7 +1211,7 @@ tama inspect ERC20Lite obligations
    - publishes the website, `install.sh`, signed manifest, and release metadata to GitHub Pages / `tama.tools`
    - attaches artifacts and signed manifest to GitHub Release
 8. GitHub Pages site:
-   - lives under `site/`
+   - lives under `docs/`
    - is deployable as static files with no server-side code
    - documents the install command:
 
@@ -1222,7 +1222,7 @@ curl -L https://tama.tools/install.sh | sh
    - links to quickstart, command reference, limitations, audit guide, release artifacts, and signed manifest
    - does not advertise Windows support
    - is included in release CI link checks
-9. `docs/RELEASE.md` documents one-time setup:
+9. `docs/reference/RELEASE.md` documents one-time setup:
    - GitHub Pages branch
    - custom domain
    - signing secret
@@ -1235,7 +1235,7 @@ curl -L https://tama.tools/install.sh | sh
 - Stubs are allowed only in unit tests.
 - Release workflow produces artifacts for all four supported platforms.
 - Manifest signature verifies locally after release workflow.
-- `site/` builds as a static GitHub Pages website for `tama.tools`, and its install command matches `docs/SPEC.md` section 12.
+- `docs/` builds as a static GitHub Pages website for `tama.tools`, and its install command matches `docs/reference/SPEC.md` section 12.
 
 ### Phase 12 — Final product hardening
 
@@ -1415,14 +1415,14 @@ trust
 
 Docs must include:
 
-- `docs/QUICKSTART.md`
-- `docs/COMMANDS.md`
-- `docs/GENERATED_ARTIFACTS.md`
-- `docs/AUDIT.md`
-- `docs/LIMITATIONS.md`
-- `docs/VERITY_COMPAT.md`
-- `docs/RELEASE.md`
-- `site/` static GitHub Pages website for `tama.tools`
+- `docs/reference/QUICKSTART.md`
+- `docs/reference/COMMANDS.md`
+- `docs/reference/GENERATED_ARTIFACTS.md`
+- `docs/reference/AUDIT.md`
+- `docs/reference/LIMITATIONS.md`
+- `docs/reference/VERITY_COMPAT.md`
+- `docs/reference/RELEASE.md`
+- `docs/` static GitHub Pages website for `tama.tools`
 
 Every command in quickstart must be tested in CI or explicitly marked as documentation-only setup.
 
