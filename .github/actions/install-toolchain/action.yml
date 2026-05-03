@@ -1,6 +1,12 @@
 name: Install Lean, Foundry, and solc
 description: Install elan (Lean), Foundry, and solc 0.8.33 with retry-tolerant fetches.
 
+inputs:
+  github-token:
+    description: Token used by foundryup to query the GitHub releases API. Avoids unauthenticated rate-limit 403s.
+    required: false
+    default: ${{ github.token }}
+
 runs:
   using: composite
   steps:
@@ -27,6 +33,8 @@ runs:
 
     - name: Install Foundry
       uses: foundry-rs/foundry-toolchain@v1
+      with:
+        token: ${{ inputs.github-token }}
 
     - name: Install solc-select and solc 0.8.33
       shell: bash
