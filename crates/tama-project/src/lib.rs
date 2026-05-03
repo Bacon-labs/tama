@@ -623,8 +623,6 @@ end spec.ERC20LiteSpec
 const ERC20LITE_PROOF_LEAN: &str = r#"import spec.ERC20LiteSpec
 import Verity.Proofs.Stdlib.Automation
 
-set_option linter.unusedSimpArgs false
-
 namespace proof.ERC20LiteProof
 
 open Verity
@@ -647,15 +645,11 @@ theorem mint_preserves_owner_after_run (toAddr : Address) (amount : Uint256) (s 
       Verity.Stdlib.Math.requireSomeUint, Verity.Stdlib.Math.safeAdd, h_owner]
     by_cases h_balance_overflow : Verity.Stdlib.Math.MAX_UINT256 <
         (s.storageMap 1 toAddr).val + amount.val
-    · simp [h_balance_overflow, Verity.require, Verity.bind, Bind.bind, Verity.pure,
-        Pure.pure, Contract.run, ContractResult.snd]
+    · simp [h_balance_overflow, Verity.require, Verity.bind]
     · by_cases h_supply_overflow : Verity.Stdlib.Math.MAX_UINT256 <
-          (s.storage 2).val + amount.val
-      · simp [h_balance_overflow, h_supply_overflow, Verity.require, Verity.bind,
-          Bind.bind, Verity.pure, Pure.pure, Contract.run, ContractResult.snd]
-      · simp [h_balance_overflow, h_supply_overflow, setMapping, setStorage,
-          Verity.bind, Bind.bind, Verity.pure, Pure.pure, Contract.run,
-          ContractResult.snd]
+          (s.storage 2).val + amount.val <;>
+        simp [h_balance_overflow, h_supply_overflow, Verity.require, Verity.bind,
+          Verity.pure]
   · simp [mint, ownerSlot, msgSender, getStorageAddr, Contract.run, ContractResult.snd,
       Verity.bind, Bind.bind, Verity.require, h_owner]
 
@@ -665,22 +659,16 @@ theorem transfer_total_supply_preserved_after_run (toAddr : Address) (amount : U
   transfer_total_supply_preserved s s' := by
   unfold transfer_total_supply_preserved
   by_cases h_balance : amount.val ≤ (s.storageMap 1 s.sender).val
-  · simp [transfer, balancesSlot, msgSender, getMapping, setMapping, Contract.run,
-      ContractResult.snd, Verity.bind, Bind.bind, Verity.pure, Pure.pure,
+  · simp [transfer, balancesSlot, msgSender, getMapping, Contract.run,
+      ContractResult.snd, Verity.bind, Bind.bind, Pure.pure,
       Verity.require, Verity.Stdlib.Math.requireSomeUint, Verity.Stdlib.Math.safeAdd,
       h_balance]
     by_cases h_same : s.sender = toAddr
-    · simp [h_same, Verity.pure, Pure.pure, Contract.run, ContractResult.snd]
+    · simp [h_same, Verity.pure]
     · by_cases h_overflow : Verity.Stdlib.Math.MAX_UINT256 <
-          (s.storageMap 1 toAddr).val + amount.val
-      · simp [h_same, h_overflow, getMapping, setMapping, Verity.require,
-          Verity.Stdlib.Math.requireSomeUint, Verity.Stdlib.Math.safeAdd,
-          Verity.bind, Bind.bind, Verity.pure, Pure.pure, Contract.run,
-          ContractResult.snd]
-      · simp [h_same, h_overflow, getMapping, setMapping,
-          Verity.Stdlib.Math.requireSomeUint, Verity.Stdlib.Math.safeAdd,
-          Verity.bind, Bind.bind, Verity.pure, Pure.pure, Contract.run,
-          ContractResult.snd]
+          (s.storageMap 1 toAddr).val + amount.val <;>
+        simp [h_same, h_overflow, getMapping, setMapping, Verity.require,
+          Verity.bind, Verity.pure]
   · simp [transfer, balancesSlot, msgSender, getMapping, Contract.run, ContractResult.snd,
       Verity.bind, Bind.bind, Verity.require, h_balance]
 
@@ -688,22 +676,19 @@ theorem transfer_total_supply_preserved_after_run (toAddr : Address) (amount : U
 theorem balanceOf_returns_storage_balance (account : Address) (s : ContractState) :
   let result := ((balanceOf account).run s).fst
   balanceOf_spec account result s := by
-  simp [balanceOf_spec, balanceOf, balancesSlot, getMapping, Contract.run,
-    ContractResult.fst, Verity.bind, Bind.bind, Verity.pure, Pure.pure]
+  simp [balanceOf_spec, balanceOf, balancesSlot, Bind.bind, Pure.pure]
 
 -- tama: obligation kind=postcondition function=totalSupply coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzMintUpdatesBalanceAndSupply
 theorem totalSupply_returns_storage_supply (s : ContractState) :
   let result := ((totalSupply).run s).fst
   totalSupply_spec result s := by
-  simp [totalSupply_spec, totalSupply, totalSupplySlot, getStorage, Contract.run,
-    ContractResult.fst, Verity.bind, Bind.bind, Verity.pure, Pure.pure]
+  simp [totalSupply_spec, totalSupply, totalSupplySlot, Bind.bind, Pure.pure]
 
 -- tama: obligation kind=postcondition function=owner coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzDeploymentSetsOwner
 theorem owner_returns_storage_owner (s : ContractState) :
   let result := ((owner).run s).fst
   owner_spec result s := by
-  simp [owner_spec, owner, ownerSlot, getStorageAddr, Contract.run, ContractResult.fst,
-    Verity.bind, Bind.bind, Verity.pure, Pure.pure]
+  simp [owner_spec, owner, ownerSlot, Bind.bind, Pure.pure]
 
 end proof.ERC20LiteProof
 "#;
