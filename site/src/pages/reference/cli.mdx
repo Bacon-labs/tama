@@ -15,12 +15,18 @@ import Callout from "../../components/Callout.astro";
 --offline           Do not access the network
 --json              Emit JSON for Tama-owned output
 --verbose, -v       Increase logging verbosity
---no-color          Disable colored output
+--color <when>      Control colored output (auto, always, never; default auto)
 ```
 
 `-v` raises Tama-owned diagnostics to debug; `-vv` to trace. External
 tool output follows the invoked tool's own behavior. Without `RUST_LOG`,
 Tama defaults to info.
+
+`--color=auto` emits color only when the destination is a terminal and
+`NO_COLOR`/`CLICOLOR=0` are not set. `--color=always` forces it on,
+`--color=never` forces it off. `--json` always disables color so machine
+output stays parseable. The deprecated `--no-color` flag is accepted as an
+alias for `--color=never`.
 
 ## Environment
 
@@ -30,6 +36,9 @@ checkouts. Defaults to the platform user cache directory:
 or `~/.cache/tama/lake-packages` elsewhere. Set to `off` to disable.
 `TAMA_SOLC` — override the resolved `solc` binary path. Useful for
 locked-version development environments.
+`NO_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE` — standard color-control variables.
+A non-empty `NO_COLOR` or `CLICOLOR=0` disables color; a non-empty
+`CLICOLOR_FORCE` enables it even when the destination is not a terminal.
 
 ---
 

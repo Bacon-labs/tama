@@ -13,6 +13,10 @@ use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod style;
+
+use style::{paint, ColorChoice, Palette, Stream};
+
 const DEFAULT_BASE_URL: &str = "https://github.com/bacon-labs/tama/releases/latest/download";
 const DEFAULT_LEAN_TOOLCHAIN: &str = "leanprover/lean4:v4.22.0";
 const DEFAULT_LEAN_VERSION: &str = "4.22.0";
@@ -34,6 +38,17 @@ struct Cli {
     no_install_foundry: bool,
     #[arg(long, global = true)]
     no_install_solc: bool,
+    #[arg(
+        long,
+        global = true,
+        value_name = "WHEN",
+        value_enum,
+        default_value_t = ColorChoice::Auto,
+        help = "Control colored output: auto, always, never"
+    )]
+    color: ColorChoice,
+    #[arg(long, global = true, hide = true, help = "Alias for --color=never")]
+    no_color: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -129,16 +144,23 @@ enum BootstrapAction {
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
+    let mut cli = Cli::parse();
+    if cli.no_color {
+        cli.color = ColorChoice::Never;
+    }
+    style::apply_env(cli.color);
+    let stderr_palette = Palette::new(style::resolve(cli.color, Stream::Stderr));
+    match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("error: {err}");
+            anstream::eprintln!("{} {err}", paint(stderr_palette.error_prefix, "error:"));
             ExitCode::from(1)
         }
     }
 }
 
 fn run(cli: Cli) -> Result<(), String> {
+    let palette = Palette::new(style::resolve(cli.color, Stream::Stdout));
     let bootstrap = BootstrapOptions {
         yes: cli.yes,
         offline: cli.offline,
@@ -158,12 +180,13 @@ fn run(cli: Cli) -> Result<(), String> {
             version.as_deref().unwrap_or("stable"),
             manifest_file,
             bootstrap,
+            &palette,
         ),
-        Command::Use { version } => use_version(&version),
-        Command::List => list_versions(),
+        Command::Use { version } => use_version(&version, &palette),
+        Command::List => list_versions(&palette),
         Command::Self_ {
             command: SelfCommand::Update,
-        } => install("stable", None, bootstrap),
+        } => install("stable", None, bootstrap, &palette),
         Command::Uninstall => uninstall(),
     }
 }
@@ -172,8 +195,9 @@ fn install(
     version: &str,
     manifest_file: Option<Utf8PathBuf>,
     bootstrap: BootstrapOptions,
+    palette: &Palette,
 ) -> Result<(), String> {
-    install_with_bootstrap(version, manifest_file, bootstrap, bootstrap_toolchain)
+    install_with_bootstrap(version, manifest_file, bootstrap, bootstrap_toolchain, palette)
 }
 
 fn install_with_bootstrap(
@@ -181,6 +205,7 @@ fn install_with_bootstrap(
     manifest_file: Option<Utf8PathBuf>,
     bootstrap: BootstrapOptions,
     bootstrap_toolchain: impl FnOnce(BootstrapOptions) -> Result<(), String>,
+    palette: &Palette,
 ) -> Result<(), String> {
     let local_manifest = manifest_file.is_some();
     let manifest_bytes = if let Some(path) = manifest_file {
@@ -212,7 +237,11 @@ fn install_with_bootstrap(
     let home = tama_home();
     install_archive_at(&home, &selected_version, &archive)?;
     use_version_at(&home, &selected_version)?;
-    println!("Installed Tama {selected_version}");
+    anstream::println!(
+        "{} {}",
+        paint(palette.ok, "Installed Tama"),
+        paint(palette.count, &selected_version),
+    );
     Ok(())
 }
 
@@ -376,8 +405,14 @@ fn validate_published_release_manifest(manifest: &ReleaseManifest) -> Result<(),
     Ok(())
 }
 
-fn use_version(version: &str) -> Result<(), String> {
-    use_version_at(&tama_home(), version)
+fn use_version(version: &str, palette: &Palette) -> Result<(), String> {
+    use_version_at(&tama_home(), version)?;
+    anstream::println!(
+        "{} {}",
+        paint(palette.header, "Active Tama version:"),
+        paint(palette.count, version),
+    );
+    Ok(())
 }
 
 fn use_version_at(home: &Utf8Path, version: &str) -> Result<(), String> {
@@ -397,7 +432,6 @@ fn use_version_at(home: &Utf8Path, version: &str) -> Result<(), String> {
         atomic_symlink(&target, &bin.join(binary))?;
     }
     atomic_write(&active, version.as_bytes())?;
-    println!("Active Tama version: {version}");
     Ok(())
 }
 
@@ -431,13 +465,17 @@ fn atomic_symlink(target: &Utf8Path, link: &Utf8Path) -> Result<(), String> {
     fs::rename(&tmp, link).map_err(|err| err.to_string())
 }
 
-fn list_versions() -> Result<(), String> {
+fn list_versions(palette: &Palette) -> Result<(), String> {
     let home = tama_home();
     for (name, active) in installed_versions_at(&home)? {
         if active {
-            println!("* {name}");
+            anstream::println!(
+                "{} {}",
+                paint(palette.ok, "*"),
+                paint(palette.header, &name),
+            );
         } else {
-            println!("  {name}");
+            anstream::println!("  {name}");
         }
     }
     Ok(())
@@ -1648,6 +1686,7 @@ mod tests {
                 bootstrap_called = true;
                 Ok(())
             },
+            &Palette::plain(),
         )
         .unwrap_err();
 
@@ -1699,6 +1738,7 @@ mod tests {
                 bootstrap_called = true;
                 Ok(())
             },
+            &Palette::plain(),
         )
         .unwrap_err();
 
@@ -1745,6 +1785,7 @@ mod tests {
                 bootstrap_called = true;
                 Ok(())
             },
+            &Palette::plain(),
         )
         .unwrap_err();
 
@@ -1802,6 +1843,7 @@ mod tests {
                 bootstrap_called = true;
                 Ok(())
             },
+            &Palette::plain(),
         )
         .unwrap();
 

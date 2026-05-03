@@ -852,6 +852,8 @@ dependencies = [
 name = "tama-cli"
 version = "0.1.0"
 dependencies = [
+ "anstream",
+ "anstyle",
  "camino",
  "clap",
  "semver",
@@ -959,6 +961,8 @@ dependencies = [
 name = "tamaup-cli"
 version = "0.1.0"
 dependencies = [
+ "anstream",
+ "anstyle",
  "camino",
  "clap",
  "flate2",

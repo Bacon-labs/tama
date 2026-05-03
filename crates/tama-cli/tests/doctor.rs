@@ -59,6 +59,7 @@ fn doctor_with_root_uses_project_lean_toolchain_for_version_probes() {
     write_executable(&bin.join("tar"), "#!/bin/sh\necho 'bsdtar test'\n");
 
     let output = Command::new(env!("CARGO_BIN_EXE_tama"))
+        .arg("--color=never")
         .arg("--root")
         .arg(&root)
         .arg("doctor")
