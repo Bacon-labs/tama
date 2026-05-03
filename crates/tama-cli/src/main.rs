@@ -3010,6 +3010,7 @@ mod tests {
 
     #[test]
     fn default_branch_validation_returns_head_commit() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let repo = Utf8PathBuf::from_path_buf(dir.path().join("package.git")).unwrap();
         std::fs::create_dir_all(&repo).unwrap();
@@ -3050,6 +3051,7 @@ mod tests {
 
     #[test]
     fn pure_lake_remote_dependency_points_to_manual_install() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let repo = Utf8PathBuf::from_path_buf(dir.path().join("package.git")).unwrap();
         std::fs::create_dir_all(&repo).unwrap();
@@ -3121,6 +3123,7 @@ mod tests {
 
     #[test]
     fn lake_package_cache_seeds_and_records_missing_packages() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
         let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
@@ -3136,6 +3139,7 @@ mod tests {
 
     #[test]
     fn lake_package_cache_refreshes_existing_entries_after_update() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
         let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
@@ -3151,6 +3155,7 @@ mod tests {
 
     #[test]
     fn lake_package_cache_refresh_skips_clean_matching_revisions() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
         let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
@@ -3167,6 +3172,7 @@ mod tests {
 
     #[test]
     fn lake_package_cache_sync_skips_dirty_packages() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
         let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
@@ -3203,6 +3209,7 @@ mod tests {
 
     #[test]
     fn lake_package_cache_for_build_seeds_only_manifest_matching_revisions() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
         let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
@@ -3232,6 +3239,7 @@ mod tests {
 
     #[test]
     fn lake_package_cache_for_build_skips_dirty_matching_revisions() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
         let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
