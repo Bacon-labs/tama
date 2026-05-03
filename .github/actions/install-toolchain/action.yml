@@ -39,7 +39,7 @@ runs:
         exit 1
 
     - name: Install Foundry
-      uses: foundry-rs/foundry-toolchain@v1
+      uses: foundry-rs/foundry-toolchain@v1.6.0
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
 
