@@ -1,0 +1,47 @@
+name: Install Lean, Foundry, and solc
+description: Install elan (Lean), Foundry, and solc 0.8.33 with retry-tolerant fetches.
+
+runs:
+  using: composite
+  steps:
+    - name: Add elan and pip-user bin to PATH
+      shell: bash
+      run: |
+        echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: Install elan (Lean toolchain manager)
+      shell: bash
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3 4; do
+          if curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused \
+              https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+              -o "$RUNNER_TEMP/elan-init.sh"; then
+            sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain none && exit 0
+          fi
+          sleep $((attempt * 5))
+        done
+        echo "elan install failed after 4 attempts" >&2
+        exit 1
+
+    - name: Install Foundry
+      uses: foundry-rs/foundry-toolchain@v1
+
+    - name: Install solc-select and solc 0.8.33
+      shell: bash
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3 4; do
+          python3 -m pip install --user --upgrade solc-select && break || sleep $((attempt * 5))
+        done
+        for attempt in 1 2 3 4; do
+          solc-select install 0.8.33 && break || sleep $((attempt * 5))
+        done
+        solc-select use 0.8.33
+
+    - name: Print toolchain versions
+      shell: bash
+      run: |
+        forge --version
+        solc --version

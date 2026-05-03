@@ -64,22 +64,7 @@ jobs:
           key: tama-lake-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/lake-manifest.json') }}
           restore-keys: |
             tama-lake-release-${{ runner.os }}-${{ runner.arch }}-
-      - name: Install Lean, Foundry, and solc
-        shell: bash
-        run: |
-          set -euxo pipefail
-          export PATH="$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
-          curl -fsSL https://foundry.paradigm.xyz | bash
-          foundryup
-          python3 -m pip install --user --upgrade solc-select
-          solc-select install 0.8.33
-          solc-select use 0.8.33
-          forge --version
-          solc --version
+      - uses: ./.github/actions/install-toolchain
       - name: Build Tama
         run: cargo build --workspace --release
       - name: Fresh starter quickstart
@@ -147,20 +132,7 @@ jobs:
           key: tama-lake-release-negative-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/lake-manifest.json') }}
           restore-keys: |
             tama-lake-release-negative-${{ runner.os }}-${{ runner.arch }}-
-      - name: Install Lean, Foundry, and solc
-        shell: bash
-        run: |
-          set -euxo pipefail
-          export PATH="$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
-          curl -fsSL https://foundry.paradigm.xyz | bash
-          foundryup
-          python3 -m pip install --user --upgrade solc-select
-          solc-select install 0.8.33
-          solc-select use 0.8.33
+      - uses: ./.github/actions/install-toolchain
       - name: Build baseline
         shell: bash
         run: |
