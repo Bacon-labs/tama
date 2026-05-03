@@ -10,18 +10,34 @@ import Kintsugi from "../components/ornaments/Kintsugi.astro";
 
 const frames = [
   {
-    prompt: "$",
-    body: "tama init my-protocol\n  ✓ scaffolded ERC20Lite\n  ✓ wrote tama.toml, lakefile.toml\n  ✓ pinned verity 0.5.0",
+    command: "tama init my-protocol",
+    output: [
+      "✓ scaffolded ERC20Lite",
+      "✓ wrote tama.toml, lakefile.toml",
+      "✓ pinned verity 0.5.0",
+    ],
     caption: "scaffold a project",
   },
   {
-    prompt: "$",
-    body: "tama build\n  run  proof       Lean elaborates\n  ok   proof       modules accepted\n  run  codegen     Yul + manifest\n  ok   solc         bytecode written\n  ok   forge        Foundry built",
+    command: "tama build",
+    output: [
+      "→ proof    Lean elaborates",
+      "✓ proof    modules accepted",
+      "→ codegen  Yul + manifest",
+      "✓ solc     bytecode written",
+      "✓ forge    Foundry built",
+    ],
     caption: "verify and compile",
   },
   {
-    prompt: "$",
-    body: "tama audit\n  ✓ structure       all artifacts present\n  ✓ selectors       6 functions agree\n  ✓ storage-layout  no overlap\n  ✓ coverage        every obligation has a mirror\n  ✓ trust-boundary  no sorry, axioms allowlisted",
+    command: "tama audit",
+    output: [
+      "✓ structure       artifacts present",
+      "✓ selectors       functions agree",
+      "✓ storage-layout  no overlap",
+      "✓ coverage        every obligation mirrored",
+      "✓ trust-boundary  axioms allowlisted",
+    ],
     caption: "audit before release",
   },
 ];

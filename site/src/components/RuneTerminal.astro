@@ -2,14 +2,15 @@
 // Stylized terminal — code engraved as if into a jade slab.
 // Optionally cycles through multiple frames on a slow loop.
 interface Frame {
-  prompt?: string;
-  body: string;
+  command: string;
+  output?: string[];
   caption?: string;
 }
 
 interface Props {
   frames?: Frame[];
-  body?: string;
+  command?: string;
+  output?: string[];
   prompt?: string;
   caption?: string;
   intervalMs?: number;
@@ -17,13 +18,14 @@ interface Props {
 
 const {
   frames,
-  body,
+  command,
+  output,
   prompt = "$",
   caption,
   intervalMs = 5200,
 } = Astro.props;
 
-const list: Frame[] = frames ?? [{ prompt, body: body ?? "", caption }];
+const list: Frame[] = frames ?? [{ command: command ?? "", output, caption }];
 const id = `rune-${Math.random().toString(36).slice(2, 9)}`;
 ---
 
@@ -36,11 +38,22 @@ const id = `rune-${Math.random().toString(36).slice(2, 9)}`;
       <span class="rune-host">tama ⟶ ~/projects/my-protocol</span>
     </div>
     <div class="rune-body">
-      {list.map((f, idx) => (
-        <pre class="rune-pre" data-idx={idx} data-active={idx === 0 ? "true" : "false"}>
-          <code><span class="prompt">{f.prompt ?? prompt}</span> {f.body}</code>
-        </pre>
-      ))}
+      <div class="rune-stack">
+        {list.map((f, idx) => (
+          <div
+            class="rune-screen"
+            data-idx={idx}
+            data-active={idx === 0 ? "true" : "false"}
+          >
+            <div class="rune-line">
+              <span class="prompt">{prompt}</span>{" "}{f.command}
+            </div>
+            {(f.output ?? []).map((line) => (
+              <div class="rune-line rune-out">{line}</div>
+            ))}
+          </div>
+        ))}
+      </div>
       <div class="rune-glow" aria-hidden="true"></div>
       <div class="rune-sweep" aria-hidden="true"></div>
     </div>
@@ -48,7 +61,7 @@ const id = `rune-${Math.random().toString(36).slice(2, 9)}`;
   {list.some((f) => f.caption) && (
     <figcaption class="rune-caption">
       {list.map((f, idx) => (
-        <span data-cap={idx} data-active={idx === 0 ? "true" : "false"}>{f.caption ?? " "}</span>
+        <span data-cap={idx} data-active={idx === 0 ? "true" : "false"}>{f.caption ?? " "}</span>
       ))}
     </figcaption>
   )}
@@ -85,6 +98,7 @@ const id = `rune-${Math.random().toString(36).slice(2, 9)}`;
     position: relative;
     border-radius: var(--r-lg);
     overflow: hidden;
+    container-type: inline-size;
     background:
       linear-gradient(160deg, #11352c 0%, #0c2a23 60%, #082019 100%);
     box-shadow:
@@ -120,36 +134,35 @@ const id = `rune-${Math.random().toString(36).slice(2, 9)}`;
 
   .rune-body {
     position: relative;
-    padding: var(--s-5) var(--s-5) var(--s-6);
-    min-height: 220px;
+    padding: clamp(14px, 4cqi, 28px) clamp(16px, 4.5cqi, 28px);
   }
-  .rune-pre {
-    position: absolute;
-    inset: var(--s-5);
-    margin: 0;
-    background: transparent;
-    border: 0;
-    box-shadow: none;
-    color: #d8efe6;
+  .rune-stack {
+    display: grid;
+  }
+  .rune-screen {
+    grid-area: 1 / 1;
     opacity: 0;
     transition: opacity 600ms var(--ease-quiet);
-    font-family: var(--font-mono);
-    font-size: var(--t-sm);
-    line-height: 1.7;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
   }
-  .rune-pre[data-active="true"] { opacity: 1; }
-  .rune-pre code {
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    padding: 0;
-    border: 0;
+  .rune-screen[data-active="true"] {
+    opacity: 1;
+  }
+  .rune-line {
+    display: block;
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: clamp(0.68rem, 2.55cqi, 0.875rem);
+    line-height: 1.7;
+    color: #d8efe6;
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: clip;
+  }
+  .rune-out {
+    padding-left: 2ch;
   }
   .prompt {
     color: var(--jade-300);
-    margin-right: 0.4em;
     text-shadow: 0 0 12px rgba(141, 184, 171, 0.4);
   }
   .rune-glow {
@@ -185,7 +198,7 @@ const id = `rune-${Math.random().toString(36).slice(2, 9)}`;
   }
 
   .rune-caption {
-    position: relative;
+    display: grid;
     margin: var(--s-3) 0 0;
     min-height: 1.3em;
     font-family: var(--font-mono);
@@ -195,8 +208,7 @@ const id = `rune-${Math.random().toString(36).slice(2, 9)}`;
     text-transform: uppercase;
   }
   .rune-caption span {
-    position: absolute;
-    inset: 0;
+    grid-area: 1 / 1;
     opacity: 0;
     transition: opacity 600ms var(--ease-quiet);
   }
