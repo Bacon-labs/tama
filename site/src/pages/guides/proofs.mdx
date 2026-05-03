@@ -146,7 +146,9 @@ explicitly:
 ```
 
 The string is the audit-visible reason. Don't allowlist anything you can't
-defend in two sentences.
+defend in two sentences. Verity itself ships with
+[zero documented axioms](https://github.com/lfglabs-dev/verity/blob/main/AXIOMS.md);
+anything you allowlist is a project-level choice, not a framework one.
 
 ## Where to look when a proof won't close
 
@@ -157,6 +159,9 @@ defend in two sentences.
 - Inside Lean, `simp?` and `exact?` will often suggest the lemma name
   you're missing; `omega` closes nearly all linear arithmetic goals;
   `decide` closes small decidable propositions.
+- [Verity's debugging-proofs guide](https://veritylang.com/guides/debugging-proofs)
+  catalogues the common error messages and tactic patterns from the
+  Verity side — start here before reaching for `sorry`.
 - Read [the audit guide](/guides/audits) — many "proof failures" are
   actually structural mistakes (e.g. an obligation pointing at a
   non-existent mirror) that the audit reports more clearly than the
