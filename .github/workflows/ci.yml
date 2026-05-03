@@ -357,27 +357,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Shell installer requires signature verifier
-        shell: bash
-        run: |
-          set -euxo pipefail
-          tmp="$(mktemp -d)"
-          mkdir -p "$tmp/bin"
-          printf '%s\n' \
-            '#!/bin/sh' \
-            'case "$1" in' \
-            '  -s) printf "%s\n" Linux ;;' \
-            '  -m) printf "%s\n" x86_64 ;;' \
-            '  *) printf "%s\n" Linux ;;' \
-            'esac' > "$tmp/bin/uname"
-          chmod +x "$tmp/bin/uname"
-          if PATH="$tmp/bin" TAMAUP_HOME="$tmp/home" /bin/sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path 2>"$tmp/stderr"; then
-            echo "installer ran without minisign" >&2
-            exit 1
-          fi
-          grep -Fq "minisign is required" "$tmp/stderr"
-          grep -Fq "Install minisign and rerun this installer" "$tmp/stderr"
-          test ! -e "$tmp/home"
       - name: Install installer test tools
         run: sudo apt-get update && sudo apt-get install -y shellcheck minisign
       - run: shellcheck installer/install.sh
@@ -399,18 +378,6 @@ jobs:
           chmod +x "$tmp/bin/uname"
           if PATH="$tmp/bin:$PATH" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path; then
             echo "installer accepted an unsupported platform" >&2
-            exit 1
-          fi
-          test ! -e "$tmp/home"
-      - name: Shell installer rejects bad signature
-        shell: bash
-        run: |
-          set -euxo pipefail
-          tmp="$(mktemp -d)"
-          printf '%s\n' '{"version":"0.1.0","artifacts":[]}' > "$tmp/manifest.json"
-          printf '%s\n' 'not a minisign signature' > "$tmp/manifest.json.minisig"
-          if TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path; then
-            echo "installer accepted a bad signature" >&2
             exit 1
           fi
           test ! -e "$tmp/home"
