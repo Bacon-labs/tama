@@ -1,0 +1,65 @@
+name: Install Lean, Foundry, and solc
+description: Install elan (Lean), Foundry, and solc 0.8.33 with retry-tolerant fetches.
+
+inputs:
+  github-token:
+    description: Token used by foundryup to query the GitHub releases API. Avoids unauthenticated rate-limit 403s.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Free disk space (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force >/dev/null 2>&1 || true
+        df -h /
+
+    - name: Add elan bin to PATH
+      shell: bash
+      run: |
+        echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+    - name: Install elan (Lean toolchain manager)
+      shell: bash
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3 4; do
+          if curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused \
+              https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+              -o "$RUNNER_TEMP/elan-init.sh"; then
+            sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain none && exit 0
+          fi
+          sleep $((attempt * 5))
+        done
+        echo "elan install failed after 4 attempts" >&2
+        exit 1
+
+    - name: Install Foundry
+      uses: foundry-rs/foundry-toolchain@v1
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Install solc-select and solc 0.8.33 (in venv)
+      shell: bash
+      run: |
+        set -euo pipefail
+        venv="$RUNNER_TEMP/solc-select-venv"
+        python3 -m venv "$venv"
+        for attempt in 1 2 3 4; do
+          "$venv/bin/pip" install --upgrade solc-select && break || sleep $((attempt * 5))
+        done
+        for attempt in 1 2 3 4; do
+          "$venv/bin/solc-select" install 0.8.33 && break || sleep $((attempt * 5))
+        done
+        "$venv/bin/solc-select" use 0.8.33
+        echo "$venv/bin" >> "$GITHUB_PATH"
+
+    - name: Print toolchain versions
+      shell: bash
+      run: |
+        forge --version
+        solc --version

@@ -867,22 +867,9 @@ tamaup uninstall             # remove tama; keep tamaup
 Security requirements:
 
 1. Releases publish a signed cumulative manifest containing a `stable` version and `releases[]` entries with artifact URLs, versions, platform triples, and SHA-256 hashes. Installers should continue to accept the legacy single-version manifest shape for local/offline tests.
-2. Installer verifies the signed manifest before installing binaries.
-3. Installer verifies artifact SHA-256 hashes before executing or placing binaries on `$PATH`.
-4. `tamaup` repeats signature and checksum verification for every install/update.
-5. Installer supports noninteractive and opt-out flags:
-
-```text
---yes
---no-modify-path
---no-install-lean
---no-install-foundry
---no-install-solc
---offline
---version <version>
-```
-
-6. If the local machine lacks the verifier needed for signature checks, the installer fails with manual installation instructions rather than silently falling back to unchecked downloads.
+2. The bootstrap `install.sh` (Foundry-style) trusts TLS plus the SHA-256s carried in the manifest: it fetches `manifest.json` from the GitHub Releases asset URL, validates manifest field safety, and verifies the artifact SHA-256 before placing any binary on `$PATH`.
+3. `tamaup` uses the same trust model: it fetches `manifest.json` from GitHub Releases over TLS and verifies each downloaded artifact against the SHA-256 carried in the manifest. The schema-less legacy single-version manifest shape is accepted only via `tamaup --manifest-file` for local/offline tests.
+4. The bootstrap `install.sh` accepts no flags or environment overrides: it always installs the latest stable release for the detected platform into `~/.tama` (or `$TAMAUP_HOME` if set). Per-version selection, offline installs, channel switches, and toolchain bootstrap opt-outs are surfaced through `tamaup`.
 
 Toolchain behavior:
 

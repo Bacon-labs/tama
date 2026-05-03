@@ -64,22 +64,7 @@ jobs:
           key: tama-lake-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/lake-manifest.json') }}
           restore-keys: |
             tama-lake-release-${{ runner.os }}-${{ runner.arch }}-
-      - name: Install Lean, Foundry, and solc
-        shell: bash
-        run: |
-          set -euxo pipefail
-          export PATH="$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
-          curl -fsSL https://foundry.paradigm.xyz | bash
-          foundryup
-          python3 -m pip install --user --upgrade solc-select
-          solc-select install 0.8.33
-          solc-select use 0.8.33
-          forge --version
-          solc --version
+      - uses: ./.github/actions/install-toolchain
       - name: Build Tama
         run: cargo build --workspace --release
       - name: Fresh starter quickstart
@@ -147,20 +132,7 @@ jobs:
           key: tama-lake-release-negative-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/lake-manifest.json') }}
           restore-keys: |
             tama-lake-release-negative-${{ runner.os }}-${{ runner.arch }}-
-      - name: Install Lean, Foundry, and solc
-        shell: bash
-        run: |
-          set -euxo pipefail
-          export PATH="$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
-          curl -fsSL https://foundry.paradigm.xyz | bash
-          foundryup
-          python3 -m pip install --user --upgrade solc-select
-          solc-select install 0.8.33
-          solc-select use 0.8.33
+      - uses: ./.github/actions/install-toolchain
       - name: Build baseline
         shell: bash
         run: |
@@ -358,29 +330,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Shell installer requires signature verifier
-        shell: bash
-        run: |
-          set -euxo pipefail
-          tmp="$(mktemp -d)"
-          mkdir -p "$tmp/bin"
-          printf '%s\n' \
-            '#!/bin/sh' \
-            'case "$1" in' \
-            '  -s) printf "%s\n" Linux ;;' \
-            '  -m) printf "%s\n" x86_64 ;;' \
-            '  *) printf "%s\n" Linux ;;' \
-            'esac' > "$tmp/bin/uname"
-          chmod +x "$tmp/bin/uname"
-          if PATH="$tmp/bin" TAMAUP_HOME="$tmp/home" /bin/sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path 2>"$tmp/stderr"; then
-            echo "installer ran without minisign" >&2
-            exit 1
-          fi
-          grep -Fq "minisign is required" "$tmp/stderr"
-          grep -Fq "Install minisign and rerun this installer" "$tmp/stderr"
-          test ! -e "$tmp/home"
       - name: Install installer test tools
-        run: sudo apt-get update && sudo apt-get install -y shellcheck minisign
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
       - run: shellcheck installer/install.sh
       - run: sh -n installer/install.sh
       - run: cargo test -p tamaup-cli
@@ -398,316 +349,11 @@ jobs:
             '  *) printf "%s\n" FreeBSD ;;' \
             'esac' > "$tmp/bin/uname"
           chmod +x "$tmp/bin/uname"
-          if PATH="$tmp/bin:$PATH" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path; then
+          if PATH="$tmp/bin:$PATH" TAMAUP_HOME="$tmp/home" sh installer/install.sh; then
             echo "installer accepted an unsupported platform" >&2
             exit 1
           fi
           test ! -e "$tmp/home"
-      - name: Shell installer rejects bad signature
-        shell: bash
-        run: |
-          set -euxo pipefail
-          tmp="$(mktemp -d)"
-          printf '%s\n' '{"version":"0.1.0","artifacts":[]}' > "$tmp/manifest.json"
-          printf '%s\n' 'not a minisign signature' > "$tmp/manifest.json.minisig"
-          if TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path; then
-            echo "installer accepted a bad signature" >&2
-            exit 1
-          fi
-          test ! -e "$tmp/home"
-      - name: Shell installer rejects signed unsafe manifests
-        shell: bash
-        run: |
-          set -euxo pipefail
-          tmp="$(mktemp -d)"
-          minisign -G -p "$tmp/minisign.pub" -s "$tmp/minisign.sec" -W
-          pubkey="$(tail -n 1 "$tmp/minisign.pub")"
-          cat > "$tmp/manifest.json" <<JSON
-          {
-            "schema": "tama.release-manifest.v2",
-            "stable": "0.1.0",
-            "releases": []
-          }
-          JSON
-          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
-          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
-            echo "installer accepted an unknown release manifest schema" >&2
-            exit 1
-          fi
-          test ! -e "$tmp/home"
-          python3 - "$tmp/manifest.json" <<'PY'
-          import json
-          import sys
-
-          json.dump({
-              "schema": "tama.release-manifest.v1",
-              "stable": "0.1.0",
-              "unexpected": True,
-              "releases": [],
-          }, open(sys.argv[1], "w", encoding="utf-8"))
-          PY
-          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
-          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
-            echo "installer accepted unknown release manifest fields" >&2
-            exit 1
-          fi
-          test ! -e "$tmp/home"
-          python3 - "$tmp/manifest.json" <<'PY'
-          import json
-          import sys
-
-          json.dump({
-              "schema": "tama.release-manifest.v1",
-              "stable": "0.1.0",
-              "version": "0.1.0",
-              "artifacts": [],
-              "releases": [{
-                  "version": "0.1.0",
-                  "artifacts": [],
-              }],
-          }, open(sys.argv[1], "w", encoding="utf-8"))
-          PY
-          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
-          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
-            echo "installer accepted a mixed release manifest shape" >&2
-            exit 1
-          fi
-          test ! -e "$tmp/home"
-          python3 - "$tmp/manifest.json" <<'PY'
-          import json
-          import sys
-
-          json.dump({
-              "schema": "tama.release-manifest.v1",
-              "stable": "0.1.0",
-              "releases": [{
-                  "version": "0.1.0",
-                  "artifacts": [],
-              }],
-          }, open(sys.argv[1], "w", encoding="utf-8"))
-          PY
-          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
-          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
-            echo "installer accepted an empty release artifact list" >&2
-            exit 1
-          fi
-          test ! -e "$tmp/home"
-          python3 - "$tmp/manifest.json" "$tmp/tama.tar.gz" "$tmp/pwned" <<'PY'
-          import json
-          import shlex
-          import sys
-
-          manifest_path, artifact_path, pwned_path = sys.argv[1:]
-          json.dump({
-              "schema": "tama.release-manifest.v1",
-              "stable": "0.1.0",
-              "releases": [{
-                  "version": "0.1.0",
-                  "artifacts": [{
-                      "platform": "linux-x86_64",
-                      "url": f"file://{artifact_path}\nprintf pwned > {shlex.quote(pwned_path)}",
-                      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-                  }],
-              }],
-          }, open(manifest_path, "w", encoding="utf-8"))
-          PY
-          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
-          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
-            echo "installer accepted unsafe release manifest fields" >&2
-            exit 1
-          fi
-          test ! -e "$tmp/pwned"
-          test ! -e "$tmp/home"
-          python3 - "$tmp/manifest.json" <<'PY'
-          import json
-          import sys
-
-          json.dump({
-              "schema": "tama.release-manifest.v1",
-              "stable": ".hidden",
-              "releases": [{
-                  "version": ".hidden",
-                  "artifacts": [{
-                      "platform": "linux-x86_64",
-                      "url": "file:///tmp/tama.tar.gz",
-                      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-                  }],
-              }],
-          }, open(sys.argv[1], "w", encoding="utf-8"))
-          PY
-          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
-          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version stable; then
-            echo "installer accepted an unsafe release version" >&2
-            exit 1
-          fi
-          python3 - "$tmp/manifest.json" <<'PY'
-          import json
-          import sys
-
-          json.dump({
-              "schema": "tama.release-manifest.v1",
-              "stable": "0.1.0",
-              "releases": [{
-                  "version": "0.1.0",
-                  "artifacts": [{
-                      "platform": "linux-x86_64",
-                      "url": "file:///tmp/tama.tar.gz",
-                      "sha256": "A" * 64,
-                  }],
-              }],
-          }, open(sys.argv[1], "w", encoding="utf-8"))
-          PY
-          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
-          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
-            echo "installer accepted an uppercase artifact hash" >&2
-            exit 1
-          fi
-          test ! -e "$tmp/home"
-      - name: Shell installer verifies local artifact
-        shell: bash
-        run: |
-          set -euxo pipefail
-          tmp="$(mktemp -d)"
-          mkdir -p "$tmp/archive/bin"
-          printf '%s\n' '#!/bin/sh' 'echo tama' > "$tmp/archive/bin/tama"
-          printf '%s\n' '#!/bin/sh' 'echo tamaup' > "$tmp/archive/bin/tamaup"
-          chmod +x "$tmp/archive/bin/tama" "$tmp/archive/bin/tamaup"
-          tar -C "$tmp/archive" -czf "$tmp/tama.tar.gz" bin/tama bin/tamaup
-          sha="$(sha256sum "$tmp/tama.tar.gz" | awk '{print $1}')"
-          minisign -G -p "$tmp/minisign.pub" -s "$tmp/minisign.sec" -W
-          pubkey="$(tail -n 1 "$tmp/minisign.pub")"
-          cat > "$tmp/manifest.json" <<JSON
-          {
-            "version": "0.1.0",
-            "artifacts": [
-              {
-                "platform": "linux-x86_64",
-                "url": "file://$tmp/tama.tar.gz",
-                "sha256": "$sha"
-              }
-            ]
-          }
-          JSON
-          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
-          TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh \
-            --yes \
-            --offline \
-            --manifest-file "$tmp/manifest.json" \
-            --no-modify-path \
-            --no-install-lean \
-            --no-install-foundry \
-            --no-install-solc \
-            --version 0.1.0
-          test -x "$tmp/home/versions/0.1.0/bin/tama"
-          test -x "$tmp/home/versions/0.1.0/bin/tamaup"
-      - name: Shell installer rejects bad SHA before extraction
-        shell: bash
-        run: |
-          set -euxo pipefail
-          tmp="$(mktemp -d)"
-          mkdir -p "$tmp/archive/bin"
-          printf '%s\n' '#!/bin/sh' 'echo tama' > "$tmp/archive/bin/tama"
-          printf '%s\n' '#!/bin/sh' 'echo tamaup' > "$tmp/archive/bin/tamaup"
-          chmod +x "$tmp/archive/bin/tama" "$tmp/archive/bin/tamaup"
-          tar -C "$tmp/archive" -czf "$tmp/tama.tar.gz" bin/tama bin/tamaup
-          minisign -G -p "$tmp/minisign.pub" -s "$tmp/minisign.sec" -W
-          pubkey="$(tail -n 1 "$tmp/minisign.pub")"
-          cat > "$tmp/manifest.json" <<JSON
-          {
-            "version": "0.1.0",
-            "artifacts": [
-              {
-                "platform": "linux-x86_64",
-                "url": "file://$tmp/tama.tar.gz",
-                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
-              }
-            ]
-          }
-          JSON
-          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
-          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
-            echo "installer accepted a bad artifact hash" >&2
-            exit 1
-          fi
-          test ! -e "$tmp/home/versions/0.1.0/bin/tama"
-      - name: Shell installer rejects traversal before install
-        shell: bash
-        run: |
-          set -euxo pipefail
-          tmp="$(mktemp -d)"
-          python3 - "$tmp/tama.tar.gz" <<'PY'
-          import io
-          import tarfile
-          import sys
-
-          with tarfile.open(sys.argv[1], "w:gz") as archive:
-              for name in ("bin/tama", "../evil", "bin/tamaup"):
-                  info = tarfile.TarInfo(name)
-                  data = name.encode()
-                  info.size = len(data)
-                  info.mode = 0o755
-                  archive.addfile(info, fileobj=io.BytesIO(data))
-          PY
-          sha="$(sha256sum "$tmp/tama.tar.gz" | awk '{print $1}')"
-          minisign -G -p "$tmp/minisign.pub" -s "$tmp/minisign.sec" -W
-          pubkey="$(tail -n 1 "$tmp/minisign.pub")"
-          cat > "$tmp/manifest.json" <<JSON
-          {
-            "version": "0.1.0",
-            "artifacts": [
-              {
-                "platform": "linux-x86_64",
-                "url": "file://$tmp/tama.tar.gz",
-                "sha256": "$sha"
-              }
-            ]
-          }
-          JSON
-          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
-          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
-            echo "installer accepted an archive traversal entry" >&2
-            exit 1
-          fi
-          test ! -e "$tmp/home/versions/0.1.0/bin/tama"
-      - name: Shell installer rejects absolute archive path before install
-        shell: bash
-        run: |
-          set -euxo pipefail
-          tmp="$(mktemp -d)"
-          python3 - "$tmp/tama.tar.gz" <<'PY'
-          import io
-          import tarfile
-          import sys
-
-          with tarfile.open(sys.argv[1], "w:gz") as archive:
-              for name in ("bin/tama", "/evil", "bin/tamaup"):
-                  info = tarfile.TarInfo(name)
-                  data = name.encode()
-                  info.size = len(data)
-                  info.mode = 0o755
-                  archive.addfile(info, fileobj=io.BytesIO(data))
-          PY
-          sha="$(sha256sum "$tmp/tama.tar.gz" | awk '{print $1}')"
-          minisign -G -p "$tmp/minisign.pub" -s "$tmp/minisign.sec" -W
-          pubkey="$(tail -n 1 "$tmp/minisign.pub")"
-          cat > "$tmp/manifest.json" <<JSON
-          {
-            "version": "0.1.0",
-            "artifacts": [
-              {
-                "platform": "linux-x86_64",
-                "url": "file://$tmp/tama.tar.gz",
-                "sha256": "$sha"
-              }
-            ]
-          }
-          JSON
-          minisign -S -s "$tmp/minisign.sec" -m "$tmp/manifest.json" -x "$tmp/manifest.json.minisig" -W
-          if TAMA_MINISIGN_PUBLIC_KEY="$pubkey" TAMAUP_HOME="$tmp/home" sh installer/install.sh --offline --manifest-file "$tmp/manifest.json" --no-modify-path --version 0.1.0; then
-            echo "installer accepted an absolute archive entry" >&2
-            exit 1
-          fi
-          test ! -e "$tmp/home/versions/0.1.0/bin/tama"
 
   build-artifacts:
     name: Build ${{ matrix.platform }}
@@ -764,20 +410,13 @@ jobs:
           path: dist
           pattern: tama-*
           merge-multiple: true
-      - name: Install release tools
-        run: sudo apt-get update && sudo apt-get install -y minisign
       - name: Build manifest
-        env:
-          TAMA_MINISIGN_PUBLIC_KEY: ${{ secrets.TAMA_MINISIGN_PUBLIC_KEY }}
         shell: bash
         run: |
           set -euxo pipefail
           version="${GITHUB_REF_NAME#v}"
-          test -n "$TAMA_MINISIGN_PUBLIC_KEY"
           previous_manifest=""
-          if curl -fsSL https://tama.tools/manifest.json -o dist/previous-manifest.json; then
-            curl -fsSL https://tama.tools/manifest.json.minisig -o dist/previous-manifest.json.minisig
-            minisign -V -P "$TAMA_MINISIGN_PUBLIC_KEY" -m dist/previous-manifest.json -x dist/previous-manifest.json.minisig
+          if curl -fsSL https://github.com/bacon-labs/tama/releases/latest/download/manifest.json -o dist/previous-manifest.json; then
             previous_manifest="dist/previous-manifest.json"
           fi
           python3 - "$version" "$previous_manifest" dist/*.tar.gz > dist/manifest.json <<'PY'
@@ -807,7 +446,7 @@ jobs:
               digest = hashlib.sha256(path.read_bytes()).hexdigest()
               artifacts.append({
                   "platform": platform,
-                  "url": f"https://tama.tools/releases/{name}",
+                  "url": f"https://github.com/bacon-labs/tama/releases/download/v{version}/{name}",
                   "sha256": digest,
               })
           platforms = [artifact["platform"] for artifact in artifacts]
@@ -927,21 +566,6 @@ jobs:
               manifest["nightly"] = nightly
           print(json.dumps(manifest, indent=2))
           PY
-      - name: Sign manifest
-        env:
-          TAMA_MINISIGN_SECRET_KEY: ${{ secrets.TAMA_MINISIGN_SECRET_KEY }}
-          TAMA_MINISIGN_PUBLIC_KEY: ${{ secrets.TAMA_MINISIGN_PUBLIC_KEY }}
-        shell: bash
-        run: |
-          set -euxo pipefail
-          test -n "$TAMA_MINISIGN_SECRET_KEY"
-          test -n "$TAMA_MINISIGN_PUBLIC_KEY"
-          grep -Fq "$TAMA_MINISIGN_PUBLIC_KEY" crates/tamaup-cli/src/main.rs
-          grep -Fq "$TAMA_MINISIGN_PUBLIC_KEY" installer/install.sh
-          printf '%s\n' "$TAMA_MINISIGN_SECRET_KEY" > dist/minisign.sec
-          minisign -S -s dist/minisign.sec -m dist/manifest.json -x dist/manifest.json.minisig -W
-          minisign -V -P "$TAMA_MINISIGN_PUBLIC_KEY" -m dist/manifest.json -x dist/manifest.json.minisig
-          rm dist/minisign.sec
       - name: Prepare Pages bundle
         shell: bash
         run: |
@@ -949,8 +573,6 @@ jobs:
           mkdir -p public/releases
           cp -R docs/. public/
           cp installer/install.sh public/install.sh
-          cp dist/manifest.json public/manifest.json
-          cp dist/manifest.json.minisig public/manifest.json.minisig
           cp dist/*.tar.gz public/releases/
       - name: Check Pages links
         shell: bash
@@ -1003,4 +625,3 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/manifest.json
-            dist/manifest.json.minisig

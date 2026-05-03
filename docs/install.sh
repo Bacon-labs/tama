@@ -1,44 +1,21 @@
 #!/bin/sh
 set -eu
 
-BASE_URL="${TAMA_BASE_URL:-https://tama.tools}"
+BASE_URL="https://github.com/bacon-labs/tama/releases/latest/download"
 TAMAUP_HOME="${TAMAUP_HOME:-$HOME/.tama}"
-VERSION="stable"
-NO_MODIFY_PATH=0
-OFFLINE=0
-MANIFEST_FILE=""
 
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --yes) ;;
-    --no-modify-path) NO_MODIFY_PATH=1 ;;
-    --offline) OFFLINE=1 ;;
-    --version) shift; VERSION="${1:?missing version}" ;;
-    --manifest-file) shift; MANIFEST_FILE="${1:?missing manifest file}" ;;
-    --no-install-lean|--no-install-foundry|--no-install-solc) ;;
-    *) echo "unknown argument: $1" >&2; exit 2 ;;
-  esac
-  shift
-done
+if [ "$#" -gt 0 ]; then
+  echo "install.sh takes no arguments" >&2
+  exit 2
+fi
 
 case "$(uname -s):$(uname -m)" in
   Linux:x86_64) PLATFORM="linux-x86_64" ;;
   Linux:aarch64|Linux:arm64) PLATFORM="linux-aarch64" ;;
   Darwin:x86_64) PLATFORM="macos-x86_64" ;;
   Darwin:arm64|Darwin:aarch64) PLATFORM="macos-aarch64" ;;
-  *) echo "unsupported platform for Tama v0.1" >&2; exit 1 ;;
+  *) echo "unsupported platform: $(uname -s):$(uname -m)" >&2; exit 1 ;;
 esac
-
-if ! command -v minisign >/dev/null 2>&1; then
-  echo "minisign is required to verify the Tama release manifest" >&2
-  echo "Install minisign and rerun this installer, or use tamaup with a verified local manifest." >&2
-  exit 1
-fi
-
-if [ "$OFFLINE" -eq 1 ] && [ -z "$MANIFEST_FILE" ]; then
-  echo "--offline requires --manifest-file" >&2
-  exit 1
-fi
 
 TMP_PARENT="${TMPDIR:-/tmp}"
 INSTALL_TMPDIR="$(mktemp -d "${TMP_PARENT%/}/tama-install.XXXXXX")"
@@ -48,34 +25,23 @@ fetch() {
   url="$1"
   out="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o "$out"
+    curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused "$url" -o "$out"
   elif command -v wget >/dev/null 2>&1; then
-    wget -q "$url" -O "$out"
+    wget -q --tries=3 --waitretry=2 "$url" -O "$out"
   else
     echo "curl or wget is required" >&2
     exit 1
   fi
 }
 
-if [ -n "$MANIFEST_FILE" ]; then
-  cp "$MANIFEST_FILE" "$INSTALL_TMPDIR/manifest.json"
-  cp "$MANIFEST_FILE.minisig" "$INSTALL_TMPDIR/manifest.json.minisig"
-  ALLOW_FILE_URLS=1
-else
-  fetch "$BASE_URL/manifest.json" "$INSTALL_TMPDIR/manifest.json"
-  fetch "$BASE_URL/manifest.json.minisig" "$INSTALL_TMPDIR/manifest.json.minisig"
-  ALLOW_FILE_URLS=0
-fi
-
-PUBLIC_KEY="${TAMA_MINISIGN_PUBLIC_KEY:-RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3}"
-minisign -Vm "$INSTALL_TMPDIR/manifest.json" -P "$PUBLIC_KEY" -x "$INSTALL_TMPDIR/manifest.json.minisig" >/dev/null
+fetch "$BASE_URL/manifest.json" "$INSTALL_TMPDIR/manifest.json"
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required by the bootstrap installer to read the release manifest" >&2
   exit 1
 fi
 
-python3 - "$INSTALL_TMPDIR/manifest.json" "$PLATFORM" "$VERSION" "$ALLOW_FILE_URLS" > "$INSTALL_TMPDIR/artifact.env" <<'PY'
+python3 - "$INSTALL_TMPDIR/manifest.json" "$PLATFORM" > "$INSTALL_TMPDIR/artifact.env" <<'PY'
 import json
 import re
 import shlex
@@ -103,50 +69,22 @@ def reject_unknown_keys(obj, allowed, label):
     if unknown:
         raise SystemExit(f"unknown release manifest field in {label}: {unknown[0]}")
 
-manifest_path, platform, version, allow_file_urls = sys.argv[1:5]
-allow_file_urls = allow_file_urls == "1"
+manifest_path, platform = sys.argv[1:3]
 manifest = json.load(open(manifest_path, encoding="utf-8"))
-reject_unknown_keys(manifest, {"schema", "stable", "nightly", "version", "artifacts", "releases"}, "manifest")
+reject_unknown_keys(manifest, {"schema", "stable", "nightly", "releases"}, "manifest")
 schema = manifest.get("schema")
-if schema is not None and schema != "tama.release-manifest.v1":
+if schema != "tama.release-manifest.v1":
     raise SystemExit(f"unsupported release manifest schema: {schema}")
-is_cumulative = schema is not None or "stable" in manifest or "nightly" in manifest or "releases" in manifest
-if is_cumulative:
-    if schema != "tama.release-manifest.v1":
-        raise SystemExit("cumulative release manifest must declare schema tama.release-manifest.v1")
-    if "stable" not in manifest:
-        raise SystemExit("cumulative release manifest is missing stable version")
-    if not isinstance(manifest.get("releases"), list) or not manifest["releases"]:
-        raise SystemExit("cumulative release manifest must contain releases[]")
-    if "version" in manifest or "artifacts" in manifest:
-        raise SystemExit("cumulative release manifest must not mix legacy version/artifacts fields")
-    if version in ("stable", "nightly"):
-        selected = manifest.get(version)
-        selected_from_channel = True
-        if selected is None:
-            raise SystemExit(f"release manifest is missing {version} version")
-    else:
-        selected = version
-        selected_from_channel = False
-    releases = manifest["releases"]
-else:
-    if not allow_file_urls:
-        raise SystemExit("published release manifest must be cumulative tama.release-manifest.v1")
-    if "version" not in manifest:
-        raise SystemExit("legacy release manifest is missing version")
-    if not isinstance(manifest.get("artifacts"), list) or not manifest["artifacts"]:
-        raise SystemExit("legacy release manifest is missing artifacts")
-    selected = manifest["version"] if version == "stable" else version
-    selected_from_channel = False
-    releases = [{"version": manifest["version"], "artifacts": manifest["artifacts"]}]
-if not SAFE_VERSION.fullmatch(version) or ".." in version:
-    raise SystemExit(f"unsafe requested release version: {version}")
-selected = require_string(selected, "selected version")
+if "stable" not in manifest:
+    raise SystemExit("release manifest is missing stable version")
+if not isinstance(manifest.get("releases"), list) or not manifest["releases"]:
+    raise SystemExit("release manifest must contain releases[]")
+selected = require_string(manifest.get("stable"), "stable")
 if not SAFE_VERSION.fullmatch(selected) or ".." in selected:
     raise SystemExit(f"unsafe release version: {selected}")
 release_versions = set()
 selected_artifact = None
-for release in releases:
+for release in manifest["releases"]:
     reject_unknown_keys(release, {"version", "artifacts"}, "release")
     release_version = require_string(release.get("version"), "release.version")
     release_artifacts = release.get("artifacts")
@@ -168,28 +106,21 @@ for release in releases:
         if artifact_platform in artifact_platforms:
             raise SystemExit(f"duplicate artifact platform in release manifest: {artifact_platform}")
         artifact_platforms.add(artifact_platform)
-        if not (artifact_url.startswith("https://") or artifact_url.startswith("file://")):
-            raise SystemExit(f"unsupported artifact URL: {artifact_url}")
-        if artifact_url.startswith("https://") and not HTTPS_URL.match(artifact_url):
-            raise SystemExit(f"https artifact URL must include a host: {artifact_url}")
-        if artifact_url.startswith("file://"):
-            if not allow_file_urls:
-                raise SystemExit(f"published artifact URL must use https:// with a host: {artifact_url}")
-            if not artifact_url.startswith("file:///"):
-                raise SystemExit(f"file artifact URL must use an absolute path: {artifact_url}")
+        if not artifact_url.startswith("https://") or not HTTPS_URL.match(artifact_url):
+            raise SystemExit(f"artifact URL must use https:// with a host: {artifact_url}")
         if not SAFE_SHA256.fullmatch(artifact_sha256):
             raise SystemExit(f"invalid artifact SHA-256 for {artifact_platform} {release_version}")
         if release_version == selected and artifact_platform == platform:
             selected_artifact = (release_version, artifact_url, artifact_sha256)
-if selected_from_channel and selected not in release_versions:
-    raise SystemExit(f"release manifest channel points to unknown release: {selected}")
-if selected_artifact is not None:
-    emit_env("VERSION", selected_artifact[0])
-    emit_env("URL", selected_artifact[1])
-    emit_env("SHA256", selected_artifact[2])
-    raise SystemExit(0)
-raise SystemExit(f"no artifact for {platform} {version}")
+if selected not in release_versions:
+    raise SystemExit(f"release manifest stable channel points to unknown release: {selected}")
+if selected_artifact is None:
+    raise SystemExit(f"no artifact for {platform} in release {selected}")
+emit_env("VERSION", selected_artifact[0])
+emit_env("URL", selected_artifact[1])
+emit_env("SHA256", selected_artifact[2])
 PY
+# shellcheck source=/dev/null
 . "$INSTALL_TMPDIR/artifact.env"
 
 case "$VERSION" in
@@ -197,16 +128,7 @@ case "$VERSION" in
   *..*) echo "unsafe release version: $VERSION" >&2; exit 1 ;;
 esac
 
-case "$URL" in
-  file://*) cp "${URL#file://}" "$INSTALL_TMPDIR/tama.tar.gz" ;;
-  *)
-    if [ "$OFFLINE" -eq 1 ]; then
-      echo "offline install cannot download artifact" >&2
-      exit 1
-    fi
-    fetch "$URL" "$INSTALL_TMPDIR/tama.tar.gz"
-    ;;
-esac
+fetch "$URL" "$INSTALL_TMPDIR/tama.tar.gz"
 
 if command -v sha256sum >/dev/null 2>&1; then
   ACTUAL="$(sha256sum "$INSTALL_TMPDIR/tama.tar.gz" | awk '{print $1}')"
@@ -224,7 +146,7 @@ TAMA_ENTRY_COUNT=0
 TAMAUP_ENTRY_COUNT=0
 while IFS= read -r entry; do
   case "$entry" in
-    /*|*../*|../*) echo "unsafe archive path: $entry" >&2; exit 1 ;;
+    /*|*../*) echo "unsafe archive path: $entry" >&2; exit 1 ;;
     bin/tama|tama) TAMA_ENTRY_COUNT=$((TAMA_ENTRY_COUNT + 1)) ;;
     bin/tamaup|tamaup) TAMAUP_ENTRY_COUNT=$((TAMAUP_ENTRY_COUNT + 1)) ;;
     *) echo "unexpected archive entry: $entry" >&2; exit 1 ;;
@@ -296,8 +218,9 @@ mv -f "$link_tmp" "$TAMAUP_HOME/bin/tamaup"
 printf '%s\n' "$VERSION" > "$TAMAUP_HOME/active.tmp.$$"
 mv -f "$TAMAUP_HOME/active.tmp.$$" "$TAMAUP_HOME/active"
 
-if [ "$NO_MODIFY_PATH" -eq 0 ]; then
-  echo "Add $TAMAUP_HOME/bin to PATH if it is not already present."
-fi
+case ":$PATH:" in
+  *":$TAMAUP_HOME/bin:"*) ;;
+  *) echo "Add $TAMAUP_HOME/bin to PATH if it is not already present." ;;
+esac
 
 echo "Tama $VERSION installed for $PLATFORM"
