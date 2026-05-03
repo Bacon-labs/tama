@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write
-  pages: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -566,60 +564,6 @@ jobs:
               manifest["nightly"] = nightly
           print(json.dumps(manifest, indent=2))
           PY
-      - name: Prepare Pages bundle
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p public/releases
-          cp -R docs/. public/
-          cp installer/install.sh public/install.sh
-          cp dist/*.tar.gz public/releases/
-      - name: Check Pages links
-        shell: bash
-        run: |
-          set -euxo pipefail
-          python3 - public/index.html public <<'PY'
-          from html.parser import HTMLParser
-          from pathlib import Path
-          import sys
-
-          index = Path(sys.argv[1])
-          root = Path(sys.argv[2])
-
-          class LinkParser(HTMLParser):
-              def __init__(self):
-                  super().__init__()
-                  self.links = []
-                  self.ids = set()
-
-              def handle_starttag(self, tag, attrs):
-                  attrs = dict(attrs)
-                  if "id" in attrs:
-                      self.ids.add(attrs["id"])
-                  for key in ("href", "src"):
-                      value = attrs.get(key)
-                      if value:
-                          self.links.append(value)
-
-          parser = LinkParser()
-          parser.feed(index.read_text(encoding="utf-8"))
-          for link in parser.links:
-              if link.startswith(("http://", "https://", "mailto:")):
-                  continue
-              if link.startswith("#"):
-                  target = link[1:]
-                  if target not in parser.ids:
-                      raise SystemExit(f"missing anchor target: {link}")
-                  continue
-              target = root / link.lstrip("/")
-              if not target.exists():
-                  raise SystemExit(f"missing linked asset: {link}")
-          PY
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-      - id: deploy
-        uses: actions/deploy-pages@v4
       - uses: softprops/action-gh-release@v2
         with:
           files: |
