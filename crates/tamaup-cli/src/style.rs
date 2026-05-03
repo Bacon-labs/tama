@@ -79,8 +79,12 @@ impl Palette {
         }
         let bold = Effects::BOLD;
         Self {
-            ok: Style::new().fg_color(Some(AnsiColor::Green.into())).effects(bold),
-            error_prefix: Style::new().fg_color(Some(AnsiColor::Red.into())).effects(bold),
+            ok: Style::new()
+                .fg_color(Some(AnsiColor::Green.into()))
+                .effects(bold),
+            error_prefix: Style::new()
+                .fg_color(Some(AnsiColor::Red.into()))
+                .effects(bold),
             header: Style::new().effects(bold),
             count: Style::new().effects(bold),
         }

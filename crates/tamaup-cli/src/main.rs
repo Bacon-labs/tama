@@ -197,7 +197,13 @@ fn install(
     bootstrap: BootstrapOptions,
     palette: &Palette,
 ) -> Result<(), String> {
-    install_with_bootstrap(version, manifest_file, bootstrap, bootstrap_toolchain, palette)
+    install_with_bootstrap(
+        version,
+        manifest_file,
+        bootstrap,
+        bootstrap_toolchain,
+        palette,
+    )
 }
 
 fn install_with_bootstrap(

@@ -91,21 +91,41 @@ impl Palette {
         let bold = Effects::BOLD;
         let dim = Effects::DIMMED;
         Self {
-            ok: Style::new().fg_color(Some(AnsiColor::Green.into())).effects(bold),
-            run: Style::new().fg_color(Some(AnsiColor::Cyan.into())).effects(bold),
+            ok: Style::new()
+                .fg_color(Some(AnsiColor::Green.into()))
+                .effects(bold),
+            run: Style::new()
+                .fg_color(Some(AnsiColor::Cyan.into()))
+                .effects(bold),
             skip: Style::new().effects(dim),
-            fail: Style::new().fg_color(Some(AnsiColor::Red.into())).effects(bold),
-            warn: Style::new().fg_color(Some(AnsiColor::Yellow.into())).effects(bold),
-            info: Style::new().fg_color(Some(AnsiColor::Cyan.into())).effects(bold),
-            error_prefix: Style::new().fg_color(Some(AnsiColor::Red.into())).effects(bold),
-            warning_prefix: Style::new().fg_color(Some(AnsiColor::Yellow.into())).effects(bold),
+            fail: Style::new()
+                .fg_color(Some(AnsiColor::Red.into()))
+                .effects(bold),
+            warn: Style::new()
+                .fg_color(Some(AnsiColor::Yellow.into()))
+                .effects(bold),
+            info: Style::new()
+                .fg_color(Some(AnsiColor::Cyan.into()))
+                .effects(bold),
+            error_prefix: Style::new()
+                .fg_color(Some(AnsiColor::Red.into()))
+                .effects(bold),
+            warning_prefix: Style::new()
+                .fg_color(Some(AnsiColor::Yellow.into()))
+                .effects(bold),
             header: Style::new().effects(bold),
             dim: Style::new().effects(dim),
             path: Style::new().fg_color(Some(AnsiColor::Cyan.into())),
             count: Style::new().effects(bold),
-            severity_error: Style::new().fg_color(Some(AnsiColor::Red.into())).effects(bold),
-            severity_warning: Style::new().fg_color(Some(AnsiColor::Yellow.into())).effects(bold),
-            severity_info: Style::new().fg_color(Some(AnsiColor::Green.into())).effects(bold),
+            severity_error: Style::new()
+                .fg_color(Some(AnsiColor::Red.into()))
+                .effects(bold),
+            severity_warning: Style::new()
+                .fg_color(Some(AnsiColor::Yellow.into()))
+                .effects(bold),
+            severity_info: Style::new()
+                .fg_color(Some(AnsiColor::Green.into()))
+                .effects(bold),
         }
     }
 
@@ -142,6 +162,12 @@ pub struct Painted<T> {
 
 impl<T: fmt::Display> fmt::Display for Painted<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}{}", self.style.render(), self.value, self.style.render_reset())
+        write!(
+            f,
+            "{}{}{}",
+            self.style.render(),
+            self.value,
+            self.style.render_reset()
+        )
     }
 }

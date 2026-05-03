@@ -160,12 +160,7 @@ struct Cli {
         help = "Control colored output: auto, always, never"
     )]
     color: ColorChoice,
-    #[arg(
-        long,
-        global = true,
-        hide = true,
-        help = "Alias for --color=never"
-    )]
+    #[arg(long, global = true, hide = true, help = "Alias for --color=never")]
     no_color: bool,
     #[command(subcommand)]
     command: Command,
@@ -803,10 +798,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     )
                 },
             )?;
-            anstream::println!(
-                "{}",
-                paint(palette.ok, "Updated Tama project lock state"),
-            );
+            anstream::println!("{}", paint(palette.ok, "Updated Tama project lock state"),);
             Ok(ExitCode::SUCCESS)
         }
     }
@@ -972,7 +964,11 @@ fn format_doctor_report(
         }
     }
     out.push('\n');
-    let summary_style = if failures == 0 { palette.ok } else { palette.fail };
+    let summary_style = if failures == 0 {
+        palette.ok
+    } else {
+        palette.fail
+    };
     let prefix = if failures == 0 {
         if fixed {
             "Doctor passed after repair:"
@@ -2233,10 +2229,7 @@ fn format_audit_report(
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!("{}\n", paint(palette.header, "Audit scope:")));
-    out.push_str(&format!(
-        "  {}: {root}\n",
-        paint(palette.dim, "project")
-    ));
+    out.push_str(&format!("  {}: {root}\n", paint(palette.dim, "project")));
     out.push_str(&format!(
         "  {}: {}\n",
         paint(palette.dim, "manifests"),
@@ -2271,7 +2264,10 @@ fn format_audit_report(
         out.push_str(&format!(
             "\n{} ({}):\n",
             paint(palette.header, "Findings"),
-            paint(palette.count, format_count(report.issues.len(), "issue", "issues")),
+            paint(
+                palette.count,
+                format_count(report.issues.len(), "issue", "issues")
+            ),
         ));
         for issue in &report.issues {
             let severity_style = severity_style(issue.severity, palette);
@@ -2286,10 +2282,7 @@ fn format_audit_report(
             }
             out.push_str(&format!(": {}\n", issue.message));
             if let Some(path) = &issue.path {
-                out.push_str(&format!(
-                    "    {}: {path}\n",
-                    paint(palette.dim, "path"),
-                ));
+                out.push_str(&format!("    {}: {path}\n", paint(palette.dim, "path"),));
             }
         }
     }
@@ -2306,15 +2299,30 @@ fn format_audit_report(
     out.push_str(&format!("{} ", paint(summary_style, summary_prefix)));
     out.push_str(&format!(
         "{}, {}, {}",
-        paint(palette.count, format_count(report.summary.checks.len(), "check", "checks")),
-        paint(palette.count, format_count(report.summary.contracts.len(), "contract", "contracts")),
-        paint(palette.count, format_count(report.issues.len(), "issue", "issues")),
+        paint(
+            palette.count,
+            format_count(report.summary.checks.len(), "check", "checks")
+        ),
+        paint(
+            palette.count,
+            format_count(report.summary.contracts.len(), "contract", "contracts")
+        ),
+        paint(
+            palette.count,
+            format_count(report.issues.len(), "issue", "issues")
+        ),
     ));
     if !report.issues.is_empty() {
         out.push_str(&format!(
             " ({}, {}, {})",
-            paint(palette.severity_error, format_count(errors, "error", "errors")),
-            paint(palette.severity_warning, format_count(warnings, "warning", "warnings")),
+            paint(
+                palette.severity_error,
+                format_count(errors, "error", "errors")
+            ),
+            paint(
+                palette.severity_warning,
+                format_count(warnings, "warning", "warnings")
+            ),
             paint(palette.severity_info, format_count(infos, "info", "info")),
         ));
     }
@@ -2563,8 +2571,14 @@ fn format_clean_report(report: &CleanReport, palette: &Palette) -> String {
     out.push_str(&format!(
         "{} {}, {}",
         paint(palette.header, "Clean completed:"),
-        paint(palette.count, format_count(removed, "target removed", "targets removed")),
-        paint(palette.count, format_count(clean, "already clean", "already clean")),
+        paint(
+            palette.count,
+            format_count(removed, "target removed", "targets removed")
+        ),
+        paint(
+            palette.count,
+            format_count(clean, "already clean", "already clean")
+        ),
     ));
     out
 }
@@ -2949,8 +2963,12 @@ mod tests {
             },
         };
 
-        let output =
-            format_audit_report(Utf8Path::new("/tmp/project"), &report, false, &Palette::plain());
+        let output = format_audit_report(
+            Utf8Path::new("/tmp/project"),
+            &report,
+            false,
+            &Palette::plain(),
+        );
 
         assert!(output.contains("Audit scope:"));
         assert!(output.contains("project: /tmp/project"));
@@ -2976,8 +2994,12 @@ mod tests {
             },
         };
 
-        let output =
-            format_audit_report(Utf8Path::new("/tmp/project"), &report, false, &Palette::plain());
+        let output = format_audit_report(
+            Utf8Path::new("/tmp/project"),
+            &report,
+            false,
+            &Palette::plain(),
+        );
 
         assert!(output.contains("ok   structure"));
         assert!(output.contains("ok   trust-boundary"));
