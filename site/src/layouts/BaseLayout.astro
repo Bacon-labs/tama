@@ -15,14 +15,14 @@ interface Props {
 
 const {
   title,
-  description = "Tama is the Verity developer toolchain. Write smart contracts, prove their properties, and ship the same bytecode you proved about.",
+  description = "Tama is the Verity toolchain for Ethereum. Write a smart contract, prove what it must do, and ship the same bytecode the proof is about.",
   ogTitle,
   ogImage,
   bodyClass = "",
   hideFooter = false,
 } = Astro.props;
 
-const fullTitle = title === "Tama" ? "Tama — verified smart contracts" : `${title} · Tama`;
+const fullTitle = title === "Tama" ? "Tama — verified Ethereum smart contracts" : `${title} · Tama`;
 const canonical = new URL(Astro.url.pathname, Astro.site ?? "https://tama.tools").toString();
 ---
 

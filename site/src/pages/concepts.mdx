@@ -8,11 +8,11 @@ description: What Verity is, how it differs from "just write Solidity," and defi
 
 import Callout from "../components/Callout.astro";
 
-## What is Verity?
+## Verity
 
-**[Verity](https://veritylang.com) is a way of writing smart contracts where the contract and its
-intended behavior are written down separately, and a machine checks
-that they agree.**
+**[Verity](https://veritylang.com) is a way of writing Ethereum smart contracts where the contract
+and its intended behavior are written down separately, and a machine
+checks that they agree.**
 
 Three layers, in one project:
 
@@ -31,7 +31,13 @@ A Solidity project gives you (1) and a fuzz test that *probes* (2).
 Verity gives you (1), (2), and a *proof* that (1) satisfies (2) on every
 possible input — not just the ones the fuzzer happened to try.
 
-## What is Tama?
+<Callout kind="note" title="Want to see what's already proven?">
+[Verity examples](https://veritylang.com/examples) collects real
+contracts — ERC20, vaults, AMMs — each with its specification and
+proof, browsable as plain Lean.
+</Callout>
+
+## Tama
 
 Tama is the developer toolchain that orchestrates Verity. It's a single
 Rust binary (`tama`) plus a version manager (`tamaup`), styled after
@@ -49,6 +55,26 @@ Foundry's `forge` and `foundryup`.
   `tama remove`, `tama update`, `tama doctor`).
 
 Everything Tama produces is reproducible from `tama.toml` and `tama.lock`.
+
+### How it fits with Foundry
+
+A Tama project *is* a Foundry project. `forge test`, `forge script`,
+fuzzers, and RPCs are unchanged. Tama adds the Verity layers (spec,
+proof, manifest, audit) on top of a workflow you already know. You
+don't trade Foundry for Tama — you keep Foundry and gain proofs.
+
+### The everyday loop
+
+```text
+tama init      scaffold a project
+tama check     fast Lean check of implementation + spec (inner loop)
+tama build     full pipeline: proofs, codegen, solc, forge build
+tama test      passthrough to forge test
+tama audit     release gate: structure, selectors, storage, coverage, trust
+```
+
+`init` once per project. `check` constantly while you write. `build`
+when you want the full pipeline. `audit` before you ship.
 
 ## Why prove anything?
 

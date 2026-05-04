@@ -126,14 +126,14 @@ coverage: error
   TipJarProof.deposit_preserves_invariant: mirror not found
 
     declared mirror:
-      test/verity/TipJar.t.sol:TipJarTest.invariant_totalTracksBalances
+      test/verity/TipJar.t.sol:tipJarTest.invariant_totalTracksBalances
 
     test/verity/TipJar.t.sol contains:
       TipJarTest.testFuzz_deposit
-      TipJarTest.invariant_totalTracksBalances  ✓ (this one)
+      TipJarTest.invariant_totalTracksBalances
 
     The contract name in the annotation is wrong: file declares
-    `TipJarTest`, annotation says `TipJarTest`. Check capitalization.
+    `TipJarTest`, annotation says `tipJarTest`. Check capitalization.
 ```
 
 ## trust-boundary

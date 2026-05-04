@@ -56,14 +56,16 @@ manifest can't record a stale hash.
 
 ## Lake dependencies or offline builds
 
-`tama check` and `tama build` do **not** run `lake update`. If Lake
-dependencies are missing, run:
+If Lake is misbehaving, try `lake update` first:
 
 ```sh
 lake update
 ```
 
-For repeated or offline work, keep a clean checkout cache in
+`tama check` and `tama build` do **not** run `lake update` themselves.
+
+The rest of this section is for offline / CI cache work.
+For repeated or offline builds, keep a clean checkout cache in
 `TAMA_LAKE_PACKAGE_CACHE`. Tama seeds `.lake/packages` only when the
 cached Git HEAD exactly matches `lake-manifest.json`. It will fill
 missing packages or replace clean stale package checkouts, but it never

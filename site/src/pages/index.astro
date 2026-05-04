@@ -45,20 +45,20 @@ const frames = [
 
 <BaseLayout
   title="Tama"
-  ogTitle="Tama — verified smart contracts"
-  description="Tama is the Verity developer toolchain. Write a smart contract, prove what it must do, and ship the same bytecode you proved about — all from one CLI."
+  ogTitle="Tama — verified Ethereum smart contracts"
+  description="Tama is the Verity toolchain for Ethereum. Write a smart contract, prove what it must do, and ship the same bytecode the proof is about — all from one CLI."
 >
   <!-- Hero -->
   <section class="hero">
     <div class="hero-text">
       <p class="eyebrow">
         <HankoSeal kanji="玉" size={26} rotate={-6} />
-        <span>Verity developer toolchain</span>
+        <span>Verity toolchain · Ethereum smart contracts</span>
       </p>
 
       <h1 class="hero-title">
         <span class="title-tama">Tama</span>
-        <span class="title-kanji" aria-hidden="true">玉魂</span>
+        <span class="title-kanji" aria-hidden="true">玉/魂</span>
       </h1>
 
       <p class="tag-jp" aria-hidden="true">玉の如く堅く、魂の如く真。</p>
@@ -70,20 +70,16 @@ const frames = [
 
       <p class="hero-body">
         Tama is the developer toolchain for <a href="/concepts">Verity</a> — a way of
-        writing smart contracts where you also write down, mathematically,
-        what the contract must do, and a machine checks the proof.
-        One CLI takes you from source, through proof and codegen,
-        to the same audited bytecode you ship on-chain.
+        writing Ethereum smart contracts where you also write down,
+        mathematically, what the contract must do, and a machine checks the proof.
+        One CLI takes you from source, through proof and codegen, to
+        deployable EVM bytecode — and the bytes you ship are the bytes the
+        proof is about.
       </p>
 
       <div class="cta-row">
-        <Button href="/start">Write your first contract</Button>
+        <Button href="/start">Write your first formally verified contract</Button>
         <Button href="/concepts" variant="ghost">What is Verity?</Button>
-      </div>
-
-      <div class="install-mini" aria-label="Install command">
-        <code class="install-cmd">curl -L https://tama.tools/install.sh | sh</code>
-        <a class="install-link" href="/install">Install →</a>
       </div>
     </div>
 
@@ -104,7 +100,7 @@ const frames = [
       in one verifiable artifact.
     </p>
     <div class="layers">
-      <JadeSlab kanji="實" title="Implementation" tone="jade">
+      <JadeSlab kanji="実" title="Implementation" tone="jade">
         <p>The Lean EDSL describing what the contract <em>does</em>.
         Familiar shape: storage, functions, requires, returns.
         Compiles to Yul, then to EVM bytecode.</p>
@@ -114,7 +110,7 @@ const frames = [
         postconditions, frame conditions — the rules a correct
         implementation has to satisfy.</p>
       </JadeSlab>
-      <JadeSlab kanji="證" title="Proof" tone="ink">
+      <JadeSlab kanji="証" title="Proof" tone="ink">
         <p>A machine-checked argument that the implementation
         satisfies the specification. No hand-waving, no
         "trust the developer." Lean checks every step.</p>
@@ -130,10 +126,9 @@ const frames = [
       <p class="eyebrow eyebrow-line">The pipeline</p>
       <h2>From a Lean theorem to a hex string you can deploy.</h2>
       <p>
-        Tama coordinates Lean, the Verity compiler, <code>solc</code>, and Foundry,
-        and threads the manifest — a single JSON record per contract — through every
-        stage. Audits read the same manifest, so the bytecode you ship and the
-        properties you proved about it cannot drift apart.
+        Lean checks the proof. The compiler emits EVM bytecode. The manifest
+        records the hash of both — so the bytes you deploy are, by construction,
+        the bytes the proof is about.
       </p>
     </div>
     <PipelineDiagram />
@@ -150,25 +145,27 @@ const frames = [
     <div class="why-grid">
       <div class="why-item">
         <span class="why-num">一</span>
-        <h3>The bytecode you proved <em>is</em> the bytecode you ship.</h3>
-        <p>Tama compiles Verity to Yul, then to bytecode, and records a
-        SHA-256 of the result in the manifest. The deployer that goes
-        on-chain embeds those exact bytes — not a Solidity reimplementation.</p>
+        <h3>Every input. Every path. Every time.</h3>
+        <p>A test checks the cases you wrote down. A Verity proof is a
+        statement about <em>every</em> reachable state — every caller, every
+        input, every interleaving. If the proof checks, no example can break
+        it, because the proof <em>is</em> the universal example.</p>
       </div>
       <div class="why-item">
         <span class="why-num">二</span>
-        <h3>Foundry stays. Forge tests, fuzzers, scripts, RPCs — unchanged.</h3>
-        <p>A Tama project <em>is</em> a Foundry project. Run <code>forge test</code>
-        directly. Your invariant fuzz tests double as mirrors for the
-        proven obligations, so the two views back each other up.</p>
+        <h3>The spec is on the page, not in your head.</h3>
+        <p>Writing the property down forces you to commit to what
+        <em>correct</em> means. Reviewers and auditors read the same
+        statement Lean does. When the spec is wrong, you can see it; when
+        the implementation drifts, the proof breaks.</p>
       </div>
       <div class="why-item">
         <span class="why-num">三</span>
-        <h3>The trust boundary is small, named, and on the page.</h3>
-        <p><code>tama audit trust-boundary</code> walks the Lean proof and
-        refuses any reliance on <code>sorry</code> or unallowlisted axioms.
-        Every assumption has a name, a reason, and an entry in
-        <code>tama.toml</code>.</p>
+        <h3>Whole bug classes become impossible.</h3>
+        <p>Once an invariant is proven — balances sum to total supply, no
+        path re-enters before settlement, no overflow on a critical sum —
+        no future edit can quietly violate it. Tama re-checks the proof
+        on every build.</p>
       </div>
     </div>
   </section>
@@ -181,24 +178,23 @@ const frames = [
       <HankoSeal kanji="入" size={64} rotate={-5} label="install seal" />
       <div>
         <h2>Install in one command.</h2>
-        <p>Detects your platform, fetches the signed release manifest,
-        verifies the SHA-256, and drops <code>tama</code> + <code>tamaup</code>
-        into <code>~/.tama/bin</code>. No flags, no surprises.</p>
+        <p>
+          Linux and macOS, x86_64 and aarch64.
+          <a href="/install">Read what it does first →</a>
+        </p>
       </div>
     </div>
     <div class="band-cmd">
       <pre><code>curl -L https://tama.tools/install.sh | sh</code></pre>
-      <p class="band-note">
-        Linux and macOS, x86_64 and aarch64. <a href="/install">Read what it does first →</a>
-      </p>
     </div>
   </section>
 
   <!-- Closing -->
   <section class="closing">
-    <p class="closing-jp">玉魂</p>
+    <p class="closing-jp">玉/魂</p>
+    <p class="closing-tag" aria-hidden="true">玉の如く堅く、魂の如く真。</p>
     <p class="closing-en">
-      Hard like jade. The soul of a system you can hold in your hand.
+      Hard like jade. True as soul.
     </p>
     <div class="closing-cta">
       <Button href="/start">Begin →</Button>
@@ -309,35 +305,6 @@ const frames = [
     flex-wrap: wrap;
     gap: var(--s-3);
     margin-bottom: var(--s-6);
-  }
-
-  .install-mini {
-    display: flex;
-    align-items: center;
-    gap: var(--s-4);
-    flex-wrap: wrap;
-    padding: var(--s-3) var(--s-4);
-    border-radius: var(--r);
-    background: var(--bg-soft);
-    border: 1px dashed var(--rule-strong);
-    font-size: var(--t-sm);
-  }
-  .install-cmd {
-    font-family: var(--font-mono);
-    background: transparent;
-    border: 0;
-    padding: 0;
-    color: var(--jade-900);
-    font-size: var(--t-sm);
-  }
-  .install-link {
-    margin-left: auto;
-    color: var(--ink-mute);
-    text-decoration: none;
-  }
-  .install-link:hover { color: var(--shu); }
-  @media (prefers-color-scheme: dark) {
-    .install-cmd { color: var(--jade-200); }
   }
 
   .hero-rune {
@@ -499,11 +466,6 @@ const frames = [
     overflow-wrap: anywhere;
     white-space: pre-wrap;
   }
-  .band-note {
-    margin: var(--s-3) 0 0;
-    font-size: var(--t-sm);
-    color: var(--ink-mute);
-  }
   @media (max-width: 880px) {
     .band { grid-template-columns: 1fr; }
   }
@@ -523,6 +485,16 @@ const frames = [
     color: var(--jade-700);
     letter-spacing: 0.2em;
     line-height: 1;
+  }
+  .closing-tag {
+    margin: 0 auto var(--s-3);
+    font-family: var(--font-jp);
+    font-size: var(--t-md);
+    color: var(--jade-700);
+    letter-spacing: 0.05em;
+  }
+  @media (prefers-color-scheme: dark) {
+    .closing-tag { color: var(--jade-300); }
   }
   .closing-en {
     margin: 0 auto var(--s-6);
