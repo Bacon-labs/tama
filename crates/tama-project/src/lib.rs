@@ -786,6 +786,7 @@ contract ERC20LiteTest is StdInvariant {
         require(invariantToken.transfer(invariantAccount(accountIndex), amount), "invariant transfer");
     }
 
+    // tama: mirrors=totalSupply_spec
     function invariant_totalSupplyTracksMinted() public view {
         require(invariantToken.totalSupply() == invariantMinted, "invariant supply");
     }

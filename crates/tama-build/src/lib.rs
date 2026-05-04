@@ -535,13 +535,10 @@ pub fn adapt_verity_outputs(
     }
     abi_paths.sort();
 
-    let mut contracts: Vec<(String, Utf8PathBuf, SourcePaths)> = Vec::new();
+    let mut all_contracts: Vec<(String, Utf8PathBuf, SourcePaths)> = Vec::new();
     for path in &abi_paths {
         let contract =
             contract_name_from_abi_path(path).ok_or_else(|| Error::Adapter(path.to_string()))?;
-        if contract_filter.is_some_and(|filter| filter != contract) {
-            continue;
-        }
         let yul = yul_dir.join(format!("{contract}.yul"));
         if !yul.is_file() {
             return Err(Error::MissingArtifact {
@@ -555,12 +552,12 @@ pub fn adapt_verity_outputs(
             proof: config.paths.proof.join(format!("{contract}Proof.lean")),
         };
         require_contract_files(root, &contract, &source)?;
-        contracts.push((contract, path.clone(), source));
+        all_contracts.push((contract, path.clone(), source));
     }
 
     let mut specs_by_contract: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut spec_owner: BTreeMap<String, String> = BTreeMap::new();
-    for (contract, _, source) in &contracts {
+    for (contract, _, source) in &all_contracts {
         let names = extract_specs(&root.join(&source.spec))?;
         for name in &names {
             if let Some(prev) = spec_owner.insert(name.clone(), contract.clone()) {
@@ -592,7 +589,10 @@ pub fn adapt_verity_outputs(
     }
 
     let mut manifests = Vec::new();
-    for (contract, abi_path, source) in contracts {
+    for (contract, abi_path, source) in all_contracts {
+        if contract_filter.is_some_and(|filter| filter != contract) {
+            continue;
+        }
         let proof_module = format!("proof.{contract}Proof");
         let spec_module = format!("spec.{contract}Spec");
         let specs = specs_by_contract.get(&contract).cloned().unwrap_or_default();
@@ -1655,14 +1655,42 @@ fn extract_mirrors(
 
 fn count_brace_delta(line: &str) -> i32 {
     let mut delta = 0i32;
-    let mut chars = line.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '/' if chars.peek() == Some(&'/') => break,
-            '{' => delta += 1,
-            '}' => delta -= 1,
-            _ => {}
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let ch = bytes[i];
+        if ch == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            return delta;
         }
+        if ch == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = i.saturating_add(2).min(bytes.len());
+            continue;
+        }
+        if ch == b'"' || ch == b'\'' {
+            let quote = ch;
+            i += 1;
+            while i < bytes.len() && bytes[i] != quote {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            if i < bytes.len() {
+                i += 1;
+            }
+            continue;
+        }
+        if ch == b'{' {
+            delta += 1;
+        } else if ch == b'}' {
+            delta -= 1;
+        }
+        i += 1;
     }
     delta
 }
@@ -2804,6 +2832,16 @@ contract CounterTest {
     }
 
     #[test]
+    fn count_brace_delta_skips_comments_and_strings() {
+        assert_eq!(count_brace_delta("contract Foo {"), 1);
+        assert_eq!(count_brace_delta("function f() public { return; }"), 0);
+        assert_eq!(count_brace_delta("    // close } brace"), 0);
+        assert_eq!(count_brace_delta("bytes memory s = \"}\";"), 0);
+        assert_eq!(count_brace_delta("/* } */ {"), 1);
+        assert_eq!(count_brace_delta("if (a) { /* inner } */ }"), 0);
+    }
+
+    #[test]
     fn extract_mirrors_ignores_tags_inside_function_bodies() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -2934,6 +2972,59 @@ contract CounterTest {
                 .collect::<Vec<_>>(),
             vec!["Alpha", "Zed"]
         );
+    }
+
+    #[test]
+    fn adapter_filter_still_discovers_specs_from_other_contracts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        for contract in ["Foo", "Bar"] {
+            write_contract_files(&root, contract);
+            tama_common::write_string(
+                &root.join(format!("artifacts/abi/{contract}.abi.json")),
+                "[]\n",
+            )
+            .unwrap();
+            tama_common::write_string(&root.join(format!("artifacts/yul/{contract}.yul")), "{ }\n")
+                .unwrap();
+        }
+        tama_common::write_string(
+            &root.join("verity/spec/FooSpec.lean"),
+            "namespace spec.FooSpec\ndef foo_spec (n : Nat) : Prop := n = 0\nend spec.FooSpec\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("verity/spec/BarSpec.lean"),
+            "namespace spec.BarSpec\ndef bar_spec (n : Nat) : Prop := n = 0\nend spec.BarSpec\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("verity/proof/FooProof.lean"),
+            "namespace proof.FooProof\n-- tama: discharges=foo_spec\ntheorem t : True := by trivial\nend proof.FooProof\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("verity/proof/BarProof.lean"),
+            "namespace proof.BarProof\n-- tama: discharges=bar_spec\ntheorem t : True := by trivial\nend proof.BarProof\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("test/verity/Foo.t.sol"),
+            "contract FooTest {\n    // tama: mirrors=foo_spec\n    function testFuzzFoo() public {}\n}\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("test/verity/Bar.t.sol"),
+            "contract BarTest {\n    // tama: mirrors=bar_spec\n    function testFuzzBar() public {}\n}\n",
+        )
+        .unwrap();
+        write_empty_layout_report(&root, &["Foo", "Bar"]);
+
+        let manifests = adapt_verity_outputs(&root, &test_config(), Some("Foo")).unwrap();
+
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0].contract, "Foo");
+        assert_eq!(manifests[0].obligations[0].mirrors.len(), 1);
     }
 
     #[test]
