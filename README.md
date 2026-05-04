@@ -1,4 +1,4 @@
-# Tama 玉魂
+# Tama 玉/魂
 
 > *Tama* — jade and soul. The developer toolchain for Verity smart contracts.
 
