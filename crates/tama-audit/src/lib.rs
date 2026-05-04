@@ -4,7 +4,7 @@ use std::fs;
 use camino::{Utf8Path, Utf8PathBuf};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tama_manifest::{ContractManifest, SCHEMA};
+use tama_manifest::{parse_mirror_path, ContractManifest, MirrorPathError, SCHEMA};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -742,10 +742,6 @@ fn solidity_contract_function_declared(text: &str, contract: &str, name: &str) -
     found
 }
 
-fn mirror_symbol_is_property(name: &str) -> bool {
-    name.starts_with("testFuzz") || name.starts_with("invariant_")
-}
-
 fn strip_solidity_non_code(text: &str) -> String {
     #[derive(Clone, Copy)]
     enum State {
@@ -1201,39 +1197,26 @@ fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Is
                 continue;
             }
             for path_ref in &obligation.mirrors {
-                let Some((file, symbol)) = path_ref.split_once(':') else {
-                    issues.push(issue(
-                        "coverage",
-                        Some(&manifest.contract),
-                        "TAMA_COVERAGE_SYMBOL",
-                        format!("mirror path `{path_ref}` must include a Solidity symbol"),
-                        None,
-                    ));
-                    continue;
+                let mirror = match parse_mirror_path(path_ref) {
+                    Ok(parsed) => parsed,
+                    Err(err) => {
+                        let code = match err {
+                            MirrorPathError::EscapesProject => "TAMA_COVERAGE_PATH",
+                            MirrorPathError::NotProperty => "TAMA_COVERAGE_SHAPE",
+                            _ => "TAMA_COVERAGE_SYMBOL",
+                        };
+                        issues.push(issue(
+                            "coverage",
+                            Some(&manifest.contract),
+                            code,
+                            format!("mirror `{path_ref}` {}", err.message()),
+                            None,
+                        ));
+                        continue;
+                    }
                 };
-                if file.trim().is_empty() || symbol.trim().is_empty() {
-                    issues.push(issue(
-                        "coverage",
-                        Some(&manifest.contract),
-                        "TAMA_COVERAGE_SYMBOL",
-                        format!(
-                            "mirror path `{path_ref}` must include a non-empty file and symbol"
-                        ),
-                        None,
-                    ));
-                    continue;
-                }
-                if path_escapes_project(Utf8Path::new(file)) {
-                    issues.push(issue(
-                        "coverage",
-                        Some(&manifest.contract),
-                        "TAMA_COVERAGE_PATH",
-                        format!("mirror file path escapes project root: {file}"),
-                        Some(file.into()),
-                    ));
-                    continue;
-                }
-                if !Utf8Path::new(file).starts_with(&foundry.test) {
+                let file = mirror.file;
+                if !file.starts_with(&foundry.test) {
                     issues.push(issue(
                         "coverage",
                         Some(&manifest.contract),
@@ -1269,45 +1252,12 @@ fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Is
                         continue;
                     }
                 };
-                let Some((contract_name, name)) = symbol.rsplit_once('.') else {
-                    issues.push(issue(
-                        "coverage",
-                        Some(&manifest.contract),
-                        "TAMA_COVERAGE_SYMBOL",
-                        format!(
-                            "mirror symbol `{symbol}` must include a Solidity contract and function"
-                        ),
-                        Some(file.into()),
-                    ));
-                    continue;
-                };
-                if contract_name.trim().is_empty() || name.trim().is_empty() {
-                    issues.push(issue(
-                        "coverage",
-                        Some(&manifest.contract),
-                        "TAMA_COVERAGE_SYMBOL",
-                        format!(
-                            "mirror symbol `{symbol}` must include a non-empty Solidity contract and function"
-                        ),
-                        Some(file.into()),
-                    ));
-                    continue;
-                }
-                if !mirror_symbol_is_property(name) {
-                    issues.push(issue(
-                        "coverage",
-                        Some(&manifest.contract),
-                        "TAMA_COVERAGE_SHAPE",
-                        format!("mirror symbol `{symbol}` must be a fuzz test or invariant"),
-                        Some(file.into()),
-                    ));
-                }
-                if !solidity_contract_function_declared(&text, contract_name, name) {
+                if !solidity_contract_function_declared(&text, mirror.contract, mirror.function) {
                     issues.push(issue(
                         "coverage",
                         Some(&manifest.contract),
                         "TAMA_COVERAGE_MISSING_SYMBOL",
-                        format!("mirror symbol `{symbol}` not found"),
+                        format!("mirror symbol `{}.{}` not found", mirror.contract, mirror.function),
                         Some(file.into()),
                     ));
                 }

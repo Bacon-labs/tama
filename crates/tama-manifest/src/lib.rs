@@ -486,50 +486,10 @@ impl ContractManifest {
     }
 
     fn validate_mirror_path(&self, obligation_id: &str, raw: &str) -> Result<()> {
-        let path = raw.trim();
-        if path.is_empty() {
-            return self.invalid(format!(
-                "obligation `{}` mirror entry cannot be empty",
-                obligation_id
-            ));
-        }
-        let Some((file, symbol)) = path.split_once(':') else {
-            return self.invalid(format!(
-                "obligation `{}` mirror `{}` must include a Solidity symbol",
-                obligation_id, path
-            ));
-        };
-        if file.trim().is_empty() || symbol.trim().is_empty() {
-            return self.invalid(format!(
-                "obligation `{}` mirror `{}` must include a non-empty file and symbol",
-                obligation_id, path
-            ));
-        }
-        let Some((contract_name, function_name)) = mirror_symbol_contract_function(symbol) else {
-            return self.invalid(format!(
-                "obligation `{}` mirror symbol `{}` must include a Solidity contract and function",
-                obligation_id, symbol
-            ));
-        };
-        if !is_identifier(contract_name) || !is_identifier(function_name) {
-            return self.invalid(format!(
-                "obligation `{}` mirror symbol `{}` must include valid Solidity contract and function identifiers",
-                obligation_id, symbol
-            ));
-        }
-        if !mirror_symbol_is_property(function_name) {
-            return self.invalid(format!(
-                "obligation `{}` mirror symbol `{}` must be a fuzz test or invariant",
-                obligation_id, symbol
-            ));
-        }
-        let file = Utf8Path::new(file);
-        if !path_stays_inside_project(file) {
-            return self.invalid(format!(
-                "obligation `{}` mirror path `{}` escapes project root",
-                obligation_id, path
-            ));
-        }
+        parse_mirror_path(raw).map_err(|err| Error::Invalid {
+            contract: self.contract.clone(),
+            message: format!("obligation `{}` mirror {}", obligation_id, err.message()),
+        })?;
         Ok(())
     }
 
@@ -565,8 +525,75 @@ fn path_stays_inside_project(path: &Utf8Path) -> bool {
     !path.as_str().is_empty() && !path.is_absolute() && has_directory_name && !unsafe_component
 }
 
-fn mirror_symbol_is_property(name: &str) -> bool {
+pub fn mirror_symbol_is_property(name: &str) -> bool {
     name.starts_with("testFuzz") || name.starts_with("invariant_")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirrorPath<'a> {
+    pub file: &'a Utf8Path,
+    pub contract: &'a str,
+    pub function: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MirrorPathError {
+    Empty,
+    MissingSymbol,
+    EmptyFileOrSymbol,
+    SymbolNotQualified,
+    InvalidIdentifier,
+    NotProperty,
+    EscapesProject,
+}
+
+impl MirrorPathError {
+    pub fn message(&self) -> String {
+        match self {
+            Self::Empty => "entry cannot be empty".into(),
+            Self::MissingSymbol => "must include a Solidity symbol".into(),
+            Self::EmptyFileOrSymbol => "must include a non-empty file and symbol".into(),
+            Self::SymbolNotQualified => {
+                "symbol must include a Solidity contract and function".into()
+            }
+            Self::InvalidIdentifier => {
+                "symbol must include valid Solidity contract and function identifiers".into()
+            }
+            Self::NotProperty => "symbol must be a fuzz test or invariant".into(),
+            Self::EscapesProject => "path escapes project root".into(),
+        }
+    }
+}
+
+pub fn parse_mirror_path(raw: &str) -> std::result::Result<MirrorPath<'_>, MirrorPathError> {
+    let path = raw.trim();
+    if path.is_empty() {
+        return Err(MirrorPathError::Empty);
+    }
+    let Some((file, symbol)) = path.split_once(':') else {
+        return Err(MirrorPathError::MissingSymbol);
+    };
+    if file.trim().is_empty() || symbol.trim().is_empty() {
+        return Err(MirrorPathError::EmptyFileOrSymbol);
+    }
+    let Some((contract, function)) = mirror_symbol_contract_function(symbol) else {
+        return Err(MirrorPathError::SymbolNotQualified);
+    };
+    if !is_identifier(contract) || !is_identifier(function) {
+        return Err(MirrorPathError::InvalidIdentifier);
+    }
+    if !mirror_symbol_is_property(function) {
+        return Err(MirrorPathError::NotProperty);
+    }
+    let file_path = Utf8Path::new(file);
+    if !path_stays_inside_project(file_path) {
+        return Err(MirrorPathError::EscapesProject);
+    }
+    Ok(MirrorPath {
+        file: file_path,
+        contract,
+        function,
+    })
 }
 
 fn is_qualified_lean_name(value: &str) -> bool {

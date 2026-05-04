@@ -572,7 +572,7 @@ pub fn adapt_verity_outputs(
         specs_by_contract.insert(contract.clone(), names);
     }
 
-    let mirrors_index = match parse_foundry_test_dir(root, config)? {
+    let mirrors_index = match parse_foundry_test_dir(root)? {
         Some(test_dir) => extract_mirrors(root, &test_dir, &spec_owner)?,
         None => BTreeMap::new(),
     };
@@ -658,14 +658,8 @@ pub fn adapt_verity_outputs(
     Ok(manifests)
 }
 
-fn parse_foundry_test_dir(
-    root: &Utf8Path,
-    _config: &TamaConfig,
-) -> Result<Option<Utf8PathBuf>> {
-    let foundry = match tama_config::parse_foundry_config(root) {
-        Ok(foundry) => foundry,
-        Err(_) => return Ok(None),
-    };
+fn parse_foundry_test_dir(root: &Utf8Path) -> Result<Option<Utf8PathBuf>> {
+    let foundry = tama_config::parse_foundry_config(root)?;
     let test_dir = root.join(&foundry.test);
     if test_dir.is_dir() {
         Ok(Some(test_dir))
@@ -1584,9 +1578,16 @@ fn extract_mirrors(
             .unwrap_or_else(|_| path.to_path_buf());
         let mut current_contract: Option<String> = None;
         let mut pending: Vec<String> = Vec::new();
+        let mut brace_depth: i32 = 0;
         for raw in text.lines() {
             let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
             if let Some(tag) = trimmed.strip_prefix("// tama:") {
+                if brace_depth > 1 {
+                    continue;
+                }
                 let values = parse_key_values(tag);
                 for key in values.keys() {
                     if key.as_str() != "mirrors" {
@@ -1602,57 +1603,68 @@ fn extract_mirrors(
                 }
                 continue;
             }
-            if let Some(captures) = contract_re.captures(raw) {
-                current_contract = Some(captures.get(1).unwrap().as_str().to_string());
-                pending.clear();
+            if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
                 continue;
             }
-            if let Some(captures) = function_re.captures(raw) {
-                if !pending.is_empty() {
-                    let func = captures.get(1).unwrap().as_str();
-                    let Some(sol_contract) = current_contract.as_deref() else {
-                        return Err(Error::Adapter(format!(
-                            "{rel}: mirror tag above `{func}` is outside any `contract` block"
-                        )));
-                    };
-                    let mirror_path =
-                        format!("{rel}:{sol_contract}.{func}");
-                    for spec in pending.drain(..) {
-                        let Some(owner) = spec_owner.get(&spec) else {
+            let mut consumed = false;
+            if brace_depth <= 1 {
+                if let Some(captures) = contract_re.captures(raw) {
+                    current_contract = Some(captures.get(1).unwrap().as_str().to_string());
+                    pending.clear();
+                    consumed = true;
+                } else if let Some(captures) = function_re.captures(raw) {
+                    if !pending.is_empty() {
+                        let func = captures.get(1).unwrap().as_str();
+                        let Some(sol_contract) = current_contract.as_deref() else {
                             return Err(Error::Adapter(format!(
-                                "{rel}: mirrors=`{spec}` does not match any known spec"
+                                "{rel}: mirror tag above `{func}` is outside any `contract` block"
                             )));
                         };
-                        out.entry((owner.clone(), spec))
-                            .or_default()
-                            .push(mirror_path.clone());
+                        let mirror_path = format!("{rel}:{sol_contract}.{func}");
+                        for spec in pending.drain(..) {
+                            let Some(owner) = spec_owner.get(&spec) else {
+                                return Err(Error::Adapter(format!(
+                                    "{rel}: mirrors=`{spec}` does not match any known spec"
+                                )));
+                            };
+                            out.entry((owner.clone(), spec))
+                                .or_default()
+                                .push(mirror_path.clone());
+                        }
                     }
+                    consumed = true;
+                } else if let Some(captures) = any_function_re.captures(raw) {
+                    if !pending.is_empty() {
+                        let func = captures.get(1).unwrap().as_str();
+                        return Err(Error::Adapter(format!(
+                            "{rel}: mirror tag on non-property-shaped test `{func}` (must be testFuzz* or invariant_*)"
+                        )));
+                    }
+                    consumed = true;
                 }
-                continue;
             }
-            if let Some(captures) = any_function_re.captures(raw) {
-                if !pending.is_empty() {
-                    let func = captures.get(1).unwrap().as_str();
-                    return Err(Error::Adapter(format!(
-                        "{rel}: mirror tag on non-property-shaped test `{func}` (must be testFuzz* or invariant_*)"
-                    )));
-                }
-                continue;
+            if !consumed {
+                pending.clear();
             }
-            if !trimmed.is_empty()
-                && !trimmed.starts_with("//")
-                && !trimmed.starts_with("/*")
-                && !trimmed.starts_with('*')
-                && !trimmed.ends_with('{')
-                && !trimmed.ends_with(';')
-                && !trimmed.starts_with('}')
-            {
-                // keep pending across attribute-like lines
-            }
+            brace_depth += count_brace_delta(raw);
         }
         Ok(())
     })?;
     Ok(out)
+}
+
+fn count_brace_delta(line: &str) -> i32 {
+    let mut delta = 0i32;
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '/' if chars.peek() == Some(&'/') => break,
+            '{' => delta += 1,
+            '}' => delta -= 1,
+            _ => {}
+        }
+    }
+    delta
 }
 
 fn walk_test_files<F>(dir: &Utf8Path, visit: &mut F) -> Result<()>
@@ -2789,6 +2801,34 @@ contract CounterTest {
             err,
             Error::Adapter(message) if message.contains("does not match any known spec")
         ));
+    }
+
+    #[test]
+    fn extract_mirrors_ignores_tags_inside_function_bodies() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let test_dir = root.join("test/verity");
+        let test_file = test_dir.join("Foo.t.sol");
+        tama_common::write_string(
+            &test_file,
+            r#"contract FooTest {
+    function helper() internal {
+        // tama: mirrors=should_not_attach
+        bytes memory x = "";
+    }
+
+    function testFuzzReal() public {}
+}
+"#,
+        )
+        .unwrap();
+        let mut spec_owner = BTreeMap::new();
+        spec_owner.insert("should_not_attach".to_string(), "Foo".to_string());
+        let mirrors = extract_mirrors(&root, &test_dir, &spec_owner).unwrap();
+        assert!(
+            mirrors.is_empty(),
+            "tag inside function body must not bind to subsequent test, got {mirrors:?}"
+        );
     }
 
     #[test]
