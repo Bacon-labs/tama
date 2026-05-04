@@ -1473,10 +1473,6 @@ fn parse_obligation_metadata(
         parsed = true;
         apply_tama_metadata(raw, proof_path, meta)?;
     }
-    if line.contains("tama.") {
-        parsed = true;
-        apply_tama_attribute_metadata(line, meta);
-    }
     Ok(parsed)
 }
 
@@ -1568,46 +1564,6 @@ fn tama_metadata_key_supported(key: &str) -> bool {
     )
 }
 
-fn apply_tama_attribute_metadata(line: &str, meta: &mut ObligationMeta) {
-    if line.contains("tama.obligation") {
-        meta.tagged = true;
-    }
-    if line.contains("tama.helper") {
-        meta.tagged = true;
-        meta.kind = Some(ObligationKind::Helper);
-    }
-    if line.contains("tama.invariant") {
-        meta.tagged = true;
-        meta.kind = Some(ObligationKind::Invariant);
-    }
-    if let Some(rest) = line.split("tama.postcondition").nth(1) {
-        meta.tagged = true;
-        meta.kind = Some(ObligationKind::Postcondition);
-        if let Some(function) = rest
-            .split([']', ','])
-            .next()
-            .and_then(|value| value.split_whitespace().next())
-            .filter(|value| !value.is_empty())
-        {
-            meta.function = Some(function.rsplit('.').next().unwrap_or(function).to_string());
-        }
-    }
-    if line.contains("tama.mirror") {
-        if let Some(path) = first_quoted_value(line) {
-            meta.coverage.disposition = CoverageDisposition::Mirror;
-            meta.coverage.path = Some(path);
-            meta.coverage.reason = None;
-        }
-    }
-    if line.contains("tama.proof_only") {
-        if let Some(reason) = first_quoted_value(line) {
-            meta.coverage.disposition = CoverageDisposition::ProofOnly;
-            meta.coverage.path = None;
-            meta.coverage.reason = Some(reason);
-        }
-    }
-}
-
 fn parse_key_values(raw: &str) -> std::collections::BTreeMap<String, String> {
     let mut values = std::collections::BTreeMap::new();
     let mut chars = raw.trim().chars().peekable();
@@ -1662,12 +1618,6 @@ fn parse_key_values(raw: &str) -> std::collections::BTreeMap<String, String> {
         values.insert(key, value);
     }
     values
-}
-
-fn first_quoted_value(line: &str) -> Option<String> {
-    let (_, rest) = line.split_once('"')?;
-    let (value, _) = rest.split_once('"')?;
-    Some(value.to_string())
 }
 
 fn strip_lean_block_comments(text: &str) -> String {
@@ -2441,7 +2391,7 @@ theorem increment_post : True := by
 theorem postcondition_with_invariant_mirror : True := by
   trivial
 
-@[tama.helper]
+-- tama: kind=helper
 lemma arithmetic_helper : True := by
   trivial
 

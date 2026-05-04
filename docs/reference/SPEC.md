@@ -85,7 +85,7 @@ For a contract `Foo`:
 
 The Lean filenames intentionally avoid dotted suffixes like `Foo.spec.lean`. Dots in Lean module names map to path separators, so the flat convention uses `FooSpec.lean` and `FooProof.lean` instead.
 
-Inside `FooSpec.lean`, invariants are marked with an attribute such as `@[tama.invariant]`. Per-function obligations are marked with attributes that let Tama distinguish public contract obligations from helper lemmas.
+`FooSpec.lean` is plain Lean — Tama's coverage tracking happens on the proof side, so spec defs don't need any `-- tama:` markers. Use sections or docstrings to organize invariants and per-function postconditions.
 
 Example shape:
 
@@ -96,14 +96,12 @@ namespace FooSpec
 
 section Invariants
 
-@[tama.invariant]
 def totalSupply_nonnegative := ...
 
 end Invariants
 
 section Functions
 
-@[tama.postcondition Foo.transfer]
 def transfer_preserves_totalSupply := ...
 
 end Functions
@@ -111,7 +109,7 @@ end Functions
 end FooSpec
 ```
 
-`FooProof.lean` imports `FooSpec.lean` and contains proof obligations. Helper lemmas may exist freely, but only obligations marked as public contract obligations participate in mirror-test coverage.
+`FooProof.lean` imports `FooSpec.lean` and contains proof obligations. Each obligation theorem is preceded by a `-- tama: obligation ...` comment that tells Tama how to classify and cover it. Helper lemmas may exist freely; only obligations marked as public contract obligations participate in mirror-test coverage.
 
 ---
 
@@ -605,7 +603,7 @@ This should also be a Rust semantic port of the upstream Verity storage-layout s
 
 Checks that every public contract obligation has a mirror classification.
 
-Coverage is not over every theorem in `verity/proof/`. Helper lemmas are not obligations. Proof-only facts may be intentionally non-executable. Public contract obligations must be explicitly marked with Tama attributes or `-- tama:` metadata comments and either:
+Coverage is not over every theorem in `verity/proof/`. Helper lemmas are not obligations. Proof-only facts may be intentionally non-executable. Public contract obligations must be explicitly marked with a `-- tama:` metadata comment on the line above the theorem, and either:
 
 - linked to a Foundry mirror test; or
 - marked proof-only with a reason.
@@ -620,27 +618,20 @@ tests may exist as smoke tests, but they do not satisfy mirror coverage.
 Example Lean shape:
 
 ```lean
-@[tama.obligation]
-@[tama.mirror "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply"]
+-- tama: obligation kind=postcondition function=transfer coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply
 theorem transfer_preserves_total_supply : ... := by
   ...
 
-@[tama.helper]
+-- tama: kind=helper
 theorem arithmetic_helper : ... := by
   ...
 
-@[tama.proof_only "quantifies over symbolic state; no executable mirror"]
+-- tama: obligation coverage=proof_only reason="quantifies over symbolic state; no executable mirror"
 theorem symbolic_refinement : ... := by
   ...
 ```
 
-The comment form exists for projects that have not loaded no-op Tama Lean attributes yet:
-
-```lean
--- tama: obligation kind=postcondition function=transfer coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply
-theorem transfer_post : ... := by
-  ...
-```
+Recognized keys: `obligation` (marker, no value), `kind` (`helper` | `invariant` | `postcondition`), `function` (Verity function name), `coverage` (`mirror` | `proof_only` | `none`), `path` (mirror test path of the form `test/.../File.t.sol:Contract.testFuzzFoo`), `reason` (proof-only justification, quoted). Unknown keys are a build-time error.
 
 #### `structure`
 

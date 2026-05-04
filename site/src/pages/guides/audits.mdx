@@ -112,10 +112,9 @@ storage-layout: error
 
 What it inspects:
 
-- Every theorem tagged `@[tama.obligation]` either has a
-  `@[tama.mirror "..."]` annotation that points at a valid Foundry
-  symbol, or is tagged `@[tama.proof_only "<reason>"]` with a non-empty
-  reason.
+- Every theorem tagged with a `-- tama: obligation` comment either
+  carries `coverage=mirror path=...` pointing at a valid Foundry symbol,
+  or `coverage=proof_only reason="<reason>"` with a non-empty reason.
 - Mirror paths exist under Foundry's configured test directory.
 - Mirror function names start with `testFuzz` or `invariant_`.
 - Mirror contract names match an actual Foundry test contract in the file.
@@ -141,7 +140,7 @@ coverage: error
 
 What it inspects:
 
-- For every `@[tama.obligation]` theorem, the closure of axioms,
+- For every `-- tama: obligation` theorem, the closure of axioms,
   unsafe declarations, and unresolved names that the proof transitively
   depends on (via Lean's `collectAxioms`).
 - Compiler trust-surface artifacts (`artifacts/trust-report.json`,
