@@ -39,15 +39,15 @@ The default starter is `ERC20Lite`. It exercises mappings, an
 ERC20-like transfer path, proof obligations, bridge generation,
 Foundry mirror tests, and audit.
 
-The pinned Verity macro syntax used by the starter does not currently
-expose event declarations for `verity_contract`, so the generated
-`ERC20Lite` starter does not emit ERC20 `Transfer` events in v0.1.
-Event ABI parsing and manifest validation **are** supported for compiler
-outputs that do include event metadata. The
-[Verity EDSL reference](https://veritylang.com/core) tracks what the
-language exposes as the framework moves forward.
-
-`Counter` is a compatibility fixture, not the starter template.
+<Callout kind="warning" title="ERC20Lite does not emit Transfer events in v0.1">
+The pinned Verity macro syntax doesn't expose event declarations for
+`verity_contract` yet, so the generated `ERC20Lite` starter is
+ERC20-shaped but doesn't emit `Transfer` events. Event ABI parsing
+and manifest validation **are** supported for compiler outputs that
+do include event metadata; this is a starter limit, not a Tama limit.
+The [Verity EDSL reference](https://veritylang.com/core) tracks what
+the language exposes as the framework moves forward.
+</Callout>
 
 ## Unsupported in v0.1
 
@@ -55,11 +55,8 @@ language exposes as the framework moves forward.
 - Full Solidity feature parity.
 - ABI types outside the v0.1 supported subset: `uint256`, `address`,
   and `bool`.
-- Direct execution of arbitrary Verity monorepo Python scripts on
-  Tama projects.
 - Automatic support for nested mappings unless the pinned Verity
   compiler and Tama manifest adapter expose the required metadata.
-- Arbitrary Yul semantic storage proofs.
 - User-edited generated files without the exact generated-file header.
 - Direct reliance on Foundry compiler settings for Verity Yul. Tama
   uses `[yul]` in `tama.toml`.

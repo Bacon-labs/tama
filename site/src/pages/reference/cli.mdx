@@ -30,15 +30,22 @@ alias for `--color=never`.
 
 ## Environment
 
-`TAMA_LAKE_PACKAGE_CACHE` — directory of trusted reusable Lake package
+**`TAMA_LAKE_PACKAGE_CACHE`** — directory of trusted reusable Lake package
 checkouts. Defaults to the platform user cache directory:
-`~/Library/Caches/tama/lake-packages` on macOS, `$XDG_CACHE_HOME/tama/lake-packages`
-or `~/.cache/tama/lake-packages` elsewhere. Set to `off` to disable.
-`TAMA_SOLC` — override the resolved `solc` binary path. Useful for
+`~/Library/Caches/tama/lake-packages` on macOS,
+`$XDG_CACHE_HOME/tama/lake-packages` or `~/.cache/tama/lake-packages`
+elsewhere. Set to `off` to disable.
+
+**`TAMA_SOLC`** — override the resolved `solc` binary path. Useful for
 locked-version development environments.
-`NO_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE` — standard color-control variables.
-A non-empty `NO_COLOR` or `CLICOLOR=0` disables color; a non-empty
-`CLICOLOR_FORCE` enables it even when the destination is not a terminal.
+
+**`NO_COLOR`**, **`CLICOLOR`**, **`CLICOLOR_FORCE`** — standard
+color-control variables. A non-empty `NO_COLOR` or `CLICOLOR=0` disables
+color; a non-empty `CLICOLOR_FORCE` enables it even when the destination
+is not a terminal.
+
+**`TAMAUP_HOME`** — installation prefix for `tama` and `tamaup`. Defaults
+to `~/.tama`.
 
 ---
 
@@ -372,9 +379,7 @@ It installs `elan` (which provides Lean) and `foundryup` if absent and
 the `--no-install-lean` / `--no-install-foundry` flags weren't passed.
 Project-local `lean-toolchain` always wins inside a project.
 
-<Callout kind="seal" title="Trust model">
-The bootstrap installer trusts TLS plus the SHA-256s carried in the
-signed release manifest. <code>tamaup</code> uses the same model. The
-schema-less legacy single-version manifest shape is accepted only via
-<code>tamaup --manifest-file</code> for local/offline tests.
-</Callout>
+`tamaup` uses the same trust model as the bootstrap installer — see
+[Install · Trust model](/install#one-command). The schema-less legacy
+single-version manifest shape is accepted only via
+`tamaup --manifest-file` for local/offline tests.

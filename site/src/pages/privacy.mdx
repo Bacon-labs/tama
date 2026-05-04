@@ -21,8 +21,9 @@ of network requests, and only when you ask them to:
   standard log applies.
 
 Tama writes only to the project directory and to `~/.tama` (or
-`$TAMAUP_HOME`), `~/.cache/tama` (or `$XDG_CACHE_HOME/tama`), and the
-platform-equivalent cache directory on macOS.
+`$TAMAUP_HOME`), and to a per-platform cache directory:
+`~/.cache/tama` (or `$XDG_CACHE_HOME/tama`) on Linux,
+`~/Library/Caches/tama` on macOS.
 
 `tama doctor`, `tama check`, `tama build`, `tama test`, `tama audit`,
 and `tama inspect` make no network calls beyond what the underlying

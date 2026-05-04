@@ -17,6 +17,7 @@ export const docsNav: NavSection[] = [
     title: "Guides",
     items: [
       { href: "/guides", label: "Index" },
+      { href: "/guides/starter", label: "Reading the starter" },
       { href: "/guides/proofs", label: "Writing proof obligations" },
       { href: "/guides/audits", label: "Reading audit output" },
       { href: "/guides/foundry", label: "Foundry interop" },

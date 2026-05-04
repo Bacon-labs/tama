@@ -7,7 +7,7 @@ import Callout from "../components/Callout.astro";
   title="Install Tama"
   eyebrow="Get the toolchain"
   kanji="入"
-  description="Tama is a single Rust binary plus a small companion (tamaup) that manages versions. The installer fetches a signed release manifest, verifies the SHA-256 of the artifact for your platform, and drops both binaries into ~/.tama/bin."
+  description="One binary plus a version manager. One command to install. Signed releases, no telemetry."
 >
   <h2>One command</h2>
 
@@ -28,7 +28,6 @@ import Callout from "../components/Callout.astro";
     The bootstrap script trusts TLS for the GitHub Releases endpoint plus the
     SHA-256s carried in the signed release manifest. It refuses to place a
     binary on <code>$PATH</code> if the artifact hash doesn't match.
-    Set <code>TAMAUP_HOME</code> to install into a different prefix.
   </Callout>
 
   <h2>Switch versions</h2>
@@ -52,6 +51,11 @@ tamaup uninstall          # remove tama (keeps tamaup)</code></pre>
     <li><code>~/.tama/bin/tamaup</code> — version manager.</li>
     <li><code>~/.tama/versions/&lt;version&gt;/bin/tama</code> — the actual binary for each installed release.</li>
   </ul>
+
+  <p>
+    Set <code>TAMAUP_HOME</code> before running the installer to use a
+    different prefix.
+  </p>
 
   <h2>External tools</h2>
 
