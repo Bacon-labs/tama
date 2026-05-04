@@ -918,7 +918,10 @@ solc = "0.8.33"
         assert!(cfg.yul.yul_optimizer);
         assert!(cfg.trust.allow_axioms.contains_key("Classical.choice"));
         assert_eq!(
-            cfg.coverage.proof_only.get("Foo.symbolic_only").map(String::as_str),
+            cfg.coverage
+                .proof_only
+                .get("Foo.symbolic_only")
+                .map(String::as_str),
             Some("quantifies over all key pairs")
         );
     }

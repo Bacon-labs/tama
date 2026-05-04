@@ -1257,7 +1257,10 @@ fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Is
                         "coverage",
                         Some(&manifest.contract),
                         "TAMA_COVERAGE_MISSING_SYMBOL",
-                        format!("mirror symbol `{}.{}` not found", mirror.contract, mirror.function),
+                        format!(
+                            "mirror symbol `{}.{}` not found",
+                            mirror.contract, mirror.function
+                        ),
                         Some(file.into()),
                     ));
                 }
@@ -1441,7 +1444,9 @@ fn audit_axiom_probe(
             .get("lean_decl")
             .and_then(|value| value.as_str())
             .unwrap_or("<unknown>");
-        let Some(dischargers) = obligation.get("dischargers").and_then(|value| value.as_array())
+        let Some(dischargers) = obligation
+            .get("dischargers")
+            .and_then(|value| value.as_array())
         else {
             issues.push(issue(
                 "trust-boundary",
@@ -2878,9 +2883,8 @@ interface Example {
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let mut manifest = counter_manifest();
         let mut obligation = public_obligation();
-        obligation.mirrors = vec![
-            "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string(),
-        ];
+        obligation.mirrors =
+            vec!["test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string()];
         obligation.proof_only_reason = None;
         manifest.obligations.push(obligation);
         tama_common::write_string(
@@ -2941,9 +2945,8 @@ contract CounterTest {}
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let mut manifest = counter_manifest();
         let mut obligation = public_obligation();
-        obligation.mirrors = vec![
-            "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string(),
-        ];
+        obligation.mirrors =
+            vec!["test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string()];
         obligation.proof_only_reason = None;
         manifest.obligations.push(obligation);
         let mirror = root.join("test/verity/Counter.t.sol");

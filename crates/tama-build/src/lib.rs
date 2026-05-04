@@ -576,9 +576,7 @@ pub fn adapt_verity_outputs(
 
     let known_proof_only_keys: BTreeSet<String> = specs_by_contract
         .iter()
-        .flat_map(|(contract, specs)| {
-            specs.iter().map(move |name| format!("{contract}.{name}"))
-        })
+        .flat_map(|(contract, specs)| specs.iter().map(move |name| format!("{contract}.{name}")))
         .collect();
     for key in config.coverage.proof_only.keys() {
         if !known_proof_only_keys.contains(key.as_str()) {
@@ -595,9 +593,11 @@ pub fn adapt_verity_outputs(
         }
         let proof_module = format!("proof.{contract}Proof");
         let spec_module = format!("spec.{contract}Spec");
-        let specs = specs_by_contract.get(&contract).cloned().unwrap_or_default();
-        let dischargers =
-            extract_dischargers(&root.join(&source.proof), &proof_module, &specs)?;
+        let specs = specs_by_contract
+            .get(&contract)
+            .cloned()
+            .unwrap_or_default();
+        let dischargers = extract_dischargers(&root.join(&source.proof), &proof_module, &specs)?;
         let obligations = merge_obligations(
             &contract,
             &spec_module,
@@ -1451,8 +1451,7 @@ fn extract_specs(spec_path: &Utf8Path) -> Result<Vec<String>> {
     }
     let text = tama_common::read_to_string(spec_path)?;
     let stripped = strip_lean_block_comments(&text);
-    let def_re =
-        Regex::new(r"^def\s+([A-Za-z_][A-Za-z0-9_']*)\b").expect("valid def regex");
+    let def_re = Regex::new(r"^def\s+([A-Za-z_][A-Za-z0-9_']*)\b").expect("valid def regex");
     let gen_spec_re =
         Regex::new(r"^#gen_spec\s+([A-Za-z_][A-Za-z0-9_']*)\b").expect("valid gen_spec regex");
     let mut names = Vec::new();
@@ -1562,10 +1561,9 @@ fn extract_mirrors(
     spec_owner: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<(String, String), Vec<String>>> {
     let mut out: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
-    let function_re = Regex::new(
-        r"^\s*function\s+(testFuzz[A-Za-z0-9_]*|invariant_[A-Za-z0-9_]*)\s*\(",
-    )
-    .expect("valid function regex");
+    let function_re =
+        Regex::new(r"^\s*function\s+(testFuzz[A-Za-z0-9_]*|invariant_[A-Za-z0-9_]*)\s*\(")
+            .expect("valid function regex");
     let any_function_re = Regex::new(r"^\s*function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
         .expect("valid any function regex");
     let contract_re =
@@ -1736,10 +1734,7 @@ fn merge_obligations(
     let mut out = Vec::with_capacity(specs.len());
     for name in specs {
         let id = format!("{contract}.{name}");
-        let dischargers_for_spec = dischargers
-            .get(name)
-            .cloned()
-            .unwrap_or_default();
+        let dischargers_for_spec = dischargers.get(name).cloned().unwrap_or_default();
         let mirrors_for_spec = mirrors
             .get(&(contract.to_string(), name.clone()))
             .cloned()
@@ -1928,9 +1923,7 @@ def tamaAxiomJson (decl : String) (constName : Name) : CoreM Json := do
             }
             out.push_str(&format!("d_{oi}_{di}"));
         }
-        out.push_str(
-            "]\n",
-        );
+        out.push_str("]\n");
         out.push_str(&format!(
             "  let obligation_{oi} := Json.mkObj [\n    (\"lean_decl\", Json.str \"{}\"),\n    (\"dischargers\", Json.arr dischargers_{oi})\n  ]\n",
             obligation.lean_decl
@@ -2733,8 +2726,7 @@ end proof.Foo
 "#,
         )
         .unwrap();
-        let err =
-            extract_dischargers(&proof, "proof.Foo", &["foo_spec".to_string()]).unwrap_err();
+        let err = extract_dischargers(&proof, "proof.Foo", &["foo_spec".to_string()]).unwrap_err();
         assert!(matches!(
             err,
             Error::Adapter(message) if message.contains("does not match any spec")
@@ -2758,8 +2750,7 @@ end proof.Foo
 "#,
         )
         .unwrap();
-        let err =
-            extract_dischargers(&proof, "proof.Foo", &["foo_spec".to_string()]).unwrap_err();
+        let err = extract_dischargers(&proof, "proof.Foo", &["foo_spec".to_string()]).unwrap_err();
         assert!(matches!(
             err,
             Error::Adapter(message) if message.contains("unsupported Tama metadata key `coverage`")
@@ -2908,8 +2899,7 @@ contract CounterTest {
         for name in &specs {
             spec_owner.insert(name.clone(), "Counter".to_string());
         }
-        let mirrors =
-            extract_mirrors(&root, &root.join("test/verity"), &spec_owner).unwrap();
+        let mirrors = extract_mirrors(&root, &root.join("test/verity"), &spec_owner).unwrap();
         let test = tama_common::read_to_string(&root.join("test/verity/Counter.t.sol")).unwrap();
         assert!(test.contains("function invariant_countTracksModel"));
         assert!(test.contains("handlerIncrement"));
@@ -2922,10 +2912,7 @@ contract CounterTest {
                 "spec `{spec}` has no discharger"
             );
             let key = ("Counter".to_string(), spec.clone());
-            assert!(
-                mirrors.contains_key(&key),
-                "spec `{spec}` has no mirror"
-            );
+            assert!(mirrors.contains_key(&key), "spec `{spec}` has no mirror");
         }
     }
 
