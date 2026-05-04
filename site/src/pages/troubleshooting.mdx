@@ -136,7 +136,7 @@ exact failure shape and how to fix it.
 ## Trust-boundary failures
 
 `sorryAx` is **always** denied — it cannot be allowlisted. Remove
-`sorry` from public obligations before release.
+`sorry` from theorems that discharge a spec before release.
 
 Other axioms must be intentionally allowlisted in `tama.toml` with a
 non-empty reason:

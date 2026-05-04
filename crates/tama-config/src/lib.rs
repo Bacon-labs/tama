@@ -39,6 +39,8 @@ pub enum Error {
         field: &'static str,
         path: Utf8PathBuf,
     },
+    #[error("[coverage.proof_only] entry `{key}` requires a non-empty reason")]
+    EmptyProofOnlyReason { key: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +52,8 @@ pub struct TamaConfig {
     pub yul: YulConfig,
     #[serde(default)]
     pub trust: TrustConfig,
+    #[serde(default)]
+    pub coverage: CoverageConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +114,13 @@ pub struct YulConfig {
 pub struct TrustConfig {
     #[serde(default)]
     pub allow_axioms: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoverageConfig {
+    #[serde(default)]
+    pub proof_only: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -247,6 +258,13 @@ fn validate_tama_config(config: &TamaConfig) -> Result<()> {
         ("paths.generated_solidity", &config.paths.generated),
     ] {
         validate_project_relative_path(field, path)?;
+    }
+    for (key, reason) in &config.coverage.proof_only {
+        if reason.trim().is_empty() {
+            return Err(Error::EmptyProofOnlyReason {
+                key: key.to_owned(),
+            });
+        }
     }
     Ok(())
 }
@@ -888,6 +906,9 @@ solc = "0.8.33"
 
 [trust.allow_axioms]
 "Classical.choice" = "Lean classical reasoning"
+
+[coverage.proof_only]
+"Foo.symbolic_only" = "quantifies over all key pairs"
 "#,
         )
         .unwrap();
@@ -896,6 +917,35 @@ solc = "0.8.33"
         assert_eq!(cfg.yul.optimizer_runs, 200);
         assert!(cfg.yul.yul_optimizer);
         assert!(cfg.trust.allow_axioms.contains_key("Classical.choice"));
+        assert_eq!(
+            cfg.coverage.proof_only.get("Foo.symbolic_only").map(String::as_str),
+            Some("quantifies over all key pairs")
+        );
+    }
+
+    #[test]
+    fn empty_proof_only_reason_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("tama.toml")).unwrap();
+        tama_common::write_string(
+            &path,
+            r#"
+[project]
+name = "p"
+verity = "0.1.0"
+
+[yul]
+solc = "0.8.33"
+
+[coverage.proof_only]
+"Foo.bar" = "   "
+"#,
+        )
+        .unwrap();
+        match parse_tama_config(&path) {
+            Err(Error::EmptyProofOnlyReason { key }) => assert_eq!(key, "Foo.bar"),
+            other => panic!("expected EmptyProofOnlyReason, got {other:?}"),
+        }
     }
 
     #[test]

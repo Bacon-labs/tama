@@ -42,6 +42,7 @@ contract CounterTest is MinimalStdInvariant {
         require(counter.getCount() == 0, "initial count");
     }
 
+    // tama: mirrors=increment_spec
     function testFuzzIncrementUpdatesCount(uint8 initialSteps, uint8 extraSteps) public {
         CounterIface counter = CounterDeployer.deploy();
         for (uint256 i = 0; i < initialSteps; i++) {
@@ -56,6 +57,7 @@ contract CounterTest is MinimalStdInvariant {
         );
     }
 
+    // tama: mirrors=decrement_spec
     function testFuzzDecrementUpdatesCount(uint8 initialSteps, uint8 decrementSteps) public {
         CounterIface counter = CounterDeployer.deploy();
         for (uint256 i = 0; i < initialSteps; i++) {
@@ -71,6 +73,7 @@ contract CounterTest is MinimalStdInvariant {
         require(counter.getCount() == expected, "decrement count");
     }
 
+    // tama: mirrors=getCount_spec
     function testFuzzGetterMirrorsGeneratedBytecodeState(uint8 incrementSteps, uint8 decrementSteps) public {
         CounterIface counter = CounterDeployer.deploy();
         uint256 expected;
@@ -89,6 +92,7 @@ contract CounterTest is MinimalStdInvariant {
         require(counter.getCount() == expected, "getter count");
     }
 
+    // tama: mirrors=getCount_preserves_state_spec
     function testFuzzGetterPreservesCount(uint8 incrementSteps, uint8 decrementSteps) public {
         CounterIface counter = CounterDeployer.deploy();
         for (uint256 i = 0; i < incrementSteps; i++) {

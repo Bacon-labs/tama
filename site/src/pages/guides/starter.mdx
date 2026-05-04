@@ -97,11 +97,16 @@ through both halves of the `if`.
 
 ## The specification
 
-`verity/spec/ERC20LiteSpec.lean` is just plain Lean predicates over
-pre-state, post-state, or return value. No `tama:` metadata — coverage
-tracking lives on the proof side.
+`verity/spec/ERC20LiteSpec.lean` is **pure Lean** — no `-- tama:`
+comments anywhere. Every top-level `def` (and every `#gen_spec`
+invocation) in this file is automatically an obligation Tama tracks.
+Helpers, if any, must live outside the spec module:
 
 ```lean
+import ERC20Lite
+
+namespace ERC20LiteSpec
+
 def transfer_total_supply_preserved (s s' : ContractState) : Prop :=
   s'.storage 2 = s.storage 2
 
@@ -116,6 +121,8 @@ def totalSupply_spec (result : Uint256) (s : ContractState) : Prop :=
 
 def owner_spec (result : Address) (s : ContractState) : Prop :=
   result = s.storageAddr 0
+
+end ERC20LiteSpec
 ```
 
 Five properties:
@@ -139,8 +146,7 @@ balance arithmetic under transfer, and so on.
 transfer proof is the most interesting:
 
 ```lean
--- tama: obligation kind=postcondition function=transfer coverage=mirror
---   path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply
+-- tama: discharges=transfer_total_supply_preserved
 theorem transfer_total_supply_preserved_after_run
     (toAddr : Address) (amount : Uint256) (s : ContractState) :
     let s' := ((transfer toAddr amount).run s).snd
@@ -162,27 +168,29 @@ worth recognizing — one branch per `require`, one branch per non-trivial
 `if`. The `simp` invocations unfold the contract definitions and rely
 on the Verity standard library for the storage and arithmetic lemmas.
 
-The `-- tama: obligation` annotation has three pieces:
-
-- **`kind=postcondition`** — what category of property this is
-  (`invariant` / `postcondition` / `frame`).
-- **`function=transfer`** — which contract function the property is about.
-- **`coverage=mirror path=...`** — points at a Foundry test, exercised below.
-
-`tama audit coverage` reads these and refuses to pass if the named
-Foundry symbol doesn't exist. The other four obligations follow the same
-shape — `mint_preserves_owner_after_run`, `balanceOf_returns_storage_balance`,
-`totalSupply_returns_storage_supply`, `owner_returns_storage_owner` — each
-with its own annotation pointing at a mirror.
+The model is symmetric. The spec file declares an obligation by
+defining `transfer_total_supply_preserved`. The proof claims it with
+`-- tama: discharges=transfer_total_supply_preserved` directly above
+the theorem. The Foundry test mirrors it with a matching
+`// tama: mirrors=transfer_total_supply_preserved` (next section).
+Theorems and `lemma`s without a `discharges=` tag are silently treated
+as helpers; the four other obligations —
+`mint_preserves_owner_after_run`, `balanceOf_returns_storage_balance`,
+`totalSupply_returns_storage_supply`, `owner_returns_storage_owner` —
+each carry their own `discharges=` tag pointing at the matching spec
+def, and each spec is mirrored by a corresponding `testFuzz_*` function
+in the Foundry test file.
 
 ## The mirror tests
 
 `test/verity/ERC20Lite.t.sol` does two things.
 
 **One. Property-shaped fuzz tests.** Each obligation has a `testFuzz_*`
-function that exercises the same property on the real bytecode:
+function that exercises the same property on the real bytecode, with a
+`// tama: mirrors=<spec>` comment directly above:
 
 ```solidity
+// tama: mirrors=transfer_total_supply_preserved
 function testFuzzTransferPreservesTotalSupply(
     address recipient, uint256 rawMint, uint256 rawTransfer
 ) public {
@@ -209,6 +217,7 @@ runs.
 step:
 
 ```solidity
+// tama: mirrors=transfer_total_supply_preserved
 function invariant_totalSupplyTracksMinted() public view {
     require(invariantToken.totalSupply() == invariantMinted, "invariant supply");
 }
@@ -221,7 +230,13 @@ function handlerMint(uint8 accountIndex, uint256 rawAmount) public {
 ```
 
 This is the standard Foundry invariant pattern. The proof anchors the
-property; the invariant exercises it under stateful fuzzing.
+property; the invariant exercises it under stateful fuzzing. Tama
+treats one spec being mirrored by both a fuzz test and a Foundry
+invariant as the normal case — `mirrors=<spec>` may appear above any
+number of `testFuzz*`/`invariant_*` functions, and a single test may
+mirror several specs (`mirrors=foo,bar`, no whitespace after commas).
+Helper functions like `handlerMint` carry no `mirrors=` tag and are
+not tracked.
 
 ## Build and audit
 
@@ -237,7 +252,7 @@ audit:
   ✓ structure       artifacts present, hashes match
   ✓ selectors       5 functions agree across Verity / manifest / Yul / Solidity
   ✓ storage-layout  3 slots, no overlap
-  ✓ coverage        every public obligation has a mirror
+  ✓ coverage        every spec has a discharger and a mirror
   ✓ trust-boundary  no sorry, axioms allowlisted
 ```
 

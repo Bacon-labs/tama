@@ -132,35 +132,12 @@ pub struct StorageEntry {
 pub struct Obligation {
     pub id: String,
     pub name: String,
-    pub kind: ObligationKind,
     pub lean_decl: String,
     pub contract: String,
-    pub function: Option<String>,
-    pub coverage: Coverage,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ObligationKind {
-    Invariant,
-    Postcondition,
-    Helper,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Coverage {
-    pub disposition: CoverageDisposition,
-    pub path: Option<String>,
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CoverageDisposition {
-    Mirror,
-    ProofOnly,
-    None,
+    pub dischargers: Vec<String>,
+    pub mirrors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof_only_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -459,107 +436,99 @@ impl ContractManifest {
                 obligation.id, obligation.contract, self.contract
             ));
         }
-        if let Some(function) = &obligation.function {
-            if function.trim().is_empty() {
-                return self.invalid(format!(
-                    "obligation `{}` function cannot be empty",
-                    obligation.id
-                ));
-            }
-            let known_function = self
-                .abi
-                .functions
-                .iter()
-                .any(|abi| abi.name == function.as_str())
-                || (function == "constructor" && self.abi.constructor.is_some());
-            if !known_function {
-                return self.invalid(format!(
-                    "obligation `{}` references unknown function `{}`",
-                    obligation.id, function
-                ));
-            }
-        }
         if !is_qualified_lean_name(&obligation.lean_decl) {
             return self.invalid(format!(
                 "obligation `{}` lean_decl must be fully qualified",
                 obligation.id
             ));
         }
-        match obligation.kind {
-            ObligationKind::Invariant | ObligationKind::Postcondition => {
-                match obligation.coverage.disposition {
-                    CoverageDisposition::Mirror => {
-                        let path = obligation.coverage.path.as_deref().unwrap_or("").trim();
-                        if path.is_empty() {
-                            return self.invalid(format!(
-                                "obligation `{}` mirror coverage requires a path",
-                                obligation.id
-                            ));
-                        }
-                        let Some((file, symbol)) = path.split_once(':') else {
-                            return self.invalid(format!(
-                                "obligation `{}` mirror coverage path `{}` must include a Solidity symbol",
-                                obligation.id, path
-                            ));
-                        };
-                        if file.trim().is_empty() || symbol.trim().is_empty() {
-                            return self.invalid(format!(
-                                "obligation `{}` mirror coverage path `{}` must include a non-empty file and symbol",
-                                obligation.id, path
-                            ));
-                        }
-                        let Some((contract_name, function_name)) =
-                            mirror_symbol_contract_function(symbol)
-                        else {
-                            return self.invalid(format!(
-                                "obligation `{}` mirror symbol `{}` must include a Solidity contract and function",
-                                obligation.id, symbol
-                            ));
-                        };
-                        if !is_identifier(contract_name) || !is_identifier(function_name) {
-                            return self.invalid(format!(
-                                "obligation `{}` mirror symbol `{}` must include valid Solidity contract and function identifiers",
-                                obligation.id, symbol
-                            ));
-                        }
-                        if !mirror_symbol_is_property(function_name) {
-                            return self.invalid(format!(
-                                "obligation `{}` mirror symbol `{}` must be a fuzz test or invariant",
-                                obligation.id, symbol
-                            ));
-                        }
-                        let file = Utf8Path::new(file);
-                        if !path_stays_inside_project(file) {
-                            return self.invalid(format!(
-                                "obligation `{}` mirror path `{}` escapes project root",
-                                obligation.id, path
-                            ));
-                        }
-                    }
-                    CoverageDisposition::ProofOnly => {
-                        if obligation
-                            .coverage
-                            .reason
-                            .as_deref()
-                            .unwrap_or("")
-                            .trim()
-                            .is_empty()
-                        {
-                            return self.invalid(format!(
-                                "obligation `{}` proof-only coverage requires a reason",
-                                obligation.id
-                            ));
-                        }
-                    }
-                    CoverageDisposition::None => {
-                        return self.invalid(format!(
-                            "public obligation `{}` requires mirror or proof_only coverage",
-                            obligation.id
-                        ));
-                    }
+        if obligation.dischargers.is_empty() {
+            return self.invalid(format!(
+                "obligation `{}` requires at least one discharger",
+                obligation.id
+            ));
+        }
+        for discharger in &obligation.dischargers {
+            if !is_qualified_lean_name(discharger) {
+                return self.invalid(format!(
+                    "obligation `{}` discharger `{}` must be a fully qualified Lean name",
+                    obligation.id, discharger
+                ));
+            }
+        }
+        match (&obligation.proof_only_reason, obligation.mirrors.is_empty()) {
+            (Some(reason), true) => {
+                if reason.trim().is_empty() {
+                    return self.invalid(format!(
+                        "obligation `{}` proof_only_reason cannot be empty",
+                        obligation.id
+                    ));
                 }
             }
-            ObligationKind::Helper => {}
+            (Some(_), false) => {
+                return self.invalid(format!(
+                    "obligation `{}` cannot have both mirrors and proof_only_reason",
+                    obligation.id
+                ));
+            }
+            (None, true) => {
+                return self.invalid(format!(
+                    "obligation `{}` requires at least one mirror or a proof_only_reason",
+                    obligation.id
+                ));
+            }
+            (None, false) => {}
+        }
+        for mirror in &obligation.mirrors {
+            self.validate_mirror_path(&obligation.id, mirror)?;
+        }
+        Ok(())
+    }
+
+    fn validate_mirror_path(&self, obligation_id: &str, raw: &str) -> Result<()> {
+        let path = raw.trim();
+        if path.is_empty() {
+            return self.invalid(format!(
+                "obligation `{}` mirror entry cannot be empty",
+                obligation_id
+            ));
+        }
+        let Some((file, symbol)) = path.split_once(':') else {
+            return self.invalid(format!(
+                "obligation `{}` mirror `{}` must include a Solidity symbol",
+                obligation_id, path
+            ));
+        };
+        if file.trim().is_empty() || symbol.trim().is_empty() {
+            return self.invalid(format!(
+                "obligation `{}` mirror `{}` must include a non-empty file and symbol",
+                obligation_id, path
+            ));
+        }
+        let Some((contract_name, function_name)) = mirror_symbol_contract_function(symbol) else {
+            return self.invalid(format!(
+                "obligation `{}` mirror symbol `{}` must include a Solidity contract and function",
+                obligation_id, symbol
+            ));
+        };
+        if !is_identifier(contract_name) || !is_identifier(function_name) {
+            return self.invalid(format!(
+                "obligation `{}` mirror symbol `{}` must include valid Solidity contract and function identifiers",
+                obligation_id, symbol
+            ));
+        }
+        if !mirror_symbol_is_property(function_name) {
+            return self.invalid(format!(
+                "obligation `{}` mirror symbol `{}` must be a fuzz test or invariant",
+                obligation_id, symbol
+            ));
+        }
+        let file = Utf8Path::new(file);
+        if !path_stays_inside_project(file) {
+            return self.invalid(format!(
+                "obligation `{}` mirror path `{}` escapes project root",
+                obligation_id, path
+            ));
         }
         Ok(())
     }
@@ -780,15 +749,11 @@ mod tests {
             obligations: vec![Obligation {
                 id: "ERC20Lite.transfer_post".to_string(),
                 name: "transfer_post".to_string(),
-                kind: ObligationKind::Postcondition,
-                lean_decl: "proof.ERC20LiteProof.transfer_post".to_string(),
+                lean_decl: "spec.ERC20LiteSpec.transfer_post".to_string(),
                 contract: "ERC20Lite".to_string(),
-                function: Some("transfer".to_string()),
-                coverage: Coverage {
-                    disposition: CoverageDisposition::Mirror,
-                    path: Some("test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply".to_string()),
-                    reason: None,
-                },
+                dischargers: vec!["proof.ERC20LiteProof.transfer_post_after_run".to_string()],
+                mirrors: vec!["test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply".to_string()],
+                proof_only_reason: None,
             }],
             artifacts: ArtifactPaths {
                 yul: "artifacts/yul/ERC20Lite.yul".into(),
@@ -979,15 +944,15 @@ mod tests {
     }
 
     #[test]
-    fn coverage_path_traversal_fails() {
+    fn mirror_path_traversal_fails() {
         let mut manifest = manifest();
-        manifest.obligations[0].coverage.path = Some(
+        manifest.obligations[0].mirrors = vec![
             "../ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply".to_string(),
-        );
+        ];
         assert!(manifest.validate().is_err());
 
-        manifest.obligations[0].coverage.path =
-            Some(".:ERC20LiteTest.testFuzzTransferPreservesTotalSupply".to_string());
+        manifest.obligations[0].mirrors =
+            vec![".:ERC20LiteTest.testFuzzTransferPreservesTotalSupply".to_string()];
         assert!(matches!(
             manifest.validate(),
             Err(Error::Invalid { message, .. }) if message.contains("escapes project root")
@@ -995,28 +960,74 @@ mod tests {
     }
 
     #[test]
-    fn mirror_coverage_requires_property_symbol() {
+    fn mirror_requires_property_symbol() {
         let mut manifest = manifest();
-        manifest.obligations[0].coverage.path = Some("test/verity/ERC20Lite.t.sol".to_string());
+        manifest.obligations[0].mirrors = vec!["test/verity/ERC20Lite.t.sol".to_string()];
         assert!(manifest.validate().is_err());
 
-        manifest.obligations[0].coverage.path =
-            Some("test/verity/ERC20Lite.t.sol:testFuzzTransferPreservesTotalSupply".to_string());
+        manifest.obligations[0].mirrors =
+            vec!["test/verity/ERC20Lite.t.sol:testFuzzTransferPreservesTotalSupply".to_string()];
         assert!(matches!(
             manifest.validate(),
             Err(Error::Invalid { message, .. }) if message.contains("must include a Solidity contract and function")
         ));
 
-        manifest.obligations[0].coverage.path =
-            Some("test/verity/ERC20Lite.t.sol:ERC20-Test.testFuzzTransfer".to_string());
+        manifest.obligations[0].mirrors =
+            vec!["test/verity/ERC20Lite.t.sol:ERC20-Test.testFuzzTransfer".to_string()];
         assert!(matches!(
             manifest.validate(),
             Err(Error::Invalid { message, .. }) if message.contains("valid Solidity contract and function identifiers")
         ));
 
-        manifest.obligations[0].coverage.path =
-            Some("test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransfer".to_string());
+        manifest.obligations[0].mirrors =
+            vec!["test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransfer".to_string()];
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn obligation_requires_at_least_one_discharger() {
+        let mut manifest = manifest();
+        manifest.obligations[0].dischargers.clear();
+        assert!(matches!(
+            manifest.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("at least one discharger")
+        ));
+    }
+
+    #[test]
+    fn obligation_requires_mirrors_or_proof_only_reason() {
+        let mut without_mirror = manifest();
+        without_mirror.obligations[0].mirrors.clear();
+        assert!(matches!(
+            without_mirror.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("at least one mirror or a proof_only_reason")
+        ));
+
+        let mut with_proof_only = manifest();
+        with_proof_only.obligations[0].mirrors.clear();
+        with_proof_only.obligations[0].proof_only_reason = Some("symbolic state only".to_string());
+        with_proof_only.validate().unwrap();
+    }
+
+    #[test]
+    fn obligation_rejects_mirrors_with_proof_only_reason() {
+        let mut manifest = manifest();
+        manifest.obligations[0].proof_only_reason = Some("only here for testing".to_string());
+        assert!(matches!(
+            manifest.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("cannot have both mirrors and proof_only_reason")
+        ));
+    }
+
+    #[test]
+    fn obligation_rejects_empty_proof_only_reason() {
+        let mut manifest = manifest();
+        manifest.obligations[0].mirrors.clear();
+        manifest.obligations[0].proof_only_reason = Some("   ".to_string());
+        assert!(matches!(
+            manifest.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("proof_only_reason cannot be empty")
+        ));
     }
 
     #[test]
@@ -1063,7 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn obligations_must_reference_manifest_contract_and_known_functions() {
+    fn obligations_must_reference_manifest_contract() {
         let mut empty_name = manifest();
         empty_name.obligations[0].name.clear();
         assert!(matches!(
@@ -1077,19 +1088,15 @@ mod tests {
             wrong_contract.validate(),
             Err(Error::Invalid { message, .. }) if message.contains("must match manifest contract")
         ));
-
-        let mut unknown_function = manifest();
-        unknown_function.obligations[0].function = Some("mint".to_string());
-        assert!(matches!(
-            unknown_function.validate(),
-            Err(Error::Invalid { message, .. }) if message.contains("unknown function")
-        ));
     }
 
     #[test]
-    fn missing_public_coverage_fails() {
-        let mut manifest = manifest();
-        manifest.obligations[0].coverage.disposition = CoverageDisposition::None;
-        assert!(manifest.validate().is_err());
+    fn discharger_must_be_qualified_lean_name() {
+        let mut bad = manifest();
+        bad.obligations[0].dischargers = vec!["transfer_post_after_run".to_string()];
+        assert!(matches!(
+            bad.validate(),
+            Err(Error::Invalid { message, .. }) if message.contains("fully qualified Lean name")
+        ));
     }
 }

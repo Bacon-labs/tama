@@ -93,7 +93,7 @@ jobs:
           tama build --locked
           tama test
           tama audit
-          for field in manifest selectors abi storage-layout yul bytecode runtime-bytecode theorems obligations mirrors trust; do
+          for field in manifest selectors abi storage-layout yul bytecode runtime-bytecode specs obligations mirrors trust; do
             tama inspect ERC20Lite "$field" >/dev/null
             tama --json inspect ERC20Lite "$field" | python3 -m json.tool >/dev/null
           done
@@ -125,7 +125,7 @@ jobs:
           tama --root "$counter" --locked build
           tama --root "$counter" test
           tama --root "$counter" audit
-          for field in manifest selectors abi storage-layout yul bytecode runtime-bytecode theorems obligations mirrors trust; do
+          for field in manifest selectors abi storage-layout yul bytecode runtime-bytecode specs obligations mirrors trust; do
             tama --root "$counter" inspect Counter "$field" >/dev/null
             tama --root "$counter" --json inspect Counter "$field" | python3 -m json.tool >/dev/null
           done
@@ -252,7 +252,8 @@ jobs:
           import sys
           path = sys.argv[1]
           data = json.load(open(path, encoding="utf-8"))
-          data["obligations"][0]["coverage"] = {"disposition": "none", "path": None, "reason": None}
+          data["obligations"][0]["mirrors"] = []
+          data["obligations"][0]["proof_only_reason"] = None
           json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
           PY
           expect_audit_failure "$project" coverage
@@ -263,7 +264,9 @@ jobs:
           import sys
           manifest_path, test_path = sys.argv[1:]
           data = json.load(open(manifest_path, encoding="utf-8"))
-          data["obligations"][0]["coverage"]["path"] = "src/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply"
+          data["obligations"][0]["mirrors"] = [
+              "src/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply"
+          ]
           json.dump(data, open(manifest_path, "w", encoding="utf-8"), indent=2)
           open(test_path, "w", encoding="utf-8").write("contract ERC20LiteTest { function testFuzzTransferPreservesTotalSupply() public {} }\n")
           PY
@@ -275,11 +278,9 @@ jobs:
           import sys
           manifest_path, test_path = sys.argv[1:]
           data = json.load(open(manifest_path, encoding="utf-8"))
-          data["obligations"][0]["coverage"] = {
-              "disposition": "mirror",
-              "path": "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransferExample",
-              "reason": None,
-          }
+          data["obligations"][0]["mirrors"] = [
+              "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testTransferExample"
+          ]
           json.dump(data, open(manifest_path, "w", encoding="utf-8"), indent=2)
           text = open(test_path, encoding="utf-8").read()
           text = text.rstrip().removesuffix("}") + "\n    function testTransferExample() public {}\n}\n"
@@ -293,7 +294,8 @@ jobs:
           import sys
           path = sys.argv[1]
           data = json.load(open(path, encoding="utf-8"))
-          data["obligations"][0]["coverage"] = {"disposition": "proof_only", "path": None, "reason": ""}
+          data["obligations"][0]["mirrors"] = []
+          data["obligations"][0]["proof_only_reason"] = ""
           json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
           PY
           expect_audit_failure "$project" coverage
@@ -308,7 +310,7 @@ jobs:
           import sys
           path = sys.argv[1]
           data = json.load(open(path, encoding="utf-8"))
-          data["obligations"][0]["lean_decl"] = "proof.Missing.nope"
+          data["obligations"][0]["dischargers"] = ["proof.Missing.nope"]
           json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
           PY
           expect_audit_failure "$project" trust-boundary
@@ -319,7 +321,7 @@ jobs:
           import sys
           path = sys.argv[1]
           data = json.load(open(path, encoding="utf-8"))
-          data["obligations"][0]["axioms"].append("sorryAx")
+          data["obligations"][0]["dischargers"][0]["axioms"].append("sorryAx")
           json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
           PY
           expect_audit_failure "$project" trust-boundary
@@ -330,7 +332,7 @@ jobs:
           import sys
           path = sys.argv[1]
           data = json.load(open(path, encoding="utf-8"))
-          data["obligations"][0]["axioms"].append("Tama.UnsafeAxiom")
+          data["obligations"][0]["dischargers"][0]["axioms"].append("Tama.UnsafeAxiom")
           json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
           PY
           expect_audit_failure "$project" trust-boundary

@@ -465,7 +465,7 @@ end spec.{name}Spec
     )
 }
 
-fn proof_template(name: &str, mirror_test_dir: &str) -> String {
+fn proof_template(name: &str, _mirror_test_dir: &str) -> String {
     format!(
         r#"import spec.{name}Spec
 
@@ -476,13 +476,13 @@ open Verity.EVM.Uint256
 open spec.{name}Spec
 open src.{name}
 
--- tama: obligation kind=postcondition function=setValue coverage=mirror path={mirror_test_dir}/{name}.t.sol:{name}Test.testFuzzSetValueUpdatesValue
+-- tama: discharges=setValue_spec
 theorem setValue_meets_spec (newValue : Uint256) (s : ContractState) :
   let s' := ((setValue newValue).run s).snd
   setValue_spec newValue s s' := by
   sorry
 
--- tama: obligation kind=postcondition function=getValue coverage=mirror path={mirror_test_dir}/{name}.t.sol:{name}Test.testFuzzGetValueMirrorsGeneratedBytecode
+-- tama: discharges=getValue_spec
 theorem getValue_returns_value (s : ContractState) :
   let result := ((getValue).run s).fst
   getValue_spec result s := by
@@ -502,12 +502,14 @@ import {{{name}Deployer}} from "{generated_import_root}/{name}Deployer.sol";
 import {{{name}Iface}} from "{generated_import_root}/{name}Iface.sol";
 
 contract {name}Test {{
+    // tama: mirrors=setValue_spec
     function testFuzzSetValueUpdatesValue(uint256 newValue) public {{
         {name}Iface target = {name}Deployer.deploy();
         target.setValue(newValue);
         require(target.getValue() == newValue, "value");
     }}
 
+    // tama: mirrors=getValue_spec
     function testFuzzGetValueMirrorsGeneratedBytecode(uint256 newValue) public {{
         {name}Iface target = {name}Deployer.deploy();
         target.setValue(newValue);
@@ -605,9 +607,6 @@ namespace spec.ERC20LiteSpec
 open Verity
 open Verity.EVM.Uint256
 
--- Specs are ordinary Lean predicates over the pre-state, post-state, or return
--- value. Proof files discharge these predicates; Foundry tests mirror them
--- against generated EVM bytecode.
 def transfer_total_supply_preserved (s s' : ContractState) : Prop :=
   s'.storage 2 = s.storage 2
 
@@ -636,10 +635,10 @@ open Verity.EVM.Uint256
 open spec.ERC20LiteSpec
 open src.ERC20Lite
 
--- Each `tama: obligation` comment is part of the build contract: Tama records
--- the theorem in the manifest and checks that there is a matching Foundry mirror
--- or an explicit proof-only reason.
--- tama: obligation kind=postcondition function=mint coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzMintUpdatesBalanceAndSupply
+-- Each `tama: discharges=` comment binds a proof theorem to a spec; the spec
+-- in turn is mirrored by a Foundry test (or listed under
+-- `[coverage.proof_only]` in `tama.toml`).
+-- tama: discharges=mint_owner_preserved
 theorem mint_preserves_owner_after_run (toAddr : Address) (amount : Uint256) (s : ContractState) :
   let s' := ((mint toAddr amount).run s).snd
   mint_owner_preserved s s' := by
@@ -659,7 +658,7 @@ theorem mint_preserves_owner_after_run (toAddr : Address) (amount : Uint256) (s 
   · simp [mint, ownerSlot, msgSender, getStorageAddr, Contract.run, ContractResult.snd,
       Verity.bind, Bind.bind, Verity.require, h_owner]
 
--- tama: obligation kind=postcondition function=transfer coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply
+-- tama: discharges=transfer_total_supply_preserved
 theorem transfer_total_supply_preserved_after_run (toAddr : Address) (amount : Uint256) (s : ContractState) :
   let s' := ((transfer toAddr amount).run s).snd
   transfer_total_supply_preserved s s' := by
@@ -678,19 +677,19 @@ theorem transfer_total_supply_preserved_after_run (toAddr : Address) (amount : U
   · simp [transfer, balancesSlot, msgSender, getMapping, Contract.run, ContractResult.snd,
       Verity.bind, Bind.bind, Verity.require, h_balance]
 
--- tama: obligation kind=postcondition function=balanceOf coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzBalanceOfMirrorsGeneratedBytecode
+-- tama: discharges=balanceOf_spec
 theorem balanceOf_returns_storage_balance (account : Address) (s : ContractState) :
   let result := ((balanceOf account).run s).fst
   balanceOf_spec account result s := by
   simp [balanceOf_spec, balanceOf, balancesSlot, Bind.bind, Pure.pure]
 
--- tama: obligation kind=postcondition function=totalSupply coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzMintUpdatesBalanceAndSupply
+-- tama: discharges=totalSupply_spec
 theorem totalSupply_returns_storage_supply (s : ContractState) :
   let result := ((totalSupply).run s).fst
   totalSupply_spec result s := by
   simp [totalSupply_spec, totalSupply, totalSupplySlot, Bind.bind, Pure.pure]
 
--- tama: obligation kind=postcondition function=owner coverage=mirror path=test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzDeploymentSetsOwner
+-- tama: discharges=owner_spec
 theorem owner_returns_storage_owner (s : ContractState) :
   let result := ((owner).run s).fst
   owner_spec result s := by
@@ -732,6 +731,7 @@ contract ERC20LiteTest is StdInvariant {
     }
 
     // Deployment mirror: the constructor writes owner and starts supply at zero.
+    // tama: mirrors=owner_spec
     function testFuzzDeploymentSetsOwner(address initialOwner) public {
         ERC20LiteIface token = deployToken(initialOwner);
         require(token.owner() == initialOwner, "owner");
@@ -739,6 +739,7 @@ contract ERC20LiteTest is StdInvariant {
     }
 
     // Mint mirror: owner minting updates one balance and total supply together.
+    // tama: mirrors=mint_owner_preserved,totalSupply_spec
     function testFuzzMintUpdatesBalanceAndSupply(address account, uint256 rawAmount) public {
         ERC20LiteIface token = deployToken();
         uint256 amount = rawAmount % 1e36;
@@ -749,6 +750,7 @@ contract ERC20LiteTest is StdInvariant {
     }
 
     // Transfer mirror: moving tokens changes balances but preserves supply.
+    // tama: mirrors=transfer_total_supply_preserved
     function testFuzzTransferPreservesTotalSupply(address recipient, uint256 rawMint, uint256 rawTransfer) public {
         ERC20LiteIface token = deployToken();
         uint256 minted = rawMint % 1e36;
@@ -764,6 +766,7 @@ contract ERC20LiteTest is StdInvariant {
         require(token.totalSupply() == minted, "supply preserved");
     }
 
+    // tama: mirrors=balanceOf_spec
     function testFuzzBalanceOfMirrorsGeneratedBytecode(address account, uint256 rawAmount) public {
         ERC20LiteIface token = deployToken();
         uint256 amount = rawAmount % 1e36;
@@ -957,18 +960,19 @@ metadata_bytecode_hash = "none"
         let proof = read_to_string(&root.join("verity/proof/ERC20LiteProof.lean")).unwrap();
         assert!(!proof.contains("sorry"));
         assert!(!proof.contains("Placeholder"));
-        assert!(!proof.contains("coverage=proof_only"));
-        assert!(proof.contains("Each `tama: obligation` comment is part of the build contract"));
-        assert!(proof.contains("tama: obligation kind=postcondition function=transfer"));
+        assert!(!proof.contains("kind="));
+        assert!(!proof.contains("coverage="));
+        assert!(proof.contains("tama: discharges=transfer_total_supply_preserved"));
         assert!(proof.contains("((transfer toAddr amount).run s).snd"));
         assert!(proof.contains("((mint toAddr amount).run s).snd"));
         assert!(proof.contains("((balanceOf account).run s).fst"));
-        assert!(proof.contains("testFuzzDeploymentSetsOwner"));
         let test = read_to_string(&root.join("test/verity/ERC20Lite.t.sol")).unwrap();
         assert!(!test.contains("testTransferPostPlaceholder"));
         assert!(!test.contains("function testDeploymentSetsOwner"));
         assert!(test.contains("token = deployToken(address(this));"));
         assert!(test.contains("ERC20LiteDeployer.deploy(initialOwner)"));
+        assert!(test.contains("// tama: mirrors=owner_spec"));
+        assert!(test.contains("// tama: mirrors=transfer_total_supply_preserved"));
         assert!(test.contains("function testFuzzDeploymentSetsOwner(address initialOwner)"));
         assert!(test.contains("testFuzzTransferPreservesTotalSupply"));
         assert!(test.contains("StdInvariant"));
@@ -986,7 +990,8 @@ metadata_bytecode_hash = "none"
         assert!(source.contains("function view balanceOf"));
         assert!(!source.contains(r#"emit "Transfer""#));
         let spec = read_to_string(&root.join("verity/spec/ERC20LiteSpec.lean")).unwrap();
-        assert!(spec.contains("Specs are ordinary Lean predicates"));
+        assert!(spec.contains("def transfer_total_supply_preserved"));
+        assert!(!spec.contains("-- tama:"));
         let starter_readme = read_to_string(&root.join("docs/README.md")).unwrap();
         assert!(starter_readme.contains("script/ERC20Lite.s.sol:DeployERC20Lite"));
         assert!(starter_readme.contains("ERC20LITE_OWNER"));
@@ -1115,12 +1120,15 @@ metadata_bytecode_hash = "none"
         let proof = read_to_string(&root.join("verity/proof/TipJarProof.lean")).unwrap();
         assert!(proof.contains("((setValue newValue).run s).snd"));
         assert!(proof.contains("((getValue).run s).fst"));
-        assert!(proof.contains("coverage=mirror"));
+        assert!(proof.contains("tama: discharges=setValue_spec"));
+        assert!(proof.contains("tama: discharges=getValue_spec"));
         assert!(proof.contains("sorry"));
         let test = read_to_string(&root.join("test/verity/TipJar.t.sol")).unwrap();
         assert!(test.contains(
             "import {TipJarDeployer} from \"../../src/generated/verity/TipJarDeployer.sol\";"
         ));
+        assert!(test.contains("// tama: mirrors=setValue_spec"));
+        assert!(test.contains("// tama: mirrors=getValue_spec"));
         assert!(test.contains("function testFuzzSetValueUpdatesValue(uint256 newValue)"));
         assert!(
             test.contains("function testFuzzGetValueMirrorsGeneratedBytecode(uint256 newValue)")
@@ -1229,8 +1237,9 @@ metadata_bytecode_hash = "none"
         assert!(root.join("contracts/proof/TipJarProof.lean").is_file());
         assert!(root.join("tests/verity/TipJar.t.sol").is_file());
         let proof = read_to_string(&root.join("contracts/proof/TipJarProof.lean")).unwrap();
-        assert!(proof
-            .contains("path=tests/verity/TipJar.t.sol:TipJarTest.testFuzzSetValueUpdatesValue"));
+        assert!(proof.contains("tama: discharges=setValue_spec"));
+        let test = read_to_string(&root.join("tests/verity/TipJar.t.sol")).unwrap();
+        assert!(test.contains("// tama: mirrors=setValue_spec"));
         assert!(!root.join("verity/src/TipJar.lean").exists());
         assert!(read_to_string(&root.join("TamaSrc.lean"))
             .unwrap()

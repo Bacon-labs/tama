@@ -18,7 +18,7 @@ question. The full suite is:
 structure        Required files and bytecode hashes
 selectors        Function/event/error selectors agree everywhere
 storage-layout   Slot allocation is sane and consistent
-coverage         Public obligations have mirrors or proof-only reasons
+coverage         Every spec has a discharger and either a mirror or a proof-only reason
 trust-boundary   Lean axioms, sorry, unresolved declarations
 ```
 
@@ -112,37 +112,40 @@ storage-layout: error
 
 What it inspects:
 
-- Every theorem tagged with a `-- tama: obligation` comment either
-  carries `coverage=mirror path=...` pointing at a valid Foundry symbol,
-  or `coverage=proof_only reason="<reason>"` with a non-empty reason.
-- Mirror paths exist under Foundry's configured test directory.
-- Mirror function names start with `testFuzz` or `invariant_`.
-- Mirror contract names match an actual Foundry test contract in the file.
+- Every spec has at least one discharger AND either at least one
+  Foundry mirror or a [`[coverage.proof_only]`](/reference/config)
+  entry in `tama.toml`.
+- Every `-- tama: discharges=<spec>` tag in the proof file names a
+  real top-level def in the same contract's spec file.
+- Every `// tama: mirrors=<spec>` tag sits directly above a function
+  named `testFuzz*` or `invariant_*`, and names a real spec in some
+  contract.
+- Every `[coverage.proof_only]` key matches a real obligation id
+  (`<Contract>.<spec_name>`).
 
 A real failure:
 
 ```text
 coverage: error
-  TipJarProof.deposit_preserves_invariant: mirror not found
+  TipJar.total_tracks_balances: no mirror and no [coverage.proof_only] entry
 
-    declared mirror:
-      test/verity/TipJar.t.sol:tipJarTest.invariant_totalTracksBalances
+    spec:        verity/spec/TipJarSpec.lean:total_tracks_balances
+    dischargers: TipJarProof.deposit_preserves_invariant
+                 TipJarProof.withdraw_preserves_invariant
 
-    test/verity/TipJar.t.sol contains:
-      TipJarTest.testFuzz_deposit
-      TipJarTest.invariant_totalTracksBalances
-
-    The contract name in the annotation is wrong: file declares
-    `TipJarTest`, annotation says `tipJarTest`. Check capitalization.
+    Add a `// tama: mirrors=total_tracks_balances` comment above a
+    `testFuzz_*` or `invariant_*` function in test/verity/TipJar.t.sol,
+    or list it under [coverage.proof_only] in tama.toml with a reason.
 ```
 
 ## trust-boundary
 
 What it inspects:
 
-- For every `-- tama: obligation` theorem, the closure of axioms,
-  unsafe declarations, and unresolved names that the proof transitively
-  depends on (via Lean's `collectAxioms`).
+- For every spec, the closure of axioms, unsafe declarations, and
+  unresolved names reachable from each of its dischargers (via Lean's
+  `collectAxioms`). Every spec's dischargers must walk to allowlisted
+  axioms only.
 - Compiler trust-surface artifacts (`artifacts/trust-report.json`,
   `artifacts/assumption-report.json`).
 
@@ -158,8 +161,8 @@ trust-boundary: error
   TipJarProof.withdraw_preserves_invariant
     depends on: sorryAx
 
-  `sorry` is denied for any obligation. Replace the sorry with a real
-  proof, or move the theorem out of obligation status.
+  `sorry` is denied for any theorem that discharges a spec. Replace the
+  sorry with a real proof, or remove the `discharges=` tag.
 
 trust-boundary: warning
   TipJarProof.deposit_preserves_invariant
@@ -173,9 +176,9 @@ trust-boundary: warning
 
 <Callout kind="proof" title="The seal">
 A green <code>trust-boundary</code> is the strongest claim Tama can make
-about your contract: every public obligation is proven, modulo a small
-explicit list of named assumptions you have signed off on in
-<code>tama.toml</code>.
+about your contract: every spec is discharged by a proof that walks
+only to allowlisted axioms — a small explicit list of named assumptions
+you have signed off on in <code>tama.toml</code>.
 </Callout>
 
 ## CI patterns

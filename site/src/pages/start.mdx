@@ -135,12 +135,17 @@ end TipJarSpec
 
 One statement: an **invariant** — a property the contract must preserve
 through every call. Postconditions for individual functions (e.g. "after
-`deposit`, total grows by exactly `msg.value`") would be additional defs
-in the same file; we'll keep this tutorial focused on the invariant.
+`deposit`, total grows by exactly `msg.value`") would be additional
+top-level `def`s in the same file; we'll keep this tutorial focused on
+the invariant.
 
-The proof file (next step) is where Tama-visible markers go: each theorem
-proving one of these properties gets a `-- tama:` comment that tells Tama
-to enforce coverage for it.
+The spec file is **pure Lean**. There are no `-- tama:` comments — every
+top-level `def` (and every `#gen_spec` invocation) is automatically an
+obligation Tama tracks. Helpers like auxiliary `lemma`s or scratch `def`s
+must live outside the spec file; the build rejects anything other than
+`import`, `namespace`, `open`, `def`, `#gen_spec`, and `end` here. The
+proof file (next step) is where each obligation gets discharged, and a
+Foundry test (step 5) is where each one gets mirrored.
 
 <Callout kind="proof" title="Why bother writing this down?">
 This is the contract's *intent* in the strongest possible form. Every test
@@ -157,7 +162,7 @@ import TipJarSpec
 
 namespace TipJarProof
 
--- tama: obligation kind=invariant function=deposit coverage=mirror path=test/verity/TipJar.t.sol:TipJarTest.invariant_totalTracksBalances
+-- tama: discharges=total_tracks_balances
 theorem deposit_preserves_invariant
     (pre : TipJar.State) (call : TipJar.Call)
     (h : TipJarSpec.total_tracks_balances pre) :
@@ -165,7 +170,7 @@ theorem deposit_preserves_invariant
   simp [TipJarSpec.total_tracks_balances, TipJar.deposit,
         Mapping.sumValues_update_add]
 
--- tama: obligation kind=invariant function=withdraw coverage=mirror path=test/verity/TipJar.t.sol:TipJarTest.invariant_totalTracksBalances
+-- tama: discharges=total_tracks_balances
 theorem withdraw_preserves_invariant
     (pre : TipJar.State) (amount : UInt256)
     (h : TipJarSpec.total_tracks_balances pre)
@@ -184,10 +189,11 @@ library takes care of the mapping arithmetic.
 [Verity's debugging-proofs guide](https://veritylang.com/guides/debugging-proofs)
 catalogues the tactics and error messages you'll meet most often.
 
-The `coverage=mirror path=...` segment of each comment points at a
-Foundry test we'll write next. This is what links a proven property to
-an executable fuzz test that exercises the same property on the real
-bytecode.
+Each `-- tama: discharges=<spec>` comment claims a spec definition
+from `TipJarSpec.lean`. Two theorems can discharge the same spec
+(as above), one theorem can discharge several (`discharges=foo,bar`),
+and any theorem or `lemma` without a `discharges=` tag is silently
+treated as a helper and never appears in the manifest.
 
 ## Step 5 — Write the mirror test
 
@@ -208,10 +214,12 @@ contract TipJarTest is Test {
         jar = TipJarDeployer.deploy();
     }
 
+    // tama: mirrors=total_tracks_balances
     function invariant_totalTracksBalances() public view {
         assertEq(address(jar).balance, jar.total());
     }
 
+    // tama: mirrors=total_tracks_balances
     function testFuzz_deposit(address who, uint96 amount) public {
         vm.assume(who != address(0));
         vm.deal(who, amount);
@@ -226,6 +234,13 @@ The test imports `TipJarDeployer`, which Tama will generate in step 6.
 The deployer embeds the *exact bytecode* the Verity compiler produced for
 your contract — the same bytes you'd put on-chain. The fuzz test and the
 invariant check are the executable shadow of the proof you just wrote.
+
+Each `// tama: mirrors=<spec>` comment must sit directly above a
+`testFuzz*` or `invariant_*` function — putting a `mirrors=` tag on a
+plain `test_*` function is a build error. Tests without a `mirrors=`
+tag are ordinary Foundry tests and not tracked. The model is
+symmetric with the proof side: a spec is "covered" when at least one
+proof theorem discharges it and at least one Foundry test mirrors it.
 
 ## Step 6 — Build everything
 
@@ -272,15 +287,15 @@ audit:
   ✓ structure       all files present, bytecode hashes match
   ✓ selectors       6 functions agree across Verity / manifest / Yul / Solidity
   ✓ storage-layout  no overlap, all encodings recognized
-  ✓ coverage        every public obligation has a mirror
+  ✓ coverage        every spec has a discharger and a mirror
   ✓ trust-boundary  no sorry, axioms allowlisted
 ```
 
 The line that matters most is the last one. `trust-boundary` walks the
-Lean dependency graph of every theorem you tagged with a `-- tama: obligation`
-comment and refuses any reliance on `sorry` or unallowlisted axioms.
-That's the seal: the proofs are real, and they rest on a small set of
-named assumptions written down in `tama.toml`.
+Lean dependency graph of every theorem that discharges a spec and
+refuses any reliance on `sorry` or unallowlisted axioms. That's the
+seal: the proofs are real, and they rest on a small set of named
+assumptions written down in `tama.toml`.
 
 ## Step 8 — Watch the audit catch a bug
 
