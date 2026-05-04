@@ -10,51 +10,48 @@ import Callout from "../../components/Callout.astro";
 ## What counts as an obligation
 
 A **public contract obligation** is a theorem that part of your contract's
-contract-with-the-world depends on. In Verity terms: anything tagged
-`@[tama.obligation]` in `verity/proof/<Contract>Proof.lean`.
+contract-with-the-world depends on. In Verity terms: any theorem in
+`verity/proof/<Contract>Proof.lean` that has a `-- tama: obligation`
+comment on the line directly above it.
 
 `tama audit coverage` requires every public obligation to be either:
 
 - **mirrored** by a Foundry fuzz or invariant test, or
-- explicitly marked `@[tama.proof_only "<reason>"]` with a non-empty reason.
+- explicitly marked `coverage=proof_only reason="<reason>"` with a non-empty reason.
 
 Helper lemmas are *not* obligations and are not coverage-tracked. Mark
-them `@[tama.helper]` to be explicit, or just leave them untagged.
+them `-- tama: kind=helper` to be explicit, or just leave them untagged.
 
 ## A repeatable shape
 
-For each contract, the spec file usually has three kinds of statements:
+For each contract, the spec file usually has two kinds of statements:
 
 1. **Invariants** — properties of the storage that hold between calls.
 2. **Per-function postconditions** — what is true after a successful call.
-3. **Frame conditions** — which storage slots a function may have changed.
+
+The spec file is plain Lean — Tama's coverage tracking happens on the
+proof side, so spec defs don't need any `-- tama:` markers:
 
 ```lean
 namespace FooSpec
 
-@[tama.invariant]
 def total_in_range (s : Foo.State) : Prop :=
   s.total ≤ s.cap
 
-@[tama.postcondition Foo.mint]
 def mint_increases_total
     (pre post : Foo.State) (call : Foo.Call) : Prop :=
   post.total = pre.total + call.amount
 
-@[tama.frame Foo.mint]
-def mint_only_touches_balances : FrameSet := ⟨{ "balances", "total" }⟩
-
 end FooSpec
 ```
 
-Then in the proof file, prove that each function preserves each
-invariant, and that each call's postcondition follows from its inputs:
+In the proof file, prove that each function preserves each invariant,
+and tag each obligation theorem with a `-- tama:` metadata comment:
 
 ```lean
 namespace FooProof
 
-@[tama.obligation]
-@[tama.mirror "test/verity/Foo.t.sol:FooTest.invariant_totalInRange"]
+-- tama: obligation kind=invariant function=mint coverage=mirror path=test/verity/Foo.t.sol:FooTest.invariant_totalInRange
 theorem mint_preserves_total_in_range
     (pre : Foo.State) (call : Foo.Call)
     (h : FooSpec.total_in_range pre)
@@ -66,9 +63,14 @@ theorem mint_preserves_total_in_range
 end FooProof
 ```
 
+The keys are: `obligation` (marks the theorem as a public obligation),
+`kind=helper|invariant|postcondition`, `function=<name>`,
+`coverage=mirror|proof_only|none`, `path=<mirror path>`, and
+`reason="<text>"` for proof-only obligations.
+
 ## Mirror tests, in detail
 
-Every `@[tama.mirror "path:Symbol"]` annotation must point at:
+Every `coverage=mirror path=<path>:<symbol>` value must point at:
 
 - a file under Foundry's configured test directory (typically `test/`),
 - a contract-qualified Foundry symbol,
@@ -81,8 +83,7 @@ exercise the same universal statement the proof made, on real bytecode,
 under random inputs.
 
 ```lean
-@[tama.obligation]
-@[tama.mirror "test/verity/Foo.t.sol:FooTest.testFuzz_mintIncreasesTotal"]
+-- tama: obligation kind=postcondition function=mint coverage=mirror path=test/verity/Foo.t.sol:FooTest.testFuzz_mintIncreasesTotal
 theorem mint_increases_total : ... := by ...
 ```
 
@@ -102,8 +103,7 @@ useful executable shadow — for instance, "the storage encoding is
 collision-free for any pair of distinct mapping keys." Mark these:
 
 ```lean
-@[tama.obligation]
-@[tama.proof_only "quantifies over all key pairs; no concrete fuzz schedule covers it"]
+-- tama: obligation coverage=proof_only reason="quantifies over all key pairs; no concrete fuzz schedule covers it"
 theorem mapping_encoding_collision_free : ... := by ...
 ```
 
@@ -119,7 +119,7 @@ The intent: keep working contracts in a half-proven state during
 development; gate releases on a real proof.
 
 ```lean
-@[tama.obligation]
+-- tama: obligation kind=postcondition function=withdraw coverage=mirror path=test/verity/Foo.t.sol:FooTest.testFuzz_withdraw
 theorem withdraw_drops_total : ... := by
   sorry  -- ok locally, will fail audit
 ```
@@ -128,7 +128,7 @@ theorem withdraw_drops_total : ... := by
 There is no `tama.toml` switch to permit `sorryAx`. The audit is hard-coded
 to deny it. If a release CI is failing because an obligation hasn't been
 discharged, the answer is to discharge it (or mark it
-`@[tama.proof_only "..."]` with a real reason), not to bypass the gate.
+`coverage=proof_only reason="..."` with a real reason), not to bypass the gate.
 </Callout>
 
 ## Allowlisted axioms

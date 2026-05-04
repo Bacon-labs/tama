@@ -126,18 +126,15 @@ import TipJar
 namespace TipJarSpec
 
 /-- The recorded `total` is always the sum of every balance. -/
-@[tama.invariant]
 def total_tracks_balances (s : TipJar.State) : Prop :=
   s.total = s.balances.sumValues
 
 /-- After `deposit`, total grows by exactly `msg.value`. -/
-@[tama.postcondition TipJar.deposit]
 def deposit_increases_total
     (pre post : TipJar.State) (call : TipJar.Call) : Prop :=
   post.total = pre.total + call.value
 
 /-- After `withdraw`, total drops by exactly `amount`. -/
-@[tama.postcondition TipJar.withdraw]
 def withdraw_decreases_total
     (pre post : TipJar.State) (amount : UInt256) : Prop :=
   post.total = pre.total - amount
@@ -147,8 +144,9 @@ end TipJarSpec
 
 Three statements. The first is an **invariant** — a property the contract
 must preserve through every call. The next two are **postconditions** —
-properties of individual functions. Each is tagged with a `@[tama.…]`
-attribute so Tama knows to enforce coverage for it.
+properties of individual functions. The proof file (next step) is where
+Tama-visible markers go: each theorem proving one of these properties
+gets a `-- tama:` comment that tells Tama to enforce coverage for it.
 
 <Callout kind="proof" title="Why bother writing this down?">
 This is the contract's *intent* in the strongest possible form. Every test
@@ -165,8 +163,7 @@ import TipJarSpec
 
 namespace TipJarProof
 
-@[tama.obligation]
-@[tama.mirror "test/verity/TipJar.t.sol:TipJarTest.invariant_totalTracksBalances"]
+-- tama: obligation kind=invariant function=deposit coverage=mirror path=test/verity/TipJar.t.sol:TipJarTest.invariant_totalTracksBalances
 theorem deposit_preserves_invariant
     (pre : TipJar.State) (call : TipJar.Call)
     (h : TipJarSpec.total_tracks_balances pre) :
@@ -174,8 +171,7 @@ theorem deposit_preserves_invariant
   simp [TipJarSpec.total_tracks_balances, TipJar.deposit,
         Mapping.sumValues_update_add]
 
-@[tama.obligation]
-@[tama.mirror "test/verity/TipJar.t.sol:TipJarTest.invariant_totalTracksBalances"]
+-- tama: obligation kind=invariant function=withdraw coverage=mirror path=test/verity/TipJar.t.sol:TipJarTest.invariant_totalTracksBalances
 theorem withdraw_preserves_invariant
     (pre : TipJar.State) (amount : UInt256)
     (h : TipJarSpec.total_tracks_balances pre)
@@ -194,9 +190,10 @@ library takes care of the mapping arithmetic.
 [Verity's debugging-proofs guide](https://veritylang.com/guides/debugging-proofs)
 catalogues the tactics and error messages you'll meet most often.
 
-The two `@[tama.mirror "..."]` annotations point at a Foundry test
-we'll write next. This is what links a proven property to an executable
-fuzz test that exercises the same property on the real bytecode.
+The `coverage=mirror path=...` segment of each comment points at a
+Foundry test we'll write next. This is what links a proven property to
+an executable fuzz test that exercises the same property on the real
+bytecode.
 
 ## Step 5 — Write the mirror test
 
@@ -286,10 +283,10 @@ audit:
 ```
 
 The line that matters most is the last one. `trust-boundary` walks the
-Lean dependency graph of every theorem you tagged with `@[tama.obligation]`
-and refuses any reliance on `sorry` or unallowlisted axioms. That's the
-seal: the proofs are real, and they rest on a small set of named
-assumptions written down in `tama.toml`.
+Lean dependency graph of every theorem you tagged with a `-- tama: obligation`
+comment and refuses any reliance on `sorry` or unallowlisted axioms.
+That's the seal: the proofs are real, and they rest on a small set of
+named assumptions written down in `tama.toml`.
 
 ## Step 8 — Watch the audit catch a bug
 

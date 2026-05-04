@@ -71,7 +71,7 @@ language exposes as the framework moves forward.
 These are accepted at build time but rejected by `tama audit` so they
 can't reach a release:
 
-- `sorry` in any `@[tama.obligation]` theorem.
+- `sorry` in any `-- tama: obligation` theorem.
 - Axioms not listed in `[trust.allow_axioms]`.
 - Raw event emission gaps where the manifest expects events.
 - Low-level `call` / `delegatecall` / proxy mechanics.

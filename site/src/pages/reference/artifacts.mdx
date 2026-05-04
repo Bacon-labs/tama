@@ -87,7 +87,7 @@ Two complementary inputs feed `tama audit trust-boundary`:
 
 - `artifacts/trust-probe/axioms.json` (schema `tama.trust-probe.v1`)
   — the closure of axioms, unsafe declarations, and unresolved names
-  reachable from each `@[tama.obligation]` theorem, computed via
+  reachable from each `-- tama: obligation` theorem, computed via
   Lean's `collectAxioms`.
 - `artifacts/trust-report.json` and `artifacts/assumption-report.json`
   — Verity compiler outputs that localize unsupported or partially

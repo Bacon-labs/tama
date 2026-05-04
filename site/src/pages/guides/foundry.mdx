@@ -81,8 +81,9 @@ reads the manifest. For inspecting plain Solidity contracts, use
 
 A mirror test is just a Foundry test under `test/verity/`. It imports
 the generated `Iface` and `Deployer` and exercises the real Verity
-bytecode. The `@[tama.mirror "..."]` annotation in the proof file is
-the metadata link — `forge test` does not need to know about it.
+bytecode. The `coverage=mirror path=...` segment of the proof file's
+`-- tama:` comment is the metadata link — `forge test` does not need to
+know about it.
 
 ```solidity
 import {TipJarIface} from "src/generated/verity/TipJarIface.sol";

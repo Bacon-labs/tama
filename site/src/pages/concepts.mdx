@@ -80,17 +80,18 @@ elaborates all three.
 ### Obligation
 
 A **public contract obligation** is a theorem in the proof file marked
-with `@[tama.obligation]`. Tama treats it as part of the contract's
-public surface: it must be either covered by a Foundry mirror test or
-explicitly marked proof-only with a stated reason. Helper lemmas are
-*not* obligations — they're internal scaffolding.
+with a `-- tama: obligation` comment on the line above. Tama treats it
+as part of the contract's public surface: it must be either covered by
+a Foundry mirror test or explicitly marked proof-only with a stated
+reason. Helper lemmas are *not* obligations — they're internal scaffolding.
 
 ### Mirror test
 
 A Foundry test marked as the executable shadow of an obligation, via
-`@[tama.mirror "test/verity/Foo.t.sol:FooTest.invariant_…"]` on the
-theorem. The mirror function must be a fuzz test (`testFuzz*`) or a
-Foundry invariant (`invariant_*`) — not a one-shot example test.
+`coverage=mirror path=test/verity/Foo.t.sol:FooTest.invariant_…` on the
+theorem's `-- tama:` comment. The mirror function must be a fuzz test
+(`testFuzz*`) or a Foundry invariant (`invariant_*`) — not a one-shot
+example test.
 
 This is how a property and a fuzz test are bound together: the proof
 says "for all inputs, P holds"; the mirror exercises the same P on the
