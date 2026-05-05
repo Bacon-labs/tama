@@ -241,13 +241,12 @@ fn fetch_solc_list(platform: &str) -> Result<Vec<u8>> {
         let _ = std::fs::remove_file(&tmp);
         Error::Failure(format!("failed to publish {cache}: {err}"))
     })?;
-    std::fs::read(&cache)
-        .map_err(|err| Error::Failure(format!("failed to read {cache}: {err}")))
+    std::fs::read(&cache).map_err(|err| Error::Failure(format!("failed to read {cache}: {err}")))
 }
 
 fn read_if_fresh(path: &Utf8Path, ttl_secs: u64) -> Result<Vec<u8>> {
-    let meta = std::fs::metadata(path)
-        .map_err(|err| Error::Failure(format!("stat {path}: {err}")))?;
+    let meta =
+        std::fs::metadata(path).map_err(|err| Error::Failure(format!("stat {path}: {err}")))?;
     let modified = meta
         .modified()
         .map_err(|err| Error::Failure(format!("mtime {path}: {err}")))?;
@@ -279,9 +278,10 @@ fn parse_solc_release(
     }
     let list: List = serde_json::from_slice(list_bytes)
         .map_err(|err| Error::Failure(format!("failed to parse solc list.json: {err}")))?;
-    let path = list.releases.get(version).cloned().ok_or_else(|| {
-        Error::Failure(format!("solc {version} is not available for {platform}"))
-    })?;
+    let path =
+        list.releases.get(version).cloned().ok_or_else(|| {
+            Error::Failure(format!("solc {version} is not available for {platform}"))
+        })?;
     let sha256 = list
         .builds
         .into_iter()

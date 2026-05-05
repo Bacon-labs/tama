@@ -801,7 +801,6 @@ mod tests {
         assert!(!platform.contains("windows"));
     }
 
-
     #[test]
     fn website_install_command_matches_spec() {
         let root = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -1316,7 +1315,14 @@ mod tests {
         });
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
 
-        let err = install("stable", Some(manifest_path), true, false, &Palette::plain()).unwrap_err();
+        let err = install(
+            "stable",
+            Some(manifest_path),
+            true,
+            false,
+            &Palette::plain(),
+        )
+        .unwrap_err();
 
         assert!(err.contains("bad artifact SHA-256"));
         assert!(!home.exists());
@@ -1344,7 +1350,14 @@ mod tests {
         });
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
 
-        let err = install("stable", Some(manifest_path), true, false, &Palette::plain()).unwrap_err();
+        let err = install(
+            "stable",
+            Some(manifest_path),
+            true,
+            false,
+            &Palette::plain(),
+        )
+        .unwrap_err();
 
         assert_eq!(err, "offline install cannot download artifact");
         assert!(!home.exists());
@@ -1383,7 +1396,14 @@ mod tests {
         )
         .unwrap();
 
-        install("stable", Some(manifest_path), true, false, &Palette::plain()).unwrap();
+        install(
+            "stable",
+            Some(manifest_path),
+            true,
+            false,
+            &Palette::plain(),
+        )
+        .unwrap();
 
         assert!(home.join("versions/0.1.0/bin/tama").is_file());
         assert!(home.join("versions/0.1.0/bin/tamaup").is_file());
@@ -1424,7 +1444,14 @@ mod tests {
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
 
         // Should short-circuit before touching the archive: no error.
-        install("stable", Some(manifest_path), true, false, &Palette::plain()).unwrap();
+        install(
+            "stable",
+            Some(manifest_path),
+            true,
+            false,
+            &Palette::plain(),
+        )
+        .unwrap();
 
         assert_eq!(fs::read(bin_dir.join("tama")).unwrap(), b"installed tama");
     }
@@ -1508,7 +1535,14 @@ mod tests {
         });
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
 
-        install("stable", Some(manifest_path), true, false, &Palette::plain()).unwrap();
+        install(
+            "stable",
+            Some(manifest_path),
+            true,
+            false,
+            &Palette::plain(),
+        )
+        .unwrap();
 
         assert_eq!(
             fs::read(home.join("versions/0.1.0/bin/tama")).unwrap(),
