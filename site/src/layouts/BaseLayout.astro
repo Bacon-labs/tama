@@ -9,6 +9,10 @@ interface Props {
   description?: string;
   ogTitle?: string;
   ogImage?: string;
+  ogImageAlt?: string;
+  ogImageWidth?: number;
+  ogImageHeight?: number;
+  ogImageType?: string;
   bodyClass?: string;
   hideFooter?: boolean;
 }
@@ -17,13 +21,19 @@ const {
   title,
   description = "Tama is the Verity toolchain for Ethereum. Write a smart contract, prove what it must do, and ship the same bytecode the proof is about.",
   ogTitle,
-  ogImage,
+  ogImage = "/social-card.png",
+  ogImageAlt = "Tama wordmark with a red seal mark and the tagline Provably secure Ethereum smart contracts.",
+  ogImageWidth = 1200,
+  ogImageHeight = 630,
+  ogImageType = "image/png",
   bodyClass = "",
   hideFooter = false,
 } = Astro.props;
 
 const fullTitle = title === "Tama" ? "Tama — verified Ethereum smart contracts" : `${title} · Tama`;
-const canonical = new URL(Astro.url.pathname, Astro.site ?? "https://tama.tools").toString();
+const siteUrl = Astro.site ?? "https://tama.tools";
+const canonical = new URL(Astro.url.pathname, siteUrl).toString();
+const socialImage = new URL(ogImage, siteUrl).toString();
 ---
 
 <!doctype html>
@@ -43,11 +53,18 @@ const canonical = new URL(Astro.url.pathname, Astro.site ?? "https://tama.tools"
     <meta property="og:type" content="website" />
     <meta property="og:url" content={canonical} />
     <meta property="og:site_name" content="Tama" />
-    {ogImage && <meta property="og:image" content={ogImage} />}
+    <meta property="og:image" content={socialImage} />
+    <meta property="og:image:secure_url" content={socialImage} />
+    <meta property="og:image:type" content={ogImageType} />
+    <meta property="og:image:width" content={ogImageWidth.toString()} />
+    <meta property="og:image:height" content={ogImageHeight.toString()} />
+    <meta property="og:image:alt" content={ogImageAlt} />
 
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={ogTitle ?? fullTitle} />
     <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={socialImage} />
+    <meta name="twitter:image:alt" content={ogImageAlt} />
 
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="alternate icon" href="/favicon.svg" />
