@@ -1169,19 +1169,29 @@ mod tests {
     }
 
     #[test]
-    fn lean_requirement_accepts_compatible_patches_and_rejects_drift() {
+    fn lean_requirement_accepts_realistic_patch_drift() {
+        // Real `lean --version` output across compatible patches. The original bug
+        // was an exact `4.22.0` token match that rejected every other patch in the
+        // 4.22.x line on otherwise-working installs.
         let req = VersionReq::parse(DEFAULT_LEAN_REQ).unwrap();
         for output in [
-            "Lean (version 4.22.0, x86_64-unknown-linux-gnu)",
-            "Lean (version 4.22.5, x86_64-unknown-linux-gnu)",
-            "Lean (version 4.23.0, x86_64-unknown-linux-gnu)",
+            "Lean (version 4.22.0, x86_64-unknown-linux-gnu, commit 28bd58c41a3a, Release)",
+            "Lean (version 4.22.1, x86_64-unknown-linux-gnu, commit deadbeefcafe, Release)",
+            "Lean (version 4.22.5, aarch64-apple-darwin, commit 1234567890ab, Release)",
+            "Lean (version 4.23.0, x86_64-unknown-linux-gnu, commit abc123def456, Release)",
         ] {
             let version = tama_toolchain::parse_lean_version(output).unwrap();
             assert!(req.matches(&version), "expected {version} to satisfy {req}");
         }
+    }
+
+    #[test]
+    fn lean_requirement_rejects_incompatible_versions() {
+        let req = VersionReq::parse(DEFAULT_LEAN_REQ).unwrap();
         for output in [
-            "Lean (version 4.21.0, x86_64-unknown-linux-gnu)",
-            "Lean (version 5.0.0, x86_64-unknown-linux-gnu)",
+            "Lean (version 4.21.0, x86_64-unknown-linux-gnu, commit aaaa, Release)",
+            "Lean (version 4.0.0, x86_64-unknown-linux-gnu, commit bbbb, Release)",
+            "Lean (version 5.0.0, x86_64-unknown-linux-gnu, commit cccc, Release)",
         ] {
             let version = tama_toolchain::parse_lean_version(output).unwrap();
             assert!(!req.matches(&version), "expected {version} to fail {req}");
@@ -1189,12 +1199,67 @@ mod tests {
     }
 
     #[test]
-    fn solc_requirement_pins_exact_version() {
+    fn solc_requirement_accepts_realistic_version_output() {
+        // Real `solc --version` carries a `+commit.<sha>.<platform>.<compiler>`
+        // tail; the trailing `g++` is invalid semver build metadata, so the
+        // parser must work on the X.Y.Z core only.
         let req = VersionReq::parse(DEFAULT_SOLC_REQ).unwrap();
-        let ok = tama_toolchain::parse_solc_version("Version: 0.8.33+commit.64118f21").unwrap();
-        assert!(req.matches(&ok));
-        let drift = tama_toolchain::parse_solc_version("Version: 0.8.32+commit.64118f21").unwrap();
-        assert!(!req.matches(&drift));
+        let output = "solc, the solidity compiler commandline interface\n\
+                      Version: 0.8.33+commit.64118f21.Linux.g++";
+        let version = tama_toolchain::parse_solc_version(output).unwrap();
+        assert!(req.matches(&version));
+    }
+
+    #[test]
+    fn solc_requirement_rejects_patch_drift() {
+        // Solc bytecode is not stable across patches; pin must be exact.
+        let req = VersionReq::parse(DEFAULT_SOLC_REQ).unwrap();
+        for output in [
+            "Version: 0.8.32+commit.64118f21.Linux.g++",
+            "Version: 0.8.34+commit.64118f21.Linux.g++",
+            "Version: 0.9.0+commit.64118f21.Linux.g++",
+        ] {
+            let version = tama_toolchain::parse_solc_version(output).unwrap();
+            assert!(!req.matches(&version), "expected {version} to fail {req}");
+        }
+    }
+
+    #[test]
+    fn default_lean_toolchain_satisfies_lean_requirement() {
+        // Invariant: if bootstrap installs DEFAULT_LEAN_TOOLCHAIN, the resulting
+        // `lean --version` must satisfy DEFAULT_LEAN_REQ. Otherwise tamaup would
+        // install a toolchain it then immediately rejects.
+        let installed = DEFAULT_LEAN_TOOLCHAIN
+            .strip_prefix("leanprover/lean4:v")
+            .and_then(|v| Version::parse(v).ok())
+            .expect("DEFAULT_LEAN_TOOLCHAIN must be `leanprover/lean4:vX.Y.Z`");
+        let req = VersionReq::parse(DEFAULT_LEAN_REQ).unwrap();
+        assert!(
+            req.matches(&installed),
+            "DEFAULT_LEAN_TOOLCHAIN {installed} does not satisfy DEFAULT_LEAN_REQ {req}"
+        );
+    }
+
+    #[test]
+    fn default_solc_version_satisfies_solc_requirement() {
+        // Same invariant for solc: `solc-select install <DEFAULT_SOLC_VERSION>`
+        // must produce a binary that satisfies DEFAULT_SOLC_REQ.
+        let installed = Version::parse(DEFAULT_SOLC_VERSION).unwrap();
+        let req = VersionReq::parse(DEFAULT_SOLC_REQ).unwrap();
+        assert!(
+            req.matches(&installed),
+            "DEFAULT_SOLC_VERSION {installed} does not satisfy DEFAULT_SOLC_REQ {req}"
+        );
+    }
+
+    #[test]
+    fn unparsable_version_output_errors_cleanly() {
+        // An elan shim with no default toolchain prints something like the line
+        // below to stderr; the parser must error rather than panic so the tool
+        // is reported as missing/incompatible without crashing tamaup.
+        assert!(tama_toolchain::parse_lean_version("error: no default toolchain configured").is_err());
+        assert!(tama_toolchain::parse_solc_version("solc-select: 0.8.33 not installed").is_err());
+        assert!(tama_toolchain::parse_lean_version("").is_err());
     }
 
     #[test]
