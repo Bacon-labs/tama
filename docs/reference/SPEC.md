@@ -1,6 +1,6 @@
 # Tama — Verity Developer Toolchain
 
-**Authors:** Zefram (Foglight)  
+**Authors:** zefram.eth
 **Modeled after:** Foundry (`forge`, `foundryup`), Cargo, Rustup
 
 ---

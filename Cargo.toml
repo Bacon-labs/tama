@@ -17,9 +17,9 @@ resolver = "2"
 edition = "2021"
 version = "0.1.0"
 rust-version = "1.81"
-license = "MIT OR Apache-2.0"
-authors = ["Zefram (Foglight)"]
-repository = "https://github.com/foglight-labs/tama"
+license = "MIT"
+authors = ["zefram.eth"]
+repository = "https://github.com/bacon-labs/tama"
 
 [workspace.dependencies]
 anstream = "0.6"
