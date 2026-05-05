@@ -96,20 +96,20 @@ Schema string: `"schema": "tama.contract-manifest.v1"`.
     "deployer":          "src/generated/verity/ERC20LiteDeployer.sol"
   },
 
-  // Public obligations and their mirror coverage.
+  // One entry per top-level definition in the spec file.
   "obligations": [
     {
-      "id":        "ERC20Lite.transfer_preserves_total_supply",
-      "name":      "transfer_preserves_total_supply",
-      "kind":      "invariant",
-      "lean_decl": "proof.ERC20LiteProof.transfer_preserves_total_supply",
-      "contract":  "ERC20Lite",
-      "function":  "transfer",
-      "coverage": {
-        "disposition": "mirror",
-        "path": "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply",
-        "reason": null
-      }
+      "id":          "ERC20Lite.transfer_preserves_total_supply",
+      "name":        "transfer_preserves_total_supply",
+      "lean_decl":   "spec.ERC20LiteSpec.transfer_preserves_total_supply",
+      "contract":    "ERC20Lite",
+      "dischargers": [
+        "proof.ERC20LiteProof.transfer_total_supply_preserved_after_run"
+      ],
+      "mirrors": [
+        "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply"
+      ],
+      "proof_only_reason": null
     }
   ]
 }
@@ -168,21 +168,21 @@ full build.
 
 ### `obligations`
 
-One entry per `-- tama: obligation` theorem.
+One entry per top-level definition in the spec file.
 
-| Field          | Meaning                                                        |
-| -------------- | -------------------------------------------------------------- |
-| `id`           | Stable identifier (`<Contract>.<theorem>`).                    |
-| `name`         | Theorem name as written.                                       |
-| `kind`         | One of `invariant`, `postcondition`, `frame`.                  |
-| `lean_decl`    | Fully qualified Lean declaration name.                         |
-| `function`     | The contract function the obligation is about (if applicable). |
-| `coverage`     | See below.                                                     |
+| Field                | Meaning                                                                  |
+| -------------------- | ------------------------------------------------------------------------ |
+| `id`                 | Stable identifier (`<Contract>.<spec_name>`).                            |
+| `name`               | Spec definition name as written.                                         |
+| `lean_decl`          | Fully qualified Lean declaration name of the spec def.                   |
+| `contract`           | The contract this obligation belongs to.                                 |
+| `dischargers`        | Array of fully qualified theorem decls (proof side) that discharge this. |
+| `mirrors`            | Array of `<file>:<sol_contract>.<sol_function>` mirror references.       |
+| `proof_only_reason`  | Non-empty string from `[coverage.proof_only]`, or `null`.                |
 
-`coverage.disposition` is one of:
-
-- `mirror` — `path` points at a `testFuzz*` or `invariant_*` symbol.
-- `proof_only` — `reason` is a non-empty string explaining why no mirror exists.
+An obligation is valid when `dischargers` is non-empty AND
+(`mirrors` is non-empty XOR `proof_only_reason` is set). Anything else
+fails manifest validation.
 
 <Callout kind="seal" title="Why a manifest at all?">
 Without a manifest, every downstream audit would have to re-parse Verity

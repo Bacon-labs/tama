@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -8,9 +9,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tama_config::{TamaConfig, TamaLock};
 use tama_manifest::{
-    Abi, ArtifactPaths, Constructor, ContractManifest, Coverage, CoverageDisposition, ErrorEntry,
-    Event, Function, LeanModules, Obligation, ObligationKind, Param, SourcePaths, StorageEntry,
-    SCHEMA,
+    Abi, ArtifactPaths, Constructor, ContractManifest, ErrorEntry, Event, Function, LeanModules,
+    Obligation, Param, SourcePaths, StorageEntry, SCHEMA,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -519,7 +519,6 @@ pub fn adapt_verity_outputs(
         .map_err(|source| tama_common::io_error(manifest_dir.clone(), source))?;
     let storage_report =
         read_json_required(&root.join(config.paths.out.join("layout-report.json")))?;
-    let mut manifests = Vec::new();
     let mut abi_paths = Vec::new();
     for entry in
         fs::read_dir(&abi_dir).map_err(|source| tama_common::io_error(abi_dir.clone(), source))?
@@ -535,12 +534,11 @@ pub fn adapt_verity_outputs(
         abi_paths.push(path);
     }
     abi_paths.sort();
-    for path in abi_paths {
+
+    let mut all_contracts: Vec<(String, Utf8PathBuf, SourcePaths)> = Vec::new();
+    for path in &abi_paths {
         let contract =
-            contract_name_from_abi_path(&path).ok_or_else(|| Error::Adapter(path.to_string()))?;
-        if contract_filter.is_some_and(|filter| filter != contract) {
-            continue;
-        }
+            contract_name_from_abi_path(path).ok_or_else(|| Error::Adapter(path.to_string()))?;
         let yul = yul_dir.join(format!("{contract}.yul"));
         if !yul.is_file() {
             return Err(Error::MissingArtifact {
@@ -554,19 +552,72 @@ pub fn adapt_verity_outputs(
             proof: config.paths.proof.join(format!("{contract}Proof.lean")),
         };
         require_contract_files(root, &contract, &source)?;
+        all_contracts.push((contract, path.clone(), source));
+    }
+
+    let mut specs_by_contract: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut spec_owner: BTreeMap<String, String> = BTreeMap::new();
+    for (contract, _, source) in &all_contracts {
+        let names = extract_specs(&root.join(&source.spec))?;
+        for name in &names {
+            if let Some(prev) = spec_owner.insert(name.clone(), contract.clone()) {
+                return Err(Error::Adapter(format!(
+                    "spec name `{name}` is defined in both `{prev}` and `{contract}`"
+                )));
+            }
+        }
+        specs_by_contract.insert(contract.clone(), names);
+    }
+
+    let mirrors_index = match parse_foundry_test_dir(root)? {
+        Some(test_dir) => extract_mirrors(root, &test_dir, &spec_owner)?,
+        None => BTreeMap::new(),
+    };
+
+    let known_proof_only_keys: BTreeSet<String> = specs_by_contract
+        .iter()
+        .flat_map(|(contract, specs)| specs.iter().map(move |name| format!("{contract}.{name}")))
+        .collect();
+    for key in config.coverage.proof_only.keys() {
+        if !known_proof_only_keys.contains(key.as_str()) {
+            return Err(Error::Adapter(format!(
+                "[coverage.proof_only] entry `{key}` does not match any known obligation"
+            )));
+        }
+    }
+
+    let mut manifests = Vec::new();
+    for (contract, abi_path, source) in all_contracts {
+        if contract_filter.is_some_and(|filter| filter != contract) {
+            continue;
+        }
         let proof_module = format!("proof.{contract}Proof");
+        let spec_module = format!("spec.{contract}Spec");
+        let specs = specs_by_contract
+            .get(&contract)
+            .cloned()
+            .unwrap_or_default();
+        let dischargers = extract_dischargers(&root.join(&source.proof), &proof_module, &specs)?;
+        let obligations = merge_obligations(
+            &contract,
+            &spec_module,
+            &specs,
+            &dischargers,
+            &mirrors_index,
+            &config.coverage.proof_only,
+        );
         let manifest = ContractManifest {
             schema: SCHEMA.to_string(),
             contract: contract.clone(),
             source,
             lean: LeanModules {
                 implementation_module: format!("src.{contract}"),
-                spec_module: format!("spec.{contract}Spec"),
-                proof_module: proof_module.clone(),
+                spec_module,
+                proof_module,
             },
-            abi: parse_abi(&path)?,
+            abi: parse_abi(&abi_path)?,
             storage: parse_storage(&storage_report, &contract)?,
-            obligations: extract_obligations(root, config, &contract, &proof_module)?,
+            obligations,
             artifacts: ArtifactPaths {
                 yul: config.paths.out.join("yul").join(format!("{contract}.yul")),
                 creation_bytecode: config
@@ -605,6 +656,16 @@ pub fn adapt_verity_outputs(
         return Err(Error::Adapter("no ABI/Yul outputs found".to_string()));
     }
     Ok(manifests)
+}
+
+fn parse_foundry_test_dir(root: &Utf8Path) -> Result<Option<Utf8PathBuf>> {
+    let foundry = tama_config::parse_foundry_config(root)?;
+    let test_dir = root.join(&foundry.test);
+    if test_dir.is_dir() {
+        Ok(Some(test_dir))
+    } else {
+        Ok(None)
+    }
 }
 
 fn require_contract_files(root: &Utf8Path, contract: &str, source: &SourcePaths) -> Result<()> {
@@ -1384,184 +1445,338 @@ fn storage_type(value: &Value, contract: &str, field: &str) -> Result<(String, S
     }
 }
 
-fn extract_obligations(
-    root: &Utf8Path,
-    config: &TamaConfig,
-    contract: &str,
-    proof_module: &str,
-) -> Result<Vec<Obligation>> {
-    let proof_path = root.join(config.paths.proof.join(format!("{contract}Proof.lean")));
-    if !proof_path.is_file() {
+fn extract_specs(spec_path: &Utf8Path) -> Result<Vec<String>> {
+    if !spec_path.is_file() {
         return Ok(Vec::new());
     }
-    let text = tama_common::read_to_string(&proof_path)?;
+    let text = tama_common::read_to_string(spec_path)?;
+    let stripped = strip_lean_block_comments(&text);
+    let def_re = Regex::new(r"^def\s+([A-Za-z_][A-Za-z0-9_']*)").expect("valid def regex");
+    let gen_spec_re =
+        Regex::new(r"^#gen_spec\s+([A-Za-z_][A-Za-z0-9_']*)").expect("valid gen_spec regex");
+    let mut names = Vec::new();
+    for raw in stripped.lines() {
+        if raw.is_empty() || raw.starts_with(|ch: char| ch.is_whitespace()) {
+            continue;
+        }
+        if raw.starts_with("--") {
+            if raw.trim_start().starts_with("-- tama:") {
+                return Err(Error::Adapter(format!(
+                    "{spec_path}: spec files must not carry `-- tama:` comments — coverage and discharge tags live on tests and proofs"
+                )));
+            }
+            continue;
+        }
+        if let Some(captures) = def_re.captures(raw) {
+            names.push(captures.get(1).unwrap().as_str().to_string());
+            continue;
+        }
+        if let Some(captures) = gen_spec_re.captures(raw) {
+            names.push(captures.get(1).unwrap().as_str().to_string());
+            continue;
+        }
+        let allowed = ["import", "namespace", "open", "end"]
+            .iter()
+            .any(|kw| top_level_keyword(raw, kw));
+        if !allowed {
+            return Err(Error::Adapter(format!(
+                "spec module {spec_path} contains forbidden top-level form: `{}`",
+                raw.trim_end()
+            )));
+        }
+    }
+    Ok(names)
+}
+
+fn top_level_keyword(line: &str, keyword: &str) -> bool {
+    if !line.starts_with(keyword) {
+        return false;
+    }
+    match line.as_bytes().get(keyword.len()) {
+        None => true,
+        Some(byte) => !(byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'\''),
+    }
+}
+
+fn extract_dischargers(
+    proof_path: &Utf8Path,
+    proof_module: &str,
+    known_specs: &[String],
+) -> Result<HashMap<String, Vec<String>>> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    if !proof_path.is_file() {
+        return Ok(map);
+    }
+    let text = tama_common::read_to_string(proof_path)?;
     let theorem_re = Regex::new(
-        r"^\s*(?:@\[[^\]]*\]\s*)*(?:(?:private|protected)\s+)*(?:theorem|lemma)\s+([A-Za-z_][A-Za-z0-9_.']*)\b",
+        r"^\s*(?:@\[[^\]]*\]\s*)*(?:(?:private|protected)\s+)*(?:theorem|lemma)\s+([A-Za-z_][A-Za-z0-9_.']*)",
     )
     .expect("valid theorem regex");
-    let mut obligations = Vec::new();
-    let mut pending = ObligationMeta::default();
-    for line in strip_lean_block_comments(&text).lines() {
+    let stripped = strip_lean_block_comments(&text);
+    let known: BTreeSet<&str> = known_specs.iter().map(String::as_str).collect();
+    let mut pending: Vec<String> = Vec::new();
+    for line in stripped.lines() {
         let trimmed = line.trim();
-        let metadata_line = parse_obligation_metadata(trimmed, &proof_path, &mut pending)?;
-        if let Some(captures) = theorem_re.captures(trimmed) {
-            if let Some(meta) = pending.take_if_obligation() {
-                let Some(name_match) = captures.get(1) else {
+        if let Some(raw) = trimmed.strip_prefix("-- tama:") {
+            let values = parse_key_values(raw);
+            for key in values.keys() {
+                if key.as_str() != "discharges" {
                     return Err(Error::Adapter(format!(
-                        "failed to parse theorem name in {proof_path}"
+                        "{proof_path}: unsupported Tama metadata key `{key}` (proof tags accept only `discharges=`)"
                     )));
-                };
-                let name = name_match.as_str();
-                obligations.push(Obligation {
-                    id: format!("{contract}.{name}"),
-                    name: name.to_string(),
-                    kind: meta.kind.unwrap_or(ObligationKind::Postcondition),
-                    lean_decl: format!("{proof_module}.{name}"),
-                    contract: contract.to_string(),
-                    function: meta.function,
-                    coverage: meta.coverage,
-                });
+                }
             }
-            pending = ObligationMeta::default();
-        } else if !metadata_line && !trimmed.is_empty() && !trimmed.starts_with("@[") {
-            pending = ObligationMeta::default();
+            if let Some(value) = values.get("discharges") {
+                for spec in value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    if !known.contains(spec) {
+                        return Err(Error::Adapter(format!(
+                            "{proof_path}: discharges=`{spec}` does not match any spec in this contract"
+                        )));
+                    }
+                    pending.push(spec.to_string());
+                }
+            }
+            continue;
+        }
+        if let Some(captures) = theorem_re.captures(trimmed) {
+            if !pending.is_empty() {
+                let name = captures.get(1).unwrap().as_str();
+                let decl = format!("{proof_module}.{name}");
+                for spec in pending.drain(..) {
+                    map.entry(spec).or_default().push(decl.clone());
+                }
+            }
+            continue;
+        }
+        if !trimmed.is_empty() && !trimmed.starts_with("--") && !trimmed.starts_with("@[") {
+            pending.clear();
         }
     }
-    Ok(obligations)
+    Ok(map)
 }
 
-#[derive(Debug, Clone)]
-struct ObligationMeta {
-    tagged: bool,
-    kind: Option<ObligationKind>,
-    function: Option<String>,
-    coverage: Coverage,
+fn extract_mirrors(
+    root: &Utf8Path,
+    test_dir: &Utf8Path,
+    spec_owner: &BTreeMap<String, String>,
+) -> Result<BTreeMap<(String, String), Vec<String>>> {
+    let mut out: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    let function_re =
+        Regex::new(r"^\s*function\s+(testFuzz[A-Za-z0-9_]*|invariant_[A-Za-z0-9_]*)\s*\(")
+            .expect("valid function regex");
+    let any_function_re = Regex::new(r"^\s*function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+        .expect("valid any function regex");
+    let contract_re = Regex::new(r"^\s*(?:abstract\s+)?contract\s+([A-Za-z_][A-Za-z0-9_]*)\b")
+        .expect("valid contract regex");
+    walk_test_files(test_dir, &mut |path| {
+        let text = tama_common::read_to_string(path)?;
+        let rel = path
+            .strip_prefix(root)
+            .map(Utf8Path::to_path_buf)
+            .unwrap_or_else(|_| path.to_path_buf());
+        let mut current_contract: Option<String> = None;
+        let mut pending: Vec<String> = Vec::new();
+        let mut brace_depth: i32 = 0;
+        let mut in_block_comment = false;
+        for raw in text.lines() {
+            if in_block_comment {
+                if let Some(idx) = raw.find("*/") {
+                    let rest = &raw[idx + 2..];
+                    in_block_comment = false;
+                    if rest.trim().is_empty() {
+                        continue;
+                    }
+                    // Treat the post-`*/` remainder as a fresh logical line; fall through.
+                    let trimmed = rest.trim();
+                    if trimmed.starts_with("/*") {
+                        in_block_comment = true;
+                        continue;
+                    }
+                    brace_depth += count_brace_delta(rest);
+                    continue;
+                } else {
+                    continue;
+                }
+            }
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some(tag) = trimmed.strip_prefix("// tama:") {
+                if brace_depth > 1 {
+                    continue;
+                }
+                let values = parse_key_values(tag);
+                for key in values.keys() {
+                    if key.as_str() != "mirrors" {
+                        return Err(Error::Adapter(format!(
+                            "{rel}: unsupported Tama metadata key `{key}` (mirror tags accept only `mirrors=`)"
+                        )));
+                    }
+                }
+                if let Some(value) = values.get("mirrors") {
+                    for spec in value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                        pending.push(spec.to_string());
+                    }
+                }
+                continue;
+            }
+            if trimmed.starts_with("//") || trimmed.starts_with('*') {
+                continue;
+            }
+            if let Some(after) = trimmed.strip_prefix("/*") {
+                if !after.contains("*/") {
+                    in_block_comment = true;
+                }
+                continue;
+            }
+            let mut consumed = false;
+            if brace_depth <= 1 {
+                if let Some(captures) = contract_re.captures(raw) {
+                    current_contract = Some(captures.get(1).unwrap().as_str().to_string());
+                    pending.clear();
+                    consumed = true;
+                } else if let Some(captures) = function_re.captures(raw) {
+                    if !pending.is_empty() {
+                        let func = captures.get(1).unwrap().as_str();
+                        let Some(sol_contract) = current_contract.as_deref() else {
+                            return Err(Error::Adapter(format!(
+                                "{rel}: mirror tag above `{func}` is outside any `contract` block"
+                            )));
+                        };
+                        let mirror_path = format!("{rel}:{sol_contract}.{func}");
+                        for spec in pending.drain(..) {
+                            let Some(owner) = spec_owner.get(&spec) else {
+                                return Err(Error::Adapter(format!(
+                                    "{rel}: mirrors=`{spec}` does not match any known spec"
+                                )));
+                            };
+                            out.entry((owner.clone(), spec))
+                                .or_default()
+                                .push(mirror_path.clone());
+                        }
+                    }
+                    consumed = true;
+                } else if let Some(captures) = any_function_re.captures(raw) {
+                    if !pending.is_empty() {
+                        let func = captures.get(1).unwrap().as_str();
+                        return Err(Error::Adapter(format!(
+                            "{rel}: mirror tag on non-property-shaped test `{func}` (must be testFuzz* or invariant_*)"
+                        )));
+                    }
+                    consumed = true;
+                }
+            }
+            if !consumed {
+                pending.clear();
+            }
+            brace_depth += count_brace_delta(raw);
+        }
+        Ok(())
+    })?;
+    Ok(out)
 }
 
-impl Default for ObligationMeta {
-    fn default() -> Self {
-        Self {
-            tagged: false,
-            kind: None,
-            function: None,
-            coverage: Coverage {
-                disposition: CoverageDisposition::None,
-                path: None,
-                reason: None,
-            },
+fn count_brace_delta(line: &str) -> i32 {
+    let mut delta = 0i32;
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let ch = bytes[i];
+        if ch == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            return delta;
         }
+        if ch == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = i.saturating_add(2).min(bytes.len());
+            continue;
+        }
+        if ch == b'"' || ch == b'\'' {
+            let quote = ch;
+            i += 1;
+            while i < bytes.len() && bytes[i] != quote {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            if i < bytes.len() {
+                i += 1;
+            }
+            continue;
+        }
+        if ch == b'{' {
+            delta += 1;
+        } else if ch == b'}' {
+            delta -= 1;
+        }
+        i += 1;
     }
+    delta
 }
 
-impl ObligationMeta {
-    fn take_if_obligation(&self) -> Option<Self> {
-        if self.tagged || self.kind.is_some() {
-            Some(self.clone())
-        } else {
-            None
-        }
+fn walk_test_files<F>(dir: &Utf8Path, visit: &mut F) -> Result<()>
+where
+    F: FnMut(&Utf8Path) -> Result<()>,
+{
+    let entries =
+        fs::read_dir(dir).map_err(|source| tama_common::io_error(dir.to_owned(), source))?;
+    let mut paths: Vec<Utf8PathBuf> = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| tama_common::io_error(dir.to_owned(), source))?;
+        let path = Utf8PathBuf::from_path_buf(entry.path())
+            .map_err(|p| tama_common::Error::NonUtf8Path(p.display().to_string()))?;
+        paths.push(path);
     }
-}
-
-fn parse_obligation_metadata(
-    line: &str,
-    proof_path: &Utf8Path,
-    meta: &mut ObligationMeta,
-) -> Result<bool> {
-    let mut parsed = false;
-    if let Some(raw) = line.trim_start().strip_prefix("-- tama:") {
-        parsed = true;
-        apply_tama_metadata(raw, proof_path, meta)?;
-    }
-    Ok(parsed)
-}
-
-fn apply_tama_metadata(raw: &str, proof_path: &Utf8Path, meta: &mut ObligationMeta) -> Result<()> {
-    let values = parse_key_values(raw);
-    for key in values.keys() {
-        if !tama_metadata_key_supported(key) {
-            return Err(Error::Adapter(format!(
-                "unsupported Tama metadata key `{key}` in {proof_path}"
-            )));
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            walk_test_files(&path, visit)?;
+            continue;
         }
-    }
-    if values.contains_key("obligation") {
-        meta.tagged = true;
-    }
-    match values.get("kind").map(String::as_str) {
-        Some("helper") => {
-            meta.tagged = true;
-            meta.kind = Some(ObligationKind::Helper);
+        if path
+            .file_name()
+            .map(|name| name.ends_with(".t.sol"))
+            .unwrap_or(false)
+        {
+            visit(&path)?;
         }
-        Some("invariant") => {
-            meta.tagged = true;
-            meta.kind = Some(ObligationKind::Invariant);
-        }
-        Some("postcondition") => {
-            meta.tagged = true;
-            meta.kind = Some(ObligationKind::Postcondition);
-        }
-        _ if values.contains_key("helper") => {
-            meta.tagged = true;
-            meta.kind = Some(ObligationKind::Helper);
-        }
-        _ if values.contains_key("invariant") => {
-            meta.tagged = true;
-            meta.kind = Some(ObligationKind::Invariant);
-        }
-        _ if values.contains_key("postcondition") => {
-            meta.tagged = true;
-            meta.kind = Some(ObligationKind::Postcondition);
-        }
-        Some(kind) => {
-            return Err(Error::Adapter(format!(
-                "unsupported Tama obligation kind `{kind}` in {proof_path}"
-            )));
-        }
-        _ => {}
-    }
-    if let Some(function) = values.get("function").filter(|value| !value.is_empty()) {
-        meta.function = Some(function.clone());
-    }
-    match values.get("coverage").map(String::as_str) {
-        Some("mirror") => {
-            meta.coverage.disposition = CoverageDisposition::Mirror;
-            meta.coverage.path = values.get("path").cloned();
-            meta.coverage.reason = None;
-        }
-        Some("proof_only") => {
-            meta.coverage.disposition = CoverageDisposition::ProofOnly;
-            meta.coverage.path = None;
-            meta.coverage.reason = values.get("reason").cloned();
-        }
-        Some("none") => {
-            meta.coverage.disposition = CoverageDisposition::None;
-            meta.coverage.path = None;
-            meta.coverage.reason = None;
-        }
-        Some(coverage) => {
-            return Err(Error::Adapter(format!(
-                "unsupported Tama coverage disposition `{coverage}` in {proof_path}"
-            )));
-        }
-        _ => {}
     }
     Ok(())
 }
 
-fn tama_metadata_key_supported(key: &str) -> bool {
-    matches!(
-        key,
-        "obligation"
-            | "kind"
-            | "function"
-            | "coverage"
-            | "path"
-            | "reason"
-            | "helper"
-            | "invariant"
-            | "postcondition"
-    )
+fn merge_obligations(
+    contract: &str,
+    spec_module: &str,
+    specs: &[String],
+    dischargers: &HashMap<String, Vec<String>>,
+    mirrors: &BTreeMap<(String, String), Vec<String>>,
+    proof_only: &BTreeMap<String, String>,
+) -> Vec<Obligation> {
+    let mut out = Vec::with_capacity(specs.len());
+    for name in specs {
+        let id = format!("{contract}.{name}");
+        let dischargers_for_spec = dischargers.get(name).cloned().unwrap_or_default();
+        let mirrors_for_spec = mirrors
+            .get(&(contract.to_string(), name.clone()))
+            .cloned()
+            .unwrap_or_default();
+        let proof_only_reason = proof_only.get(&id).cloned();
+        out.push(Obligation {
+            id,
+            name: name.clone(),
+            lean_decl: format!("{spec_module}.{name}"),
+            contract: contract.to_string(),
+            dischargers: dischargers_for_spec,
+            mirrors: mirrors_for_spec,
+            proof_only_reason,
+        });
+    }
+    out
 }
 
 fn parse_key_values(raw: &str) -> std::collections::BTreeMap<String, String> {
@@ -1649,14 +1864,9 @@ fn generate_trust_probe(
     config: &TamaConfig,
     manifests: &[ContractManifest],
 ) -> Result<()> {
-    let public_obligations = manifests
+    let obligations = manifests
         .iter()
-        .flat_map(|manifest| {
-            manifest
-                .obligations
-                .iter()
-                .filter(|obligation| obligation.kind != ObligationKind::Helper)
-        })
+        .flat_map(|manifest| manifest.obligations.iter())
         .collect::<Vec<_>>();
     let probe_dir = root.join(config.paths.out.join("trust-probe"));
     fs::create_dir_all(&probe_dir)
@@ -1668,7 +1878,7 @@ fn generate_trust_probe(
         Err(source) => return Err(tama_common::io_error(legacy_source, source).into()),
     }
     let output_path = probe_dir.join("axioms.json");
-    if public_obligations.is_empty() {
+    if obligations.is_empty() {
         let report = json!({
             "schema": "tama.trust-probe.v1",
             "method": "lean.collectAxioms",
@@ -1681,10 +1891,10 @@ fn generate_trust_probe(
     }
 
     let source_path = probe_dir.join("CollectAxioms.lean");
-    let source = collect_axioms_probe_source(manifests, &public_obligations)?;
+    let source = collect_axioms_probe_source(manifests, &obligations)?;
     tama_common::write_string(&source_path, &source)?;
     let output = run_capture("lake", &["env", "lean", source_path.as_str()], root)?;
-    let report = parse_collect_axioms_output(&output.stdout, &public_obligations)?;
+    let report = parse_collect_axioms_output(&output.stdout, &obligations)?;
     let report_text = serde_json::to_string_pretty(&report)
         .map_err(|err| Error::Adapter(format!("failed to serialize trust report: {err}")))?;
     tama_common::write_string(&output_path, &(report_text + "\n"))?;
@@ -1725,19 +1935,32 @@ def tamaAxiomJson (decl : String) (constName : Name) : CoreM Json := do
 #eval show CoreM Unit from do
 "#,
     );
-    for (index, obligation) in obligations.iter().enumerate() {
-        let name = lean_name_literal(&obligation.lean_decl)?;
+    for (oi, obligation) in obligations.iter().enumerate() {
+        for (di, discharger) in obligation.dischargers.iter().enumerate() {
+            let name = lean_name_literal(discharger)?;
+            out.push_str(&format!(
+                "  let d_{oi}_{di} ← tamaAxiomJson \"{discharger}\" {name}\n"
+            ));
+        }
+        out.push_str(&format!("  let dischargers_{oi} := #["));
+        for di in 0..obligation.dischargers.len() {
+            if di > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(&format!("d_{oi}_{di}"));
+        }
+        out.push_str("]\n");
         out.push_str(&format!(
-            "  let obligation{index} ← tamaAxiomJson \"{}\" {name}\n",
+            "  let obligation_{oi} := Json.mkObj [\n    (\"lean_decl\", Json.str \"{}\"),\n    (\"dischargers\", Json.arr dischargers_{oi})\n  ]\n",
             obligation.lean_decl
         ));
     }
     out.push_str("  let obligations := #[");
-    for index in 0..obligations.len() {
-        if index > 0 {
+    for oi in 0..obligations.len() {
+        if oi > 0 {
             out.push_str(", ");
         }
-        out.push_str(&format!("obligation{index}"));
+        out.push_str(&format!("obligation_{oi}"));
     }
     out.push_str(
         r#"]
@@ -1775,18 +1998,27 @@ fn parse_collect_axioms_output(output: &str, obligations: &[&Obligation]) -> Res
             "trust probe emitted no obligations array".to_string(),
         ));
     };
-    let expected = obligations
-        .iter()
-        .map(|obligation| obligation.lean_decl.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let reported = reported_obligations
-        .iter()
-        .filter_map(|entry| entry.get("lean_decl").and_then(Value::as_str))
-        .collect::<std::collections::BTreeSet<_>>();
-    if let Some(decl) = expected.difference(&reported).next() {
-        return Err(Error::Adapter(format!(
-            "trust probe did not report axioms for {decl}"
-        )));
+    let mut reported_dischargers = BTreeSet::<&str>::new();
+    for entry in reported_obligations {
+        let Some(dischargers) = entry.get("dischargers").and_then(Value::as_array) else {
+            return Err(Error::Adapter(
+                "trust probe obligation entry missing `dischargers`".to_string(),
+            ));
+        };
+        for d in dischargers {
+            if let Some(decl) = d.get("lean_decl").and_then(Value::as_str) {
+                reported_dischargers.insert(decl);
+            }
+        }
+    }
+    for obligation in obligations {
+        for discharger in &obligation.dischargers {
+            if !reported_dischargers.contains(discharger.as_str()) {
+                return Err(Error::Adapter(format!(
+                    "trust probe did not report axioms for {discharger}"
+                )));
+            }
+        }
     }
     Ok(value)
 }
@@ -1797,7 +2029,7 @@ fn lean_name_literal(name: &str) -> Result<String> {
 }
 
 fn validate_lean_name(name: &str) -> Result<()> {
-    if name.split('.').all(valid_lean_name_segment) {
+    if tama_manifest::is_qualified_lean_name(name) {
         return Ok(());
     }
     Err(Error::Adapter(format!(
@@ -1805,25 +2037,14 @@ fn validate_lean_name(name: &str) -> Result<()> {
     )))
 }
 
-fn valid_lean_name_segment(segment: &str) -> bool {
-    let mut chars = segment.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !(first.is_ascii_alphabetic() || first == '_') {
-        return false;
-    }
-    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '\'')
-}
-
 #[cfg(test)]
 fn parse_print_axioms_output(output: &str, obligations: &[&Obligation]) -> Result<Value> {
-    let expected = obligations
+    let expected: BTreeSet<&str> = obligations
         .iter()
-        .map(|obligation| obligation.lean_decl.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
+        .flat_map(|o| o.dischargers.iter().map(String::as_str))
+        .collect();
     let mut current = None::<String>;
-    let mut reported = std::collections::BTreeMap::<String, Vec<String>>::new();
+    let mut reported = BTreeMap::<String, Vec<String>>::new();
     for line in output.lines() {
         if let Some(decl) = line.split("TAMA_AXIOMS_BEGIN ").nth(1) {
             current = Some(decl.trim().to_string());
@@ -1857,10 +2078,14 @@ fn parse_print_axioms_output(output: &str, obligations: &[&Obligation]) -> Resul
             .map(|obligation| {
                 json!({
                     "lean_decl": obligation.lean_decl,
-                    "axioms": reported
-                        .get(&obligation.lean_decl)
-                        .cloned()
-                        .unwrap_or_default()
+                    "dischargers": obligation
+                        .dischargers
+                        .iter()
+                        .map(|decl| json!({
+                            "lean_decl": decl,
+                            "axioms": reported.get(decl).cloned().unwrap_or_default()
+                        }))
+                        .collect::<Vec<_>>()
                 })
             })
             .collect::<Vec<_>>()
@@ -2373,139 +2598,411 @@ mod tests {
     }
 
     #[test]
-    fn obligation_metadata_is_extracted_from_proof_file() {
+    fn extract_specs_enumerates_top_level_decls() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let config = test_config();
+        let spec = root.join("verity/spec/CounterSpec.lean");
         tama_common::write_string(
-            &root.join("verity/proof/CounterProof.lean"),
-            r#"import spec.CounterSpec
+            &spec,
+            r#"import src.Counter
 
-namespace proof.CounterProof
+namespace spec.CounterSpec
 
--- tama: obligation kind=postcondition function=increment coverage=mirror path=test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount
-theorem increment_post : True := by
-  trivial
+open Verity
 
-  -- tama: obligation kind=postcondition function=transfer coverage=mirror path=test/verity/Counter.t.sol:CounterTest.invariant_transferModel
-theorem postcondition_with_invariant_mirror : True := by
-  trivial
+#gen_spec increment_spec (0, foo)
 
--- tama: kind=helper
-lemma arithmetic_helper : True := by
-  trivial
+def getCount_spec (s : ContractState) : Prop :=
+  s.storage 0 = 0
 
--- tama: obligation kind=invariant coverage=proof_only reason="Symbolic state only."
-theorem supply_invariant : True := by
-  trivial
+def getCount_preserves_state_spec (s s' : ContractState) : Prop :=
+  s' = s
 
-end proof.CounterProof
+end spec.CounterSpec
 "#,
         )
         .unwrap();
-        let obligations = extract_obligations(&root, &config, "Counter", "proof.CounterProof")
-            .expect("obligations");
-        assert_eq!(obligations.len(), 4);
-        assert_eq!(obligations[0].id, "Counter.increment_post");
-        assert_eq!(obligations[0].kind, ObligationKind::Postcondition);
-        assert_eq!(obligations[0].function.as_deref(), Some("increment"));
+        let names = extract_specs(&spec).unwrap();
         assert_eq!(
-            obligations[0].coverage.disposition,
-            CoverageDisposition::Mirror
-        );
-        assert_eq!(
-            obligations[0].coverage.path.as_deref(),
-            Some("test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount")
-        );
-        assert_eq!(obligations[1].kind, ObligationKind::Postcondition);
-        assert_eq!(obligations[1].function.as_deref(), Some("transfer"));
-        assert_eq!(
-            obligations[1].coverage.path.as_deref(),
-            Some("test/verity/Counter.t.sol:CounterTest.invariant_transferModel")
-        );
-        assert_eq!(obligations[2].kind, ObligationKind::Helper);
-        assert_eq!(
-            obligations[2].lean_decl,
-            "proof.CounterProof.arithmetic_helper"
-        );
-        assert_eq!(obligations[3].kind, ObligationKind::Invariant);
-        assert_eq!(
-            obligations[3].coverage.disposition,
-            CoverageDisposition::ProofOnly
-        );
-        assert_eq!(
-            obligations[3].coverage.reason.as_deref(),
-            Some("Symbolic state only.")
+            names,
+            vec![
+                "increment_spec".to_string(),
+                "getCount_spec".to_string(),
+                "getCount_preserves_state_spec".to_string()
+            ]
         );
     }
 
     #[test]
-    fn obligation_metadata_rejects_unknown_comment_values() {
+    fn extract_specs_preserves_lean_prime_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
+            .unwrap()
+            .join("Spec.lean");
+        tama_common::write_string(
+            &spec,
+            r#"namespace spec.Foo
+
+def transfer' (s : Nat) : Prop := s = 0
+
+end spec.Foo
+"#,
+        )
+        .unwrap();
+        let names = extract_specs(&spec).unwrap();
+        assert_eq!(names, vec!["transfer'".to_string()]);
+    }
+
+    #[test]
+    fn extract_dischargers_preserves_lean_prime_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let proof = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
+            .unwrap()
+            .join("Proof.lean");
+        tama_common::write_string(
+            &proof,
+            r#"namespace proof.Foo
+
+-- tama: discharges=transfer'
+theorem transfer'_meets : True := by trivial
+
+end proof.Foo
+"#,
+        )
+        .unwrap();
+        let map = extract_dischargers(&proof, "proof.Foo", &["transfer'".to_string()]).unwrap();
+        assert_eq!(
+            map.get("transfer'").map(|v| v.as_slice()),
+            Some(&["proof.Foo.transfer'_meets".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn extract_specs_rejects_forbidden_top_level_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
+            .unwrap()
+            .join("Spec.lean");
+        tama_common::write_string(
+            &spec,
+            r#"namespace spec.Foo
+
+def foo_spec (s : Nat) : Prop := s = 0
+
+theorem helper : True := by trivial
+
+end spec.Foo
+"#,
+        )
+        .unwrap();
+        let err = extract_specs(&spec).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Adapter(message) if message.contains("forbidden top-level form")
+        ));
+    }
+
+    #[test]
+    fn extract_specs_rejects_tama_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
+            .unwrap()
+            .join("Spec.lean");
+        tama_common::write_string(
+            &spec,
+            r#"namespace spec.Foo
+
+-- tama: coverage=mirror
+def foo_spec (s : Nat) : Prop := s = 0
+
+end spec.Foo
+"#,
+        )
+        .unwrap();
+        let err = extract_specs(&spec).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Adapter(message) if message.contains("must not carry `-- tama:` comments")
+        ));
+    }
+
+    #[test]
+    fn extract_dischargers_parses_discharges_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let proof = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
+            .unwrap()
+            .join("Proof.lean");
+        tama_common::write_string(
+            &proof,
+            r#"namespace proof.CounterProof
+
+-- tama: discharges=increment_spec
+theorem increment_meets_spec : True := by trivial
+
+-- tama: discharges=getCount_spec,getCount_preserves_state_spec
+theorem getCount_combo : True := by trivial
+
+lemma helper : True := by trivial
+
+end proof.CounterProof
+"#,
+        )
+        .unwrap();
+        let specs = vec![
+            "increment_spec".to_string(),
+            "getCount_spec".to_string(),
+            "getCount_preserves_state_spec".to_string(),
+        ];
+        let map = extract_dischargers(&proof, "proof.CounterProof", &specs).unwrap();
+        assert_eq!(
+            map.get("increment_spec").unwrap(),
+            &vec!["proof.CounterProof.increment_meets_spec".to_string()]
+        );
+        assert_eq!(
+            map.get("getCount_spec").unwrap(),
+            &vec!["proof.CounterProof.getCount_combo".to_string()]
+        );
+        assert_eq!(
+            map.get("getCount_preserves_state_spec").unwrap(),
+            &vec!["proof.CounterProof.getCount_combo".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_dischargers_rejects_unknown_spec() {
+        let dir = tempfile::tempdir().unwrap();
+        let proof = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
+            .unwrap()
+            .join("Proof.lean");
+        tama_common::write_string(
+            &proof,
+            r#"namespace proof.Foo
+
+-- tama: discharges=does_not_exist
+theorem t : True := by trivial
+
+end proof.Foo
+"#,
+        )
+        .unwrap();
+        let err = extract_dischargers(&proof, "proof.Foo", &["foo_spec".to_string()]).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Adapter(message) if message.contains("does not match any spec")
+        ));
+    }
+
+    #[test]
+    fn extract_dischargers_rejects_unknown_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let proof = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
+            .unwrap()
+            .join("Proof.lean");
+        tama_common::write_string(
+            &proof,
+            r#"namespace proof.Foo
+
+-- tama: discharges=foo_spec coverage=mirror
+theorem t : True := by trivial
+
+end proof.Foo
+"#,
+        )
+        .unwrap();
+        let err = extract_dischargers(&proof, "proof.Foo", &["foo_spec".to_string()]).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Adapter(message) if message.contains("unsupported Tama metadata key `coverage`")
+        ));
+    }
+
+    #[test]
+    fn extract_mirrors_reads_solidity_tags() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
-        let config = test_config();
-        let proof = root.join("verity/proof/CounterProof.lean");
+        let test_dir = root.join("test/verity");
+        let test_file = test_dir.join("Counter.t.sol");
         tama_common::write_string(
-            &proof,
-            r#"
-namespace proof.CounterProof
+            &test_file,
+            r#"// SPDX-License-Identifier: MIT
+contract CounterTest {
+    // tama: mirrors=increment_spec
+    function testFuzzIncrement(uint256 x) public {}
 
--- tama: obligation kind=safety coverage=mirror path=test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount
-theorem bad_kind : True := by
-  trivial
+    // tama: mirrors=getCount_spec,getCount_preserves_state_spec
+    function testFuzzGetterMirror(uint256 x) public {}
 
-end proof.CounterProof
+    function testNotTracked() public {}
+}
 "#,
         )
         .unwrap();
+        let mut spec_owner = BTreeMap::new();
+        spec_owner.insert("increment_spec".to_string(), "Counter".to_string());
+        spec_owner.insert("getCount_spec".to_string(), "Counter".to_string());
+        spec_owner.insert(
+            "getCount_preserves_state_spec".to_string(),
+            "Counter".to_string(),
+        );
+        let mirrors = extract_mirrors(&root, &test_dir, &spec_owner).unwrap();
+        assert_eq!(
+            mirrors
+                .get(&("Counter".to_string(), "increment_spec".to_string()))
+                .unwrap(),
+            &vec!["test/verity/Counter.t.sol:CounterTest.testFuzzIncrement".to_string()]
+        );
+        assert_eq!(
+            mirrors
+                .get(&("Counter".to_string(), "getCount_spec".to_string()))
+                .unwrap(),
+            &vec!["test/verity/Counter.t.sol:CounterTest.testFuzzGetterMirror".to_string()]
+        );
+    }
 
-        let err = extract_obligations(&root, &config, "Counter", "proof.CounterProof").unwrap_err();
-
+    #[test]
+    fn extract_mirrors_rejects_unknown_spec() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let test_dir = root.join("test/verity");
+        let test_file = test_dir.join("Foo.t.sol");
+        tama_common::write_string(
+            &test_file,
+            r#"contract FooTest {
+    // tama: mirrors=mystery_spec
+    function testFuzzFoo() public {}
+}
+"#,
+        )
+        .unwrap();
+        let err = extract_mirrors(&root, &test_dir, &BTreeMap::new()).unwrap_err();
         assert!(matches!(
             err,
-            Error::Adapter(message) if message.contains("unsupported Tama obligation kind `safety`")
+            Error::Adapter(message) if message.contains("does not match any known spec")
         ));
+    }
 
+    #[test]
+    fn count_brace_delta_skips_comments_and_strings() {
+        assert_eq!(count_brace_delta("contract Foo {"), 1);
+        assert_eq!(count_brace_delta("function f() public { return; }"), 0);
+        assert_eq!(count_brace_delta("    // close } brace"), 0);
+        assert_eq!(count_brace_delta("bytes memory s = \"}\";"), 0);
+        assert_eq!(count_brace_delta("/* } */ {"), 1);
+        assert_eq!(count_brace_delta("if (a) { /* inner } */ }"), 0);
+    }
+
+    #[test]
+    fn extract_mirrors_skips_multi_line_block_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let test_dir = root.join("test/verity");
+        let test_file = test_dir.join("Foo.t.sol");
         tama_common::write_string(
-            &proof,
-            r#"
-namespace proof.CounterProof
+            &test_file,
+            r#"/*
+ contract FakeOuter {
+   function testFuzzFake() public {}
+ }
+*/
 
--- tama: obligation kind=postcondition coverage=example path=test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount
-theorem bad_coverage : True := by
-  trivial
-
-end proof.CounterProof
+contract FooTest {
+    // tama: mirrors=foo_spec
+    function testFuzzReal(uint256 x) public {}
+}
 "#,
         )
         .unwrap();
+        let mut spec_owner = BTreeMap::new();
+        spec_owner.insert("foo_spec".to_string(), "Foo".to_string());
+        let mirrors = extract_mirrors(&root, &test_dir, &spec_owner).unwrap();
+        assert_eq!(
+            mirrors
+                .get(&("Foo".to_string(), "foo_spec".to_string()))
+                .map(|v| v.as_slice()),
+            Some(&["test/verity/Foo.t.sol:FooTest.testFuzzReal".to_string()][..]),
+            "block-commented contract must not affect parsing, got {mirrors:?}"
+        );
+    }
 
-        let err = extract_obligations(&root, &config, "Counter", "proof.CounterProof").unwrap_err();
-
-        assert!(matches!(
-            err,
-            Error::Adapter(message) if message.contains("unsupported Tama coverage disposition `example`")
-        ));
-
+    #[test]
+    fn extract_mirrors_recognizes_abstract_contract_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let test_dir = root.join("test/verity");
+        let test_file = test_dir.join("Foo.t.sol");
         tama_common::write_string(
-            &proof,
-            r#"
-namespace proof.CounterProof
+            &test_file,
+            r#"abstract contract FooTestBase {
+    // tama: mirrors=foo_spec
+    function testFuzzShared(uint256 x) public {}
+}
 
--- tama: obligation kind=postcondition functon=increment coverage=mirror path=test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount
-theorem typoed_key : True := by
-  trivial
-
-end proof.CounterProof
+contract ConcreteFooTest is FooTestBase {
+    function setUp() public {}
+}
 "#,
         )
         .unwrap();
+        let mut spec_owner = BTreeMap::new();
+        spec_owner.insert("foo_spec".to_string(), "Foo".to_string());
+        let mirrors = extract_mirrors(&root, &test_dir, &spec_owner).unwrap();
+        assert_eq!(
+            mirrors
+                .get(&("Foo".to_string(), "foo_spec".to_string()))
+                .map(|v| v.as_slice()),
+            Some(&["test/verity/Foo.t.sol:FooTestBase.testFuzzShared".to_string()][..])
+        );
+    }
 
-        let err = extract_obligations(&root, &config, "Counter", "proof.CounterProof").unwrap_err();
+    #[test]
+    fn extract_mirrors_ignores_tags_inside_function_bodies() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let test_dir = root.join("test/verity");
+        let test_file = test_dir.join("Foo.t.sol");
+        tama_common::write_string(
+            &test_file,
+            r#"contract FooTest {
+    function helper() internal {
+        // tama: mirrors=should_not_attach
+        bytes memory x = "";
+    }
 
+    function testFuzzReal() public {}
+}
+"#,
+        )
+        .unwrap();
+        let mut spec_owner = BTreeMap::new();
+        spec_owner.insert("should_not_attach".to_string(), "Foo".to_string());
+        let mirrors = extract_mirrors(&root, &test_dir, &spec_owner).unwrap();
+        assert!(
+            mirrors.is_empty(),
+            "tag inside function body must not bind to subsequent test, got {mirrors:?}"
+        );
+    }
+
+    #[test]
+    fn extract_mirrors_rejects_non_property_test() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let test_dir = root.join("test/verity");
+        let test_file = test_dir.join("Foo.t.sol");
+        tama_common::write_string(
+            &test_file,
+            r#"contract FooTest {
+    // tama: mirrors=foo_spec
+    function testSomething() public {}
+}
+"#,
+        )
+        .unwrap();
+        let mut spec_owner = BTreeMap::new();
+        spec_owner.insert("foo_spec".to_string(), "Foo".to_string());
+        let err = extract_mirrors(&root, &test_dir, &spec_owner).unwrap_err();
         assert!(matches!(
             err,
-            Error::Adapter(message) if message.contains("unsupported Tama metadata key `functon`")
+            Error::Adapter(message) if message.contains("non-property-shaped test")
         ));
     }
 
@@ -2513,48 +3010,31 @@ end proof.CounterProof
     fn counter_fixture_obligations_cover_behavior_with_properties() {
         let root =
             Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/counter");
-        let config = tama_config::load_config(&root).unwrap();
-        let obligations =
-            extract_obligations(&root, &config, "Counter", "proof.CounterProof").unwrap();
+        let specs = extract_specs(&root.join("verity/spec/CounterSpec.lean")).unwrap();
+        let dischargers = extract_dischargers(
+            &root.join("verity/proof/CounterProof.lean"),
+            "proof.CounterProof",
+            &specs,
+        )
+        .unwrap();
+        let mut spec_owner = BTreeMap::new();
+        for name in &specs {
+            spec_owner.insert(name.clone(), "Counter".to_string());
+        }
+        let mirrors = extract_mirrors(&root, &root.join("test/verity"), &spec_owner).unwrap();
         let test = tama_common::read_to_string(&root.join("test/verity/Counter.t.sol")).unwrap();
-
-        let functions = obligations
-            .iter()
-            .filter_map(|obligation| obligation.function.as_deref())
-            .collect::<std::collections::BTreeSet<_>>();
-        assert!(functions.contains("increment"));
-        assert!(functions.contains("decrement"));
-        assert!(functions.contains("getCount"));
         assert!(test.contains("function invariant_countTracksModel"));
         assert!(test.contains("handlerIncrement"));
         assert!(test.contains("handlerDecrement"));
         assert!(test.contains("contract CounterTest is MinimalStdInvariant"));
         assert!(test.contains("function targetSelectors()"));
-        assert!(!test.contains("abstract contract InvariantTargets"));
-
-        for obligation in &obligations {
-            assert_ne!(obligation.coverage.disposition, CoverageDisposition::None);
-            let path = obligation
-                .coverage
-                .path
-                .as_deref()
-                .expect("fixture obligations use mirror coverage paths");
-            let symbol = path
-                .rsplit_once(':')
-                .map(|(_, symbol)| symbol)
-                .expect("mirror path is symbol-qualified");
-            let name = symbol
-                .rsplit_once('.')
-                .map(|(_, name)| name)
-                .expect("mirror path includes contract and function");
+        for spec in &specs {
             assert!(
-                name.starts_with("testFuzz") || name.starts_with("invariant_"),
-                "{name} should be a Foundry property"
+                dischargers.contains_key(spec),
+                "spec `{spec}` has no discharger"
             );
-            assert!(
-                test.contains(&format!("function {name}")),
-                "{name} should be declared in Counter.t.sol"
-            );
+            let key = ("Counter".to_string(), spec.clone());
+            assert!(mirrors.contains_key(&key), "spec `{spec}` has no mirror");
         }
     }
 
@@ -2601,6 +3081,59 @@ end proof.CounterProof
                 .collect::<Vec<_>>(),
             vec!["Alpha", "Zed"]
         );
+    }
+
+    #[test]
+    fn adapter_filter_still_discovers_specs_from_other_contracts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        for contract in ["Foo", "Bar"] {
+            write_contract_files(&root, contract);
+            tama_common::write_string(
+                &root.join(format!("artifacts/abi/{contract}.abi.json")),
+                "[]\n",
+            )
+            .unwrap();
+            tama_common::write_string(&root.join(format!("artifacts/yul/{contract}.yul")), "{ }\n")
+                .unwrap();
+        }
+        tama_common::write_string(
+            &root.join("verity/spec/FooSpec.lean"),
+            "namespace spec.FooSpec\ndef foo_spec (n : Nat) : Prop := n = 0\nend spec.FooSpec\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("verity/spec/BarSpec.lean"),
+            "namespace spec.BarSpec\ndef bar_spec (n : Nat) : Prop := n = 0\nend spec.BarSpec\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("verity/proof/FooProof.lean"),
+            "namespace proof.FooProof\n-- tama: discharges=foo_spec\ntheorem t : True := by trivial\nend proof.FooProof\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("verity/proof/BarProof.lean"),
+            "namespace proof.BarProof\n-- tama: discharges=bar_spec\ntheorem t : True := by trivial\nend proof.BarProof\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("test/verity/Foo.t.sol"),
+            "contract FooTest {\n    // tama: mirrors=foo_spec\n    function testFuzzFoo() public {}\n}\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("test/verity/Bar.t.sol"),
+            "contract BarTest {\n    // tama: mirrors=bar_spec\n    function testFuzzBar() public {}\n}\n",
+        )
+        .unwrap();
+        write_empty_layout_report(&root, &["Foo", "Bar"]);
+
+        let manifests = adapt_verity_outputs(&root, &test_config(), Some("Foo")).unwrap();
+
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0].contract, "Foo");
+        assert_eq!(manifests[0].obligations[0].mirrors.len(), 1);
     }
 
     #[test]
@@ -2780,28 +3313,27 @@ end proof.CounterProof
         ));
     }
 
+    fn fixture_obligation() -> Obligation {
+        Obligation {
+            id: "Counter.increment_spec".to_string(),
+            name: "increment_spec".to_string(),
+            lean_decl: "spec.CounterSpec.increment_spec".to_string(),
+            contract: "Counter".to_string(),
+            dischargers: vec!["proof.CounterProof.increment_meets_spec".to_string()],
+            mirrors: vec![
+                "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string(),
+            ],
+            proof_only_reason: None,
+        }
+    }
+
     #[test]
     fn print_axioms_output_is_parsed_into_probe_json() {
-        let obligation = Obligation {
-            id: "Counter.increment_post".to_string(),
-            name: "increment_post".to_string(),
-            kind: ObligationKind::Postcondition,
-            lean_decl: "proof.CounterProof.increment_post".to_string(),
-            contract: "Counter".to_string(),
-            function: Some("increment".to_string()),
-            coverage: Coverage {
-                disposition: CoverageDisposition::Mirror,
-                path: Some(
-                    "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount"
-                        .to_string(),
-                ),
-                reason: None,
-            },
-        };
+        let obligation = fixture_obligation();
         let output = r#"
-TAMA_AXIOMS_BEGIN proof.CounterProof.increment_post
-proof.CounterProof.increment_post depends on axioms: [propext, Classical.choice]
-TAMA_AXIOMS_END proof.CounterProof.increment_post
+TAMA_AXIOMS_BEGIN proof.CounterProof.increment_meets_spec
+proof.CounterProof.increment_meets_spec depends on axioms: [propext, Classical.choice]
+TAMA_AXIOMS_END proof.CounterProof.increment_meets_spec
 "#;
         let report = parse_print_axioms_output(output, &[&obligation]).unwrap();
         assert_eq!(
@@ -2810,8 +3342,11 @@ TAMA_AXIOMS_END proof.CounterProof.increment_post
                 "schema": "tama.trust-probe.v1.fallback",
                 "method": "lean.printAxioms",
                 "obligations": [{
-                    "lean_decl": "proof.CounterProof.increment_post",
-                    "axioms": ["propext", "Classical.choice"]
+                    "lean_decl": "spec.CounterSpec.increment_spec",
+                    "dischargers": [{
+                        "lean_decl": "proof.CounterProof.increment_meets_spec",
+                        "axioms": ["propext", "Classical.choice"]
+                    }]
                 }]
             })
         );
@@ -2819,22 +3354,7 @@ TAMA_AXIOMS_END proof.CounterProof.increment_post
 
     #[test]
     fn collect_axioms_probe_uses_lean_api() {
-        let obligation = Obligation {
-            id: "Counter.increment_post".to_string(),
-            name: "increment_post".to_string(),
-            kind: ObligationKind::Postcondition,
-            lean_decl: "proof.CounterProof.increment_post".to_string(),
-            contract: "Counter".to_string(),
-            function: Some("increment".to_string()),
-            coverage: Coverage {
-                disposition: CoverageDisposition::Mirror,
-                path: Some(
-                    "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount"
-                        .to_string(),
-                ),
-                reason: None,
-            },
-        };
+        let obligation = fixture_obligation();
         let mut manifest = test_manifest("Counter");
         manifest.obligations.push(obligation.clone());
 
@@ -2842,62 +3362,26 @@ TAMA_AXIOMS_END proof.CounterProof.increment_post
 
         assert!(source.contains("collectAxioms constName"));
         assert!(source.contains(r#""method", Json.str "lean.collectAxioms""#));
+        assert!(source.contains(r#""dischargers", Json.arr dischargers_0"#));
         assert!(!source.contains("#print axioms"));
     }
 
     #[test]
     fn collect_axioms_output_is_parsed_into_probe_json() {
-        let obligation = Obligation {
-            id: "Counter.increment_post".to_string(),
-            name: "increment_post".to_string(),
-            kind: ObligationKind::Postcondition,
-            lean_decl: "proof.CounterProof.increment_post".to_string(),
-            contract: "Counter".to_string(),
-            function: Some("increment".to_string()),
-            coverage: Coverage {
-                disposition: CoverageDisposition::Mirror,
-                path: Some(
-                    "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount"
-                        .to_string(),
-                ),
-                reason: None,
-            },
-        };
-        let output = r#"{"schema":"tama.trust-probe.v1","obligations":[{"lean_decl":"proof.CounterProof.increment_post","axioms":["Quot.sound","propext"]}],"method":"lean.collectAxioms"}"#;
+        let obligation = fixture_obligation();
+        let output = r#"{"schema":"tama.trust-probe.v1","obligations":[{"lean_decl":"spec.CounterSpec.increment_spec","dischargers":[{"lean_decl":"proof.CounterProof.increment_meets_spec","axioms":["Quot.sound","propext"]}]}],"method":"lean.collectAxioms"}"#;
 
         let report = parse_collect_axioms_output(output, &[&obligation]).unwrap();
 
         assert_eq!(
-            report,
-            json!({
-                "schema": "tama.trust-probe.v1",
-                "method": "lean.collectAxioms",
-                "obligations": [{
-                    "lean_decl": "proof.CounterProof.increment_post",
-                    "axioms": ["Quot.sound", "propext"]
-                }]
-            })
+            report.get("schema").and_then(Value::as_str),
+            Some("tama.trust-probe.v1")
         );
     }
 
     #[test]
     fn print_axioms_output_fails_when_obligation_is_missing() {
-        let obligation = Obligation {
-            id: "Counter.increment_post".to_string(),
-            name: "increment_post".to_string(),
-            kind: ObligationKind::Postcondition,
-            lean_decl: "proof.CounterProof.increment_post".to_string(),
-            contract: "Counter".to_string(),
-            function: Some("increment".to_string()),
-            coverage: Coverage {
-                disposition: CoverageDisposition::Mirror,
-                path: Some(
-                    "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount"
-                        .to_string(),
-                ),
-                reason: None,
-            },
-        };
+        let obligation = fixture_obligation();
         let err = parse_print_axioms_output("", &[&obligation]).unwrap_err();
         assert!(
             matches!(err, Error::Adapter(message) if message.contains("trust probe did not report"))
@@ -3055,6 +3539,7 @@ TAMA_AXIOMS_END proof.CounterProof.increment_post
                 metadata_hash: "none".to_string(),
             },
             trust: tama_config::TrustConfig::default(),
+            coverage: tama_config::CoverageConfig::default(),
         }
     }
 

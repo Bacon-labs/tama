@@ -41,7 +41,7 @@ Checks:
   structure        Required files, aggregate imports, generated paths, and bytecode hashes
   selectors        ABI selectors/topics, Solidity declarations, and Yul dispatch
   storage-layout   Storage slots, overlap, encodings, and compiler layout drift
-  coverage         Public obligations have Foundry mirrors or proof-only reasons
+  coverage         Every spec has a discharger and either a Foundry mirror or a `[coverage.proof_only]` entry
   trust-boundary   Lean axioms, sorryAx, unresolved declarations, and trust reports
 
 Run `tama audit` for the full suite, or `tama audit <check>` for one check.
@@ -80,7 +80,7 @@ Fields:
   yul
   bytecode
   runtime-bytecode
-  theorems
+  specs
   obligations
   mirrors
   trust
@@ -4642,6 +4642,7 @@ buildDir = ""
                 metadata_hash: "none".to_string(),
             },
             trust: Default::default(),
+            coverage: Default::default(),
         };
         let mut report = tama_toolchain::DoctorReport::default();
         let lock = tama_config::TamaLock {
@@ -4691,6 +4692,7 @@ buildDir = ""
                 metadata_hash: "none".to_string(),
             },
             trust: Default::default(),
+            coverage: Default::default(),
         };
         let mut report = tama_toolchain::DoctorReport::default();
         let lock = tama_config::TamaLock {

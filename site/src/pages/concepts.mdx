@@ -105,19 +105,35 @@ elaborates all three.
 
 ### Obligation
 
-A **public contract obligation** is a theorem in the proof file marked
-with a `-- tama: obligation` comment on the line above. Tama treats it
-as part of the contract's public surface: it must be either covered by
-a Foundry mirror test or explicitly marked proof-only with a stated
-reason. Helper lemmas are *not* obligations — they're internal scaffolding.
+An **obligation** is any top-level definition in the spec file
+[`verity/spec/<Contract>Spec.lean`](verity/spec). The spec file is
+pure Lean — no Tama tags — and Tama treats every `def` and every
+`#gen_spec` invocation in it as part of the contract's public surface.
+Each obligation must be discharged by at least one proof theorem and
+either mirrored by a Foundry fuzz/invariant test or explicitly marked
+proof-only with a stated reason. Helper lemmas live outside the spec
+file; they are internal scaffolding and never appear in the manifest.
+
+### Discharger
+
+A theorem in the proof file
+[`verity/proof/<Contract>Proof.lean`](verity/proof) marked with a
+`-- tama: discharges=<spec>` comment on the line above. The tag claims
+the spec definition named on the right. Multiple comma-separated names
+are allowed (no whitespace after commas), one theorem can discharge
+several specs, and several theorems can discharge one spec. Theorems
+and `lemma`s without a `discharges=` tag are silently treated as
+helpers and never appear in the manifest.
 
 ### Mirror test
 
-A Foundry test marked as the executable shadow of an obligation, via
-`coverage=mirror path=test/verity/Foo.t.sol:FooTest.invariant_…` on the
-theorem's `-- tama:` comment. The mirror function must be a fuzz test
-(`testFuzz*`) or a Foundry invariant (`invariant_*`) — not a one-shot
-example test.
+A Foundry test marked as the executable shadow of a spec, via
+`// tama: mirrors=<spec>` directly above the function declaration in
+the test file. The function must be a fuzz test (`testFuzz*`) or a
+Foundry invariant (`invariant_*`) — putting a `mirrors=` tag on a plain
+`test_*` function is a build error. Multiple comma-separated spec
+names are allowed (no whitespace after commas), and multiple tests can
+mirror one spec.
 
 This is how a property and a fuzz test are bound together: the proof
 says "for all inputs, P holds"; the mirror exercises the same P on the
@@ -131,7 +147,7 @@ schema `tama.contract-manifest.v1`. It records:
 - ABI (functions, events, errors, selectors),
 - storage layout,
 - generated artifact paths and the SHA-256 of the creation bytecode,
-- public obligations and their mirror coverage.
+- obligations with their dischargers, mirrors, and proof-only reasons.
 
 The manifest is the **single source of truth** that ties every other
 artifact together. Generated bridges are built from it, audits read it,
@@ -159,8 +175,8 @@ axioms, or it doesn't. The **trust boundary** is the set of axioms,
 unsafe declarations, and external compiler assumptions that a given
 proof depends on.
 
-`tama audit trust-boundary` walks each obligation's dependency set
-and refuses any reliance on:
+`tama audit trust-boundary` walks the dependency set of every theorem
+that discharges a spec and refuses any reliance on:
 
 - `sorryAx` (the marker Lean uses for incomplete proofs — always denied),
 - axioms not listed in `tama.toml` under `[trust.allow_axioms]`,

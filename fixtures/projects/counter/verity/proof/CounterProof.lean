@@ -8,7 +8,7 @@ open Verity.EVM.Uint256
 open spec.CounterSpec
 open src.Counter
 
--- tama: obligation kind=postcondition function=increment coverage=mirror path=test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount
+-- tama: discharges=increment_spec
 theorem increment_meets_spec (s : ContractState) :
   let s' := ((increment).run s).snd
   increment_spec s s' := by
@@ -23,7 +23,7 @@ theorem increment_meets_spec (s : ContractState) :
       Specs.sameContext, increment, count, getStorage, setStorage, Contract.run,
       ContractResult.snd, Verity.bind, Bind.bind]
 
--- tama: obligation kind=postcondition function=decrement coverage=mirror path=test/verity/Counter.t.sol:CounterTest.testFuzzDecrementUpdatesCount
+-- tama: discharges=decrement_spec
 theorem decrement_meets_spec (s : ContractState) :
   let s' := ((decrement).run s).snd
   decrement_spec s s' := by
@@ -38,14 +38,14 @@ theorem decrement_meets_spec (s : ContractState) :
       Specs.sameContext, decrement, count, getStorage, setStorage, Contract.run,
       ContractResult.snd, Verity.bind, Bind.bind]
 
--- tama: obligation kind=postcondition function=getCount coverage=mirror path=test/verity/Counter.t.sol:CounterTest.testFuzzGetterMirrorsGeneratedBytecodeState
+-- tama: discharges=getCount_spec
 theorem getCount_returns_count (s : ContractState) :
   let result := ((getCount).run s).fst
   getCount_spec result s := by
   simp [getCount_spec, getCount, count, getStorage, Contract.run, ContractResult.fst,
     Verity.bind, Bind.bind, Verity.pure, Pure.pure]
 
--- tama: obligation kind=invariant function=getCount coverage=mirror path=test/verity/Counter.t.sol:CounterTest.testFuzzGetterPreservesCount
+-- tama: discharges=getCount_preserves_state_spec
 theorem getCount_preserves_state (s : ContractState) :
   let s' := ((getCount).run s).snd
   getCount_preserves_state_spec s s' := by

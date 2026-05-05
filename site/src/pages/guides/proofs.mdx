@@ -2,37 +2,28 @@
 layout: ../../layouts/DocLayout.astro
 title: Writing proof obligations
 eyebrow: Guide
-description: Patterns for turning a contract's intent into specs and proofs that Tama will treat as public obligations.
+description: Patterns for turning a contract's intent into specs Tama tracks, proof theorems that discharge them, and Foundry tests that mirror them.
 ---
 
 import Callout from "../../components/Callout.astro";
 
 ## What counts as an obligation
 
-A **public contract obligation** is a theorem that part of your contract's
-contract-with-the-world depends on. In Verity terms: any theorem in
-`verity/proof/<Contract>Proof.lean` that has a `-- tama: obligation`
-comment on the line directly above it.
+An **obligation** is any top-level definition in the spec file
+[`verity/spec/<Contract>Spec.lean`](verity/spec). The spec file is
+**pure Lean**: every top-level `def` and every `#gen_spec` invocation
+is automatically an obligation tracked in the manifest. There are no
+`-- tama:` comments in the spec file.
 
-`tama audit coverage` requires every public obligation to be either:
-
-- **mirrored** by a Foundry fuzz or invariant test, or
-- explicitly marked `coverage=proof_only reason="<reason>"` with a non-empty reason.
-
-Helper lemmas are *not* obligations and are not coverage-tracked. Mark
-them `-- tama: kind=helper` to be explicit, or just leave them untagged.
-
-## A repeatable shape
-
-For each contract, the spec file usually has two kinds of statements:
-
-1. **Invariants** — properties of the storage that hold between calls.
-2. **Per-function postconditions** — what is true after a successful call.
-
-The spec file is plain Lean — Tama's coverage tracking happens on the
-proof side, so spec defs don't need any `-- tama:` markers:
+The build rejects a spec file that contains anything other than
+`import`, `namespace`, `open`, `def`, `#gen_spec`, and `end`. In
+particular, `lemma`s and auxiliary `def`s used only as helpers must
+live outside the spec file — typically in a sibling Lean module that
+the spec or proof imports.
 
 ```lean
+import Foo
+
 namespace FooSpec
 
 def total_in_range (s : Foo.State) : Prop :=
@@ -45,13 +36,21 @@ def mint_increases_total
 end FooSpec
 ```
 
-In the proof file, prove that each function preserves each invariant,
-and tag each obligation theorem with a `-- tama:` metadata comment:
+`tama audit coverage` requires every spec to have at least one
+discharger AND either at least one Foundry mirror test or a
+[`[coverage.proof_only]`](#proof-only-obligations) entry in
+`tama.toml`.
+
+## Discharging via proof
+
+In the proof file [`verity/proof/<Contract>Proof.lean`](verity/proof),
+each theorem that discharges an obligation carries a
+`-- tama: discharges=<spec_name>` comment directly above it:
 
 ```lean
 namespace FooProof
 
--- tama: obligation kind=invariant function=mint coverage=mirror path=test/verity/Foo.t.sol:FooTest.invariant_totalInRange
+-- tama: discharges=total_in_range
 theorem mint_preserves_total_in_range
     (pre : Foo.State) (call : Foo.Call)
     (h : FooSpec.total_in_range pre)
@@ -63,31 +62,32 @@ theorem mint_preserves_total_in_range
 end FooProof
 ```
 
-The keys are: `obligation` (marks the theorem as a public obligation),
-`kind=helper|invariant|postcondition`, `function=<name>`,
-`coverage=mirror|proof_only|none`, `path=<mirror path>`, and
-`reason="<text>"` for proof-only obligations.
-
-## Mirror tests, in detail
-
-Every `coverage=mirror path=<path>:<symbol>` value must point at:
-
-- a file under Foundry's configured test directory (typically `test/`),
-- a contract-qualified Foundry symbol,
-- whose function name is **either** `testFuzz*` (a fuzz test) **or**
-  `invariant_*` (a Foundry invariant).
-
-Plain `test_*` example tests are smoke tests; they don't satisfy
-mirror coverage. The point is that mirrors are *property-shaped*: they
-exercise the same universal statement the proof made, on real bytecode,
-under random inputs.
+The right-hand side is a comma-separated list of spec names from the
+same contract — no whitespace after commas:
 
 ```lean
--- tama: obligation kind=postcondition function=mint coverage=mirror path=test/verity/Foo.t.sol:FooTest.testFuzz_mintIncreasesTotal
-theorem mint_increases_total : ... := by ...
+-- tama: discharges=total_in_range,mint_increases_total
+theorem mint_combined : ... := by ...
 ```
 
+Multiple theorems may discharge the same spec (cover one branch each,
+for instance), and one theorem may discharge several specs. Every name
+on the right of `discharges=` must be a real top-level def in the
+contract's spec file; an unknown name is a build error.
+
+Theorems and `lemma`s without a `discharges=` tag are silently treated
+as helpers — Tama never reads them and the manifest never mentions
+them. Tag the ones that close obligations; leave the scaffolding alone.
+
+## Discharging via mirror
+
+In a Foundry test file (typically
+[`test/verity/<Contract>.t.sol`](test/verity)), each fuzz/invariant
+test that mirrors a spec carries a `// tama: mirrors=<spec_name>`
+Solidity comment directly above the function declaration:
+
 ```solidity
+// tama: mirrors=mint_increases_total
 function testFuzz_mintIncreasesTotal(uint96 amount) public {
     uint256 before = foo.total();
     vm.assume(before + amount <= foo.cap());
@@ -96,18 +96,36 @@ function testFuzz_mintIncreasesTotal(uint96 amount) public {
 }
 ```
 
+The same comma-separated rule applies (`mirrors=foo,bar`, no
+whitespace after commas), and multiple tests may mirror the same spec.
+
+The function name **must** start with `testFuzz` or `invariant_`.
+Putting a `mirrors=` tag on a plain `test_*` function is a build error
+— the point is that mirrors are *property-shaped*: they exercise the
+same universal statement the spec made, on real bytecode, under
+random inputs. A name on the right of `mirrors=` that isn't a known
+spec (any contract) is also a build error.
+
+Tests without a `mirrors=` tag are ordinary Foundry tests and never
+appear in the manifest.
+
 ## Proof-only obligations
 
 Some properties are intrinsically about symbolic state and have no
 useful executable shadow — for instance, "the storage encoding is
-collision-free for any pair of distinct mapping keys." Mark these:
+collision-free for any pair of distinct mapping keys." List these in
+`tama.toml` under `[coverage.proof_only]`, keyed by the fully
+qualified obligation id (`<Contract>.<spec_name>`):
 
-```lean
--- tama: obligation coverage=proof_only reason="quantifies over all key pairs; no concrete fuzz schedule covers it"
-theorem mapping_encoding_collision_free : ... := by ...
+```toml
+# tama.toml
+[coverage.proof_only]
+"Foo.mapping_collision_free" = "quantifies over all key pairs; no concrete fuzz schedule covers it"
 ```
 
-The reason is required and audit-visible. Empty reasons are a build-time error.
+The reason is required and audit-visible. An empty or whitespace-only
+reason is a config-load error. A key that doesn't match any real
+obligation id is a build error.
 
 ## `sorry` is fine — until release
 
@@ -119,7 +137,7 @@ The intent: keep working contracts in a half-proven state during
 development; gate releases on a real proof.
 
 ```lean
--- tama: obligation kind=postcondition function=withdraw coverage=mirror path=test/verity/Foo.t.sol:FooTest.testFuzz_withdraw
+-- tama: discharges=withdraw_drops_total
 theorem withdraw_drops_total : ... := by
   sorry  -- ok locally, will fail audit
 ```
@@ -127,8 +145,8 @@ theorem withdraw_drops_total : ... := by
 <Callout kind="warning" title="Don't allowlist sorryAx">
 There is no `tama.toml` switch to permit `sorryAx`. The audit is hard-coded
 to deny it. If a release CI is failing because an obligation hasn't been
-discharged, the answer is to discharge it (or mark it
-`coverage=proof_only reason="..."` with a real reason), not to bypass the gate.
+discharged, the answer is to discharge it (or move it to
+`[coverage.proof_only]` with a real reason), not to bypass the gate.
 </Callout>
 
 ## Allowlisted axioms
@@ -163,6 +181,6 @@ anything you allowlist is a project-level choice, not a framework one.
   catalogues the common error messages and tactic patterns from the
   Verity side — start here before reaching for `sorry`.
 - Read [the audit guide](/guides/audits) — many "proof failures" are
-  actually structural mistakes (e.g. an obligation pointing at a
-  non-existent mirror) that the audit reports more clearly than the
-  build does.
+  actually structural mistakes (e.g. a `discharges=` tag pointing at a
+  spec name that doesn't exist) that the audit reports more clearly
+  than the build does.

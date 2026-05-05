@@ -42,6 +42,9 @@ metadata_bytecode_hash = "none"
 [trust.allow_axioms]
 "Classical.choice" = "accepted Lean classical reasoning"
 "Quot.sound"       = "accepted Lean quotient axiom"
+
+[coverage.proof_only]
+"Foo.mapping_collision_free" = "quantifies over all key pairs; no concrete fuzz schedule covers it"
 ```
 
 ### `[project]`
@@ -84,6 +87,31 @@ A map of `axiom-name -> reason`. Each reason must be a non-empty string.
 
 `sorryAx` cannot be allowlisted. `tama audit trust-boundary` denies it
 unconditionally.
+
+### `[coverage.proof_only]`
+
+A map of fully qualified obligation id (`"<Contract>.<spec_name>"`) to
+a non-empty reason string. Use this to mark specs that have no useful
+executable shadow — typically those that quantify over symbolic state
+in a way no fuzz schedule could cover.
+
+```toml
+[coverage.proof_only]
+"Foo.mapping_collision_free" = "quantifies over all key pairs; no concrete fuzz schedule covers it"
+```
+
+Validation:
+
+- The key must match a real obligation id (i.e. a top-level def in
+  some `verity/spec/<Contract>Spec.lean` file). An unknown key is a
+  build error.
+- The value must be a non-empty trimmed string. An empty or
+  whitespace-only reason is a config-load error.
+
+`tama audit coverage` accepts a spec with a `[coverage.proof_only]`
+entry as covered without requiring a Foundry mirror; the reason is
+audit-visible. Specs not listed here must be mirrored by at least one
+`testFuzz*`/`invariant_*` function tagged `// tama: mirrors=<spec>`.
 
 ### Strict parsing
 

@@ -81,9 +81,9 @@ reads the manifest. For inspecting plain Solidity contracts, use
 
 A mirror test is just a Foundry test under `test/verity/`. It imports
 the generated `Iface` and `Deployer` and exercises the real Verity
-bytecode. The `coverage=mirror path=...` segment of the proof file's
-`-- tama:` comment is the metadata link — `forge test` does not need to
-know about it.
+bytecode. The link to a spec is a `// tama: mirrors=<spec>` comment
+directly above the test function — `forge test` does not need to know
+about it.
 
 ```solidity
 import {TipJarIface} from "src/generated/verity/TipJarIface.sol";
@@ -94,14 +94,31 @@ contract TipJarTest is Test {
 
     function setUp() public { jar = TipJarDeployer.deploy(); }
 
+    // tama: mirrors=total_tracks_balances
     function invariant_totalTracksBalances() public view {
+        assertEq(address(jar).balance, jar.total());
+    }
+
+    // tama: mirrors=total_tracks_balances
+    function testFuzz_deposit(address who, uint96 amount) public {
+        vm.assume(who != address(0));
+        vm.deal(who, amount);
+        vm.prank(who);
+        jar.deposit{value: amount}();
         assertEq(address(jar).balance, jar.total());
     }
 }
 ```
 
-`tama audit coverage` is what closes the loop: it reads the mirror
-annotation and checks that the named Foundry symbol exists.
+The function above each `mirrors=` tag must be named `testFuzz*` or
+`invariant_*`; putting the tag on a plain `test_*` function is a build
+error. Multiple comma-separated spec names are allowed
+(`mirrors=foo,bar`, no whitespace after commas), and any number of
+tests can mirror the same spec.
+
+`tama audit coverage` is what closes the loop: it reads each `mirrors=`
+tag, checks that the named spec exists, and ensures every spec ends up
+with at least one mirror (or a `[coverage.proof_only]` entry).
 
 ## Generated files are off-limits
 

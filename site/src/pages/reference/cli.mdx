@@ -201,7 +201,7 @@ Without `[check]`, the full suite runs:
 structure        Required files, aggregate imports, generated paths, bytecode hashes
 selectors        ABI selectors and topics, Solidity declarations, Yul dispatch
 storage-layout   Storage slots, overlap, encodings, compiler layout drift
-coverage         Public obligations have Foundry mirrors or proof-only reasons
+coverage         Every spec has a discharger and either a Foundry mirror or a `[coverage.proof_only]` entry
 trust-boundary   Lean axioms, sorryAx, unresolved declarations, trust reports
 ```
 
@@ -235,7 +235,7 @@ storage-layout
 yul
 bytecode
 runtime-bytecode
-theorems
+specs
 obligations
 mirrors
 trust

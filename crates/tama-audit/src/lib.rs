@@ -4,7 +4,7 @@ use std::fs;
 use camino::{Utf8Path, Utf8PathBuf};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tama_manifest::{ContractManifest, CoverageDisposition, ObligationKind, SCHEMA};
+use tama_manifest::{parse_mirror_path, ContractManifest, MirrorPathError, SCHEMA};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -742,10 +742,6 @@ fn solidity_contract_function_declared(text: &str, contract: &str, name: &str) -
     found
 }
 
-fn mirror_symbol_is_property(name: &str) -> bool {
-    name.starts_with("testFuzz") || name.starts_with("invariant_")
-}
-
 fn strip_solidity_non_code(text: &str) -> String {
     #[derive(Clone, Copy)]
     enum State {
@@ -1175,158 +1171,97 @@ fn coverage(root: &Utf8Path, manifests: &[ContractManifest], issues: &mut Vec<Is
     };
     for manifest in manifests {
         for obligation in &manifest.obligations {
-            match obligation.kind {
-                ObligationKind::Helper => continue,
-                ObligationKind::Invariant | ObligationKind::Postcondition => {}
-            }
-            match obligation.coverage.disposition {
-                CoverageDisposition::Mirror => {
-                    let Some(path_ref) = &obligation.coverage.path else {
-                        issues.push(issue(
-                            "coverage",
-                            Some(&manifest.contract),
-                            "TAMA_COVERAGE_MISSING",
-                            format!("{} has no mirror path", obligation.id),
-                            None,
-                        ));
-                        continue;
-                    };
-                    let Some((file, symbol)) = path_ref.split_once(':') else {
-                        issues.push(issue(
-                            "coverage",
-                            Some(&manifest.contract),
-                            "TAMA_COVERAGE_SYMBOL",
-                            format!("mirror path `{path_ref}` must include a Solidity symbol"),
-                            None,
-                        ));
-                        continue;
-                    };
-                    if file.trim().is_empty() || symbol.trim().is_empty() {
-                        issues.push(issue(
-                            "coverage",
-                            Some(&manifest.contract),
-                            "TAMA_COVERAGE_SYMBOL",
-                            format!(
-                                "mirror path `{path_ref}` must include a non-empty file and symbol"
-                            ),
-                            None,
-                        ));
-                        continue;
-                    }
-                    if path_escapes_project(Utf8Path::new(file)) {
-                        issues.push(issue(
-                            "coverage",
-                            Some(&manifest.contract),
-                            "TAMA_COVERAGE_PATH",
-                            format!("mirror file path escapes project root: {file}"),
-                            Some(file.into()),
-                        ));
-                        continue;
-                    }
-                    if !Utf8Path::new(file).starts_with(&foundry.test) {
-                        issues.push(issue(
-                            "coverage",
-                            Some(&manifest.contract),
-                            "TAMA_COVERAGE_TEST_ROOT",
-                            format!(
-                                "mirror file `{file}` is outside Foundry test directory `{}`",
-                                foundry.test
-                            ),
-                            Some(file.into()),
-                        ));
-                    }
-                    let abs = root.join(file);
-                    if !abs.is_file() {
-                        issues.push(issue(
-                            "coverage",
-                            Some(&manifest.contract),
-                            "TAMA_COVERAGE_MISSING_FILE",
-                            format!("mirror file does not exist: {file}"),
-                            Some(file.into()),
-                        ));
-                        continue;
-                    }
-                    let text = match tama_common::read_to_string(&abs) {
-                        Ok(text) => text,
-                        Err(err) => {
-                            issues.push(issue(
-                                "coverage",
-                                Some(&manifest.contract),
-                                "TAMA_COVERAGE_READ",
-                                format!("could not read mirror file `{file}`: {err}"),
-                                Some(file.into()),
-                            ));
-                            continue;
-                        }
-                    };
-                    let Some((contract_name, name)) = symbol.rsplit_once('.') else {
-                        issues.push(issue(
-                            "coverage",
-                            Some(&manifest.contract),
-                            "TAMA_COVERAGE_SYMBOL",
-                            format!(
-                                "mirror symbol `{symbol}` must include a Solidity contract and function"
-                            ),
-                            Some(file.into()),
-                        ));
-                        continue;
-                    };
-                    if contract_name.trim().is_empty() || name.trim().is_empty() {
-                        issues.push(issue(
-                            "coverage",
-                            Some(&manifest.contract),
-                            "TAMA_COVERAGE_SYMBOL",
-                            format!(
-                                "mirror symbol `{symbol}` must include a non-empty Solidity contract and function"
-                            ),
-                            Some(file.into()),
-                        ));
-                        continue;
-                    }
-                    if !mirror_symbol_is_property(name) {
-                        issues.push(issue(
-                            "coverage",
-                            Some(&manifest.contract),
-                            "TAMA_COVERAGE_SHAPE",
-                            format!("mirror symbol `{symbol}` must be a fuzz test or invariant"),
-                            Some(file.into()),
-                        ));
-                    }
-                    if !solidity_contract_function_declared(&text, contract_name, name) {
-                        issues.push(issue(
-                            "coverage",
-                            Some(&manifest.contract),
-                            "TAMA_COVERAGE_MISSING_SYMBOL",
-                            format!("mirror symbol `{symbol}` not found"),
-                            Some(file.into()),
-                        ));
-                    }
-                }
-                CoverageDisposition::ProofOnly => {
-                    if obligation
-                        .coverage
-                        .reason
-                        .as_deref()
-                        .unwrap_or("")
-                        .trim()
-                        .is_empty()
-                    {
-                        issues.push(issue(
-                            "coverage",
-                            Some(&manifest.contract),
-                            "TAMA_COVERAGE_REASON",
-                            format!("{} proof_only coverage requires a reason", obligation.id),
-                            None,
-                        ));
-                    }
-                }
-                CoverageDisposition::None => {
+            if let Some(reason) = obligation.proof_only_reason.as_deref() {
+                if reason.trim().is_empty() {
                     issues.push(issue(
                         "coverage",
                         Some(&manifest.contract),
-                        "TAMA_COVERAGE_NONE",
-                        format!("{} has no coverage disposition", obligation.id),
+                        "TAMA_COVERAGE_REASON",
+                        format!("{} proof_only_reason cannot be empty", obligation.id),
                         None,
+                    ));
+                }
+                continue;
+            }
+            if obligation.mirrors.is_empty() {
+                issues.push(issue(
+                    "coverage",
+                    Some(&manifest.contract),
+                    "TAMA_COVERAGE_MISSING",
+                    format!(
+                        "{} has no mirrors and no [coverage.proof_only] entry",
+                        obligation.id
+                    ),
+                    None,
+                ));
+                continue;
+            }
+            for path_ref in &obligation.mirrors {
+                let mirror = match parse_mirror_path(path_ref) {
+                    Ok(parsed) => parsed,
+                    Err(err) => {
+                        let code = match err {
+                            MirrorPathError::EscapesProject => "TAMA_COVERAGE_PATH",
+                            MirrorPathError::NotProperty => "TAMA_COVERAGE_SHAPE",
+                            _ => "TAMA_COVERAGE_SYMBOL",
+                        };
+                        issues.push(issue(
+                            "coverage",
+                            Some(&manifest.contract),
+                            code,
+                            format!("mirror `{path_ref}` {}", err.message()),
+                            None,
+                        ));
+                        continue;
+                    }
+                };
+                let file = mirror.file;
+                if !file.starts_with(&foundry.test) {
+                    issues.push(issue(
+                        "coverage",
+                        Some(&manifest.contract),
+                        "TAMA_COVERAGE_TEST_ROOT",
+                        format!(
+                            "mirror file `{file}` is outside Foundry test directory `{}`",
+                            foundry.test
+                        ),
+                        Some(file.into()),
+                    ));
+                }
+                let abs = root.join(file);
+                if !abs.is_file() {
+                    issues.push(issue(
+                        "coverage",
+                        Some(&manifest.contract),
+                        "TAMA_COVERAGE_MISSING_FILE",
+                        format!("mirror file does not exist: {file}"),
+                        Some(file.into()),
+                    ));
+                    continue;
+                }
+                let text = match tama_common::read_to_string(&abs) {
+                    Ok(text) => text,
+                    Err(err) => {
+                        issues.push(issue(
+                            "coverage",
+                            Some(&manifest.contract),
+                            "TAMA_COVERAGE_READ",
+                            format!("could not read mirror file `{file}`: {err}"),
+                            Some(file.into()),
+                        ));
+                        continue;
+                    }
+                };
+                if !solidity_contract_function_declared(&text, mirror.contract, mirror.function) {
+                    issues.push(issue(
+                        "coverage",
+                        Some(&manifest.contract),
+                        "TAMA_COVERAGE_MISSING_SYMBOL",
+                        format!(
+                            "mirror symbol `{}.{}` not found",
+                            mirror.contract, mirror.function
+                        ),
+                        Some(file.into()),
                     ));
                 }
             }
@@ -1352,7 +1287,6 @@ fn trust(
             manifest
                 .obligations
                 .iter()
-                .filter(|obligation| obligation.kind != ObligationKind::Helper)
                 .map(move |obligation| (manifest, obligation))
         })
         .collect::<Vec<_>>();
@@ -1413,27 +1347,46 @@ fn trust(
             );
         }
     }
-    for (manifest, obligation) in public_obligations {
-        if !obligation.lean_decl.contains('.') {
-            issues.push(issue(
-                "trust-boundary",
-                Some(&manifest.contract),
-                "TAMA_TRUST_DECL",
-                format!("{} is not fully qualified", obligation.lean_decl),
-                None,
-            ));
+    let mut expected_decls: BTreeSet<&str> = BTreeSet::new();
+    for (manifest, obligation) in &public_obligations {
+        for discharger in &obligation.dischargers {
+            expected_decls.insert(discharger);
+            if !discharger.contains('.') {
+                issues.push(issue(
+                    "trust-boundary",
+                    Some(&manifest.contract),
+                    "TAMA_TRUST_DECL",
+                    format!("{discharger} is not fully qualified"),
+                    None,
+                ));
+                continue;
+            }
+            if probe.is_file() && !seen_decls.contains(discharger) {
+                issues.push(issue(
+                    "trust-boundary",
+                    Some(&manifest.contract),
+                    "TAMA_TRUST_DECL_MISSING",
+                    format!(
+                        "discharger `{discharger}` declared in manifest but not reported by the trust probe"
+                    ),
+                    Some(probe.strip_prefix(root).unwrap_or(&probe).to_owned()),
+                ));
+            }
         }
-        if probe.is_file() && !seen_decls.contains(&obligation.lean_decl) {
-            issues.push(issue(
-                "trust-boundary",
-                Some(&manifest.contract),
-                "TAMA_TRUST_DECL_MISSING",
-                format!(
-                    "{} was not reported by the trust probe",
-                    obligation.lean_decl
-                ),
-                Some(probe.strip_prefix(root).unwrap_or(&probe).to_owned()),
-            ));
+    }
+    if probe.is_file() {
+        for reported in &seen_decls {
+            if !expected_decls.contains(reported.as_str()) {
+                issues.push(issue(
+                    "trust-boundary",
+                    None,
+                    "TAMA_TRUST_DECL_UNKNOWN",
+                    format!(
+                        "trust probe reports `{reported}` but no manifest declares it as a discharger (stale probe?)"
+                    ),
+                    Some(probe.strip_prefix(root).unwrap_or(&probe).to_owned()),
+                ));
+            }
         }
     }
 }
@@ -1504,40 +1457,59 @@ fn audit_axiom_probe(
         return;
     };
     for obligation in obligations {
-        let decl = obligation
+        let spec_decl = obligation
             .get("lean_decl")
             .and_then(|value| value.as_str())
             .unwrap_or("<unknown>");
-        seen_decls.insert(decl.to_string());
-        let Some(axioms) = obligation.get("axioms").and_then(|value| value.as_array()) else {
+        let Some(dischargers) = obligation
+            .get("dischargers")
+            .and_then(|value| value.as_array())
+        else {
             issues.push(issue(
                 "trust-boundary",
                 None,
                 "TAMA_TRUST_PROBE_INVALID",
-                format!("{decl} trust probe entry is missing `axioms[]`"),
+                format!("{spec_decl} trust probe entry is missing `dischargers[]`"),
                 Some(relative_path(root, path)),
             ));
             continue;
         };
-        for axiom in axioms {
-            let Some(axiom) = axiom.as_str() else {
+        for entry in dischargers {
+            let decl = entry
+                .get("lean_decl")
+                .and_then(|value| value.as_str())
+                .unwrap_or("<unknown>");
+            seen_decls.insert(decl.to_string());
+            let Some(axioms) = entry.get("axioms").and_then(|value| value.as_array()) else {
                 issues.push(issue(
                     "trust-boundary",
                     None,
                     "TAMA_TRUST_PROBE_INVALID",
-                    format!("{decl} trust probe entry contains a non-string axiom"),
+                    format!("{decl} trust probe entry is missing `axioms[]`"),
                     Some(relative_path(root, path)),
                 ));
                 continue;
             };
-            if deny.contains(axiom) || !allow.contains_key(axiom) {
-                issues.push(issue(
-                    "trust-boundary",
-                    None,
-                    "TAMA_TRUST_AXIOM",
-                    format!("{decl} depends on unallowlisted axiom `{axiom}`"),
-                    Some(relative_path(root, path)),
-                ));
+            for axiom in axioms {
+                let Some(axiom) = axiom.as_str() else {
+                    issues.push(issue(
+                        "trust-boundary",
+                        None,
+                        "TAMA_TRUST_PROBE_INVALID",
+                        format!("{decl} trust probe entry contains a non-string axiom"),
+                        Some(relative_path(root, path)),
+                    ));
+                    continue;
+                };
+                if deny.contains(axiom) || !allow.contains_key(axiom) {
+                    issues.push(issue(
+                        "trust-boundary",
+                        None,
+                        "TAMA_TRUST_AXIOM",
+                        format!("{decl} depends on unallowlisted axiom `{axiom}`"),
+                        Some(relative_path(root, path)),
+                    ));
+                }
             }
         }
     }
@@ -2539,6 +2511,32 @@ mod tests {
     }
 
     #[test]
+    fn trust_flags_probe_decls_unknown_to_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        std::fs::create_dir_all(root.join("artifacts/trust-probe")).unwrap();
+        tama_common::write_string(
+            &root.join("artifacts/trust-probe/axioms.json"),
+            r#"{"schema":"tama.trust-probe.v1","method":"lean.collectAxioms","obligations":[{"lean_decl":"spec.CounterSpec.increment_spec","dischargers":[{"lean_decl":"proof.CounterProof.increment_meets_spec","axioms":[]},{"lean_decl":"proof.CounterProof.stale_decl_from_old_build","axioms":[]}]}]}"#,
+        )
+        .unwrap();
+        let mut manifest = counter_manifest();
+        manifest.obligations.push(public_obligation());
+        manifest.obligations[0].mirrors.clear();
+        manifest.obligations[0].proof_only_reason = Some("test".to_string());
+        let mut issues = Vec::new();
+        trust(&root, &config, &[manifest], &mut issues);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == "TAMA_TRUST_DECL_UNKNOWN"
+                    && issue.message.contains("stale_decl_from_old_build")),
+            "expected TAMA_TRUST_DECL_UNKNOWN for stale probe decl, got {issues:?}"
+        );
+    }
+
+    #[test]
     fn trust_rejects_legacy_probe_shape() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -2928,13 +2926,9 @@ interface Example {
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let mut manifest = counter_manifest();
         let mut obligation = public_obligation();
-        obligation.coverage = tama_manifest::Coverage {
-            disposition: CoverageDisposition::Mirror,
-            path: Some(
-                "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string(),
-            ),
-            reason: None,
-        };
+        obligation.mirrors =
+            vec!["test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string()];
+        obligation.proof_only_reason = None;
         manifest.obligations.push(obligation);
         tama_common::write_string(
             &root.join("test/verity/Counter.t.sol"),
@@ -2994,13 +2988,9 @@ contract CounterTest {}
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let mut manifest = counter_manifest();
         let mut obligation = public_obligation();
-        obligation.coverage = tama_manifest::Coverage {
-            disposition: CoverageDisposition::Mirror,
-            path: Some(
-                "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string(),
-            ),
-            reason: None,
-        };
+        obligation.mirrors =
+            vec!["test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string()];
+        obligation.proof_only_reason = None;
         manifest.obligations.push(obligation);
         let mirror = root.join("test/verity/Counter.t.sol");
         tama_common::write_string(
@@ -3032,11 +3022,9 @@ contract CounterTest {}
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let mut manifest = counter_manifest();
         let mut obligation = public_obligation();
-        obligation.coverage = tama_manifest::Coverage {
-            disposition: CoverageDisposition::Mirror,
-            path: Some("test/verity/Counter.t.sol:CounterTest.testIncrementPost".to_string()),
-            reason: None,
-        };
+        obligation.mirrors =
+            vec!["test/verity/Counter.t.sol:CounterTest.testIncrementPost".to_string()];
+        obligation.proof_only_reason = None;
         manifest.obligations.push(obligation);
         tama_common::write_string(
             &root.join("test/verity/Counter.t.sol"),
@@ -3060,11 +3048,8 @@ contract CounterTest {}
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let mut manifest = counter_manifest();
         let mut obligation = public_obligation();
-        obligation.coverage = tama_manifest::Coverage {
-            disposition: CoverageDisposition::Mirror,
-            path: Some("test/verity/Counter.t.sol".to_string()),
-            reason: None,
-        };
+        obligation.mirrors = vec!["test/verity/Counter.t.sol".to_string()];
+        obligation.proof_only_reason = None;
         manifest.obligations.push(obligation);
         tama_common::write_string(
             &root.join("test/verity/Counter.t.sol"),
@@ -3088,11 +3073,9 @@ contract CounterTest {}
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let mut manifest = counter_manifest();
         let mut obligation = public_obligation();
-        obligation.coverage = tama_manifest::Coverage {
-            disposition: CoverageDisposition::Mirror,
-            path: Some("test/verity/Counter.t.sol:testFuzzIncrementUpdatesCount".to_string()),
-            reason: None,
-        };
+        obligation.mirrors =
+            vec!["test/verity/Counter.t.sol:testFuzzIncrementUpdatesCount".to_string()];
+        obligation.proof_only_reason = None;
         manifest.obligations.push(obligation);
         tama_common::write_string(
             &root.join("test/verity/Counter.t.sol"),
@@ -3116,11 +3099,9 @@ contract CounterTest {}
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let mut manifest = counter_manifest();
         let mut obligation = public_obligation();
-        obligation.coverage = tama_manifest::Coverage {
-            disposition: CoverageDisposition::Mirror,
-            path: Some("../Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string()),
-            reason: None,
-        };
+        obligation.mirrors =
+            vec!["../Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string()];
+        obligation.proof_only_reason = None;
         manifest.obligations.push(obligation);
 
         let mut issues = Vec::new();
@@ -3137,11 +3118,9 @@ contract CounterTest {}
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let mut manifest = counter_manifest();
         let mut obligation = public_obligation();
-        obligation.coverage = tama_manifest::Coverage {
-            disposition: CoverageDisposition::Mirror,
-            path: Some("src/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string()),
-            reason: None,
-        };
+        obligation.mirrors =
+            vec!["src/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string()];
+        obligation.proof_only_reason = None;
         manifest.obligations.push(obligation);
         tama_common::write_string(
             &root.join("src/Counter.t.sol"),
@@ -3529,22 +3508,19 @@ solc = "0.8.33"
                 metadata_hash: "none".to_string(),
             },
             trust: tama_config::TrustConfig::default(),
+            coverage: tama_config::CoverageConfig::default(),
         }
     }
 
     fn public_obligation() -> tama_manifest::Obligation {
         tama_manifest::Obligation {
-            id: "Counter.increment_post".to_string(),
-            name: "increment_post".to_string(),
-            kind: ObligationKind::Postcondition,
-            lean_decl: "proof.CounterProof.increment_post".to_string(),
+            id: "Counter.increment_spec".to_string(),
+            name: "increment_spec".to_string(),
+            lean_decl: "spec.CounterSpec.increment_spec".to_string(),
             contract: "Counter".to_string(),
-            function: Some("increment".to_string()),
-            coverage: tama_manifest::Coverage {
-                disposition: CoverageDisposition::ProofOnly,
-                path: None,
-                reason: Some("symbolic only".to_string()),
-            },
+            dischargers: vec!["proof.CounterProof.increment_meets_spec".to_string()],
+            mirrors: vec![],
+            proof_only_reason: Some("symbolic only".to_string()),
         }
     }
 

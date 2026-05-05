@@ -128,7 +128,7 @@
     },
     "leanDecl": {
       "type": "string",
-      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+$"
+      "pattern": "^[A-Za-z_][A-Za-z0-9_']*(\\.[A-Za-z_][A-Za-z0-9_']*)+$"
     },
     "signature": {
       "type": "string",
@@ -235,50 +235,6 @@
         "encoding": { "enum": ["value", "mapping", "dynamic_array", "bytes", "struct"] }
       }
     },
-    "coverage": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["disposition", "path", "reason"],
-      "allOf": [
-        {
-          "if": {
-            "properties": { "disposition": { "const": "mirror" } },
-            "required": ["disposition"]
-          },
-          "then": {
-            "properties": {
-              "path": { "$ref": "#/$defs/mirrorPath" }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": { "disposition": { "const": "proof_only" } },
-            "required": ["disposition"]
-          },
-          "then": {
-            "properties": {
-              "reason": { "type": "string", "minLength": 1 }
-            }
-          }
-        }
-      ],
-      "properties": {
-        "disposition": { "enum": ["mirror", "proof_only", "none"] },
-        "path": {
-          "anyOf": [
-            { "type": "null" },
-            { "type": "string", "minLength": 1 }
-          ]
-        },
-        "reason": {
-          "anyOf": [
-            { "type": "null" },
-            { "type": "string" }
-          ]
-        }
-      }
-    },
     "mirrorPath": {
       "type": "string",
       "minLength": 1,
@@ -303,44 +259,54 @@
       "required": [
         "id",
         "name",
-        "kind",
         "lean_decl",
         "contract",
-        "function",
-        "coverage"
+        "dischargers",
+        "mirrors"
       ],
-      "allOf": [
+      "oneOf": [
         {
-          "if": {
-            "properties": {
-              "kind": { "enum": ["invariant", "postcondition"] }
-            },
-            "required": ["kind"]
-          },
-          "then": {
-            "properties": {
-              "coverage": {
-                "properties": {
-                  "disposition": { "enum": ["mirror", "proof_only"] }
-                }
-              }
+          "properties": {
+            "mirrors": { "type": "array", "minItems": 1 },
+            "proof_only_reason": {
+              "anyOf": [
+                { "type": "null" },
+                { "not": {} }
+              ]
             }
           }
+        },
+        {
+          "properties": {
+            "mirrors": { "type": "array", "maxItems": 0 },
+            "proof_only_reason": { "type": "string", "minLength": 1 }
+          },
+          "required": ["proof_only_reason"]
         }
       ],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
-        "name": { "type": "string", "minLength": 1 },
-        "kind": { "enum": ["invariant", "postcondition", "helper"] },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_']*$"
+        },
         "lean_decl": { "$ref": "#/$defs/leanDecl" },
         "contract": { "$ref": "#/$defs/contractName" },
-        "function": {
+        "dischargers": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/leanDecl" }
+        },
+        "mirrors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/mirrorPath" }
+        },
+        "proof_only_reason": {
           "anyOf": [
             { "type": "null" },
             { "type": "string", "minLength": 1 }
           ]
-        },
-        "coverage": { "$ref": "#/$defs/coverage" }
+        }
       }
     }
   }

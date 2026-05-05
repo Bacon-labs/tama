@@ -43,7 +43,7 @@ pub enum Field {
     Yul,
     Bytecode,
     RuntimeBytecode,
-    Theorems,
+    Specs,
     Obligations,
     Mirrors,
     Trust,
@@ -58,7 +58,7 @@ pub fn parse_field(raw: &str) -> Option<Field> {
         "yul" => Some(Field::Yul),
         "bytecode" => Some(Field::Bytecode),
         "runtime-bytecode" => Some(Field::RuntimeBytecode),
-        "theorems" => Some(Field::Theorems),
+        "specs" => Some(Field::Specs),
         "obligations" => Some(Field::Obligations),
         "mirrors" => Some(Field::Mirrors),
         "trust" => Some(Field::Trust),
@@ -98,11 +98,11 @@ fn inspect_json(
         Field::RuntimeBytecode => {
             json!({ "runtime_bytecode": artifact(root, manifest, &manifest.artifacts.runtime_bytecode)? })
         }
-        Field::Theorems | Field::Obligations => serde_json::to_value(&manifest.obligations)?,
+        Field::Specs | Field::Obligations => serde_json::to_value(&manifest.obligations)?,
         Field::Mirrors => json!(manifest
             .obligations
             .iter()
-            .filter_map(|obligation| obligation.coverage.path.as_ref())
+            .flat_map(|obligation| obligation.mirrors.iter())
             .collect::<Vec<_>>()),
         Field::Trust => trust_artifacts(root, paths, manifest)?,
     })
@@ -153,13 +153,13 @@ fn inspect_human(
         Field::Yul => artifact(root, manifest, &manifest.artifacts.yul),
         Field::Bytecode => artifact(root, manifest, &manifest.artifacts.creation_bytecode),
         Field::RuntimeBytecode => artifact(root, manifest, &manifest.artifacts.runtime_bytecode),
-        Field::Theorems | Field::Obligations => {
+        Field::Specs | Field::Obligations => {
             Ok(serde_json::to_string_pretty(&manifest.obligations)? + "\n")
         }
         Field::Mirrors => Ok(manifest
             .obligations
             .iter()
-            .filter_map(|obligation| obligation.coverage.path.as_deref())
+            .flat_map(|obligation| obligation.mirrors.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join("\n")
             + "\n"),
@@ -280,7 +280,7 @@ mod tests {
             "yul",
             "bytecode",
             "runtime-bytecode",
-            "theorems",
+            "specs",
             "obligations",
             "mirrors",
             "trust",
@@ -355,20 +355,15 @@ solc = "0.8.33"
             outputs: vec![],
         });
         manifest.obligations.push(tama_manifest::Obligation {
-            id: "Counter.increment_post".to_string(),
-            name: "increment_post".to_string(),
-            kind: tama_manifest::ObligationKind::Postcondition,
-            lean_decl: "proof.CounterProof.increment_post".to_string(),
+            id: "Counter.increment_spec".to_string(),
+            name: "increment_spec".to_string(),
+            lean_decl: "spec.CounterSpec.increment_spec".to_string(),
             contract: "Counter".to_string(),
-            function: Some("increment".to_string()),
-            coverage: tama_manifest::Coverage {
-                disposition: tama_manifest::CoverageDisposition::Mirror,
-                path: Some(
-                    "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount"
-                        .to_string(),
-                ),
-                reason: None,
-            },
+            dischargers: vec!["proof.CounterProof.increment_meets_spec".to_string()],
+            mirrors: vec![
+                "test/verity/Counter.t.sol:CounterTest.testFuzzIncrementUpdatesCount".to_string(),
+            ],
+            proof_only_reason: None,
         });
         manifest
             .write_pretty(&root.join("artifacts/manifest/Counter.json"))
@@ -394,7 +389,7 @@ solc = "0.8.33"
             Field::Yul,
             Field::Bytecode,
             Field::RuntimeBytecode,
-            Field::Theorems,
+            Field::Specs,
             Field::Obligations,
             Field::Mirrors,
             Field::Trust,
