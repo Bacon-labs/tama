@@ -38,24 +38,46 @@ fetch() {
 # without flags. Each step is a no-op if the tool is already present.
 
 LEAN_TOOLCHAIN="leanprover/lean4:v4.22.0"
-if command -v elan >/dev/null 2>&1; then
-  ELAN="$(command -v elan)"
-elif [ -x "$HOME/.elan/bin/elan" ]; then
-  ELAN="$HOME/.elan/bin/elan"
+if command -v lean >/dev/null 2>&1 && lean --version 2>/dev/null | grep -qE 'version 4\.22\.[0-9]'; then
+  echo "Compatible Lean already on PATH; skipping toolchain bootstrap."
 else
-  echo "Installing elan..."
-  fetch "https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh" "$INSTALL_TMPDIR/elan-init.sh"
-  sh "$INSTALL_TMPDIR/elan-init.sh" -y --default-toolchain none
-  ELAN="$HOME/.elan/bin/elan"
+  if command -v elan >/dev/null 2>&1; then
+    ELAN="$(command -v elan)"
+  elif [ -x "$HOME/.elan/bin/elan" ]; then
+    ELAN="$HOME/.elan/bin/elan"
+  else
+    echo "Installing elan..."
+    fetch "https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh" "$INSTALL_TMPDIR/elan-init.sh"
+    sh "$INSTALL_TMPDIR/elan-init.sh" -y --default-toolchain none
+    ELAN="$HOME/.elan/bin/elan"
+  fi
+  echo "Ensuring Lean toolchain $LEAN_TOOLCHAIN is installed..."
+  "$ELAN" toolchain install "$LEAN_TOOLCHAIN"
+  # Set as elan's default only if no default is currently configured, so we
+  # don't clobber an existing user pin. settings.toml carries
+  # `default_toolchain = "<name>"` when one is set.
+  ELAN_SETTINGS="$HOME/.elan/settings.toml"
+  if [ ! -f "$ELAN_SETTINGS" ] || ! grep -qE '^default_toolchain[[:space:]]*=[[:space:]]*"[^"]+"' "$ELAN_SETTINGS" 2>/dev/null; then
+    echo "Setting $LEAN_TOOLCHAIN as default elan toolchain..."
+    "$ELAN" default "$LEAN_TOOLCHAIN"
+  fi
 fi
-echo "Ensuring Lean toolchain $LEAN_TOOLCHAIN is installed..."
-"$ELAN" toolchain install "$LEAN_TOOLCHAIN"
 
-if ! command -v forge >/dev/null 2>&1 && [ ! -x "$HOME/.foundry/bin/forge" ]; then
-  echo "Installing Foundry..."
-  fetch "https://foundry.paradigm.xyz" "$INSTALL_TMPDIR/foundryup-init.sh"
-  sh "$INSTALL_TMPDIR/foundryup-init.sh"
-  "$HOME/.foundry/bin/foundryup"
+if command -v forge >/dev/null 2>&1 || [ -x "$HOME/.foundry/bin/forge" ]; then
+  : # forge already present
+else
+  if command -v foundryup >/dev/null 2>&1; then
+    FOUNDRYUP="$(command -v foundryup)"
+  elif [ -x "$HOME/.foundry/bin/foundryup" ]; then
+    FOUNDRYUP="$HOME/.foundry/bin/foundryup"
+  else
+    echo "Installing foundryup..."
+    fetch "https://foundry.paradigm.xyz" "$INSTALL_TMPDIR/foundryup-init.sh"
+    sh "$INSTALL_TMPDIR/foundryup-init.sh"
+    FOUNDRYUP="$HOME/.foundry/bin/foundryup"
+  fi
+  echo "Installing Foundry tools via foundryup..."
+  "$FOUNDRYUP"
 fi
 
 SOLC_VERSION="0.8.33"
