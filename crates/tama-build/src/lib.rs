@@ -2003,23 +2003,12 @@ fn lean_name_literal(name: &str) -> Result<String> {
 }
 
 fn validate_lean_name(name: &str) -> Result<()> {
-    if name.split('.').all(valid_lean_name_segment) {
+    if tama_manifest::is_qualified_lean_name(name) {
         return Ok(());
     }
     Err(Error::Adapter(format!(
         "trust probe Lean name `{name}` is not a supported identifier"
     )))
-}
-
-fn valid_lean_name_segment(segment: &str) -> bool {
-    let mut chars = segment.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !(first.is_ascii_alphabetic() || first == '_') {
-        return false;
-    }
-    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '\'')
 }
 
 #[cfg(test)]

@@ -1347,8 +1347,10 @@ fn trust(
             );
         }
     }
-    for (manifest, obligation) in public_obligations {
+    let mut expected_decls: BTreeSet<&str> = BTreeSet::new();
+    for (manifest, obligation) in &public_obligations {
         for discharger in &obligation.dischargers {
+            expected_decls.insert(discharger);
             if !discharger.contains('.') {
                 issues.push(issue(
                     "trust-boundary",
@@ -1366,6 +1368,21 @@ fn trust(
                     "TAMA_TRUST_DECL_MISSING",
                     format!(
                         "discharger `{discharger}` declared in manifest but not reported by the trust probe"
+                    ),
+                    Some(probe.strip_prefix(root).unwrap_or(&probe).to_owned()),
+                ));
+            }
+        }
+    }
+    if probe.is_file() {
+        for reported in &seen_decls {
+            if !expected_decls.contains(reported.as_str()) {
+                issues.push(issue(
+                    "trust-boundary",
+                    None,
+                    "TAMA_TRUST_DECL_UNKNOWN",
+                    format!(
+                        "trust probe reports `{reported}` but no manifest declares it as a discharger (stale probe?)"
                     ),
                     Some(probe.strip_prefix(root).unwrap_or(&probe).to_owned()),
                 ));
@@ -2491,6 +2508,32 @@ mod tests {
         assert!(issues
             .iter()
             .any(|issue| issue.code == "TAMA_TRUST_DECL_MISSING"));
+    }
+
+    #[test]
+    fn trust_flags_probe_decls_unknown_to_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        std::fs::create_dir_all(root.join("artifacts/trust-probe")).unwrap();
+        tama_common::write_string(
+            &root.join("artifacts/trust-probe/axioms.json"),
+            r#"{"schema":"tama.trust-probe.v1","method":"lean.collectAxioms","obligations":[{"lean_decl":"spec.CounterSpec.increment_spec","dischargers":[{"lean_decl":"proof.CounterProof.increment_meets_spec","axioms":[]},{"lean_decl":"proof.CounterProof.stale_decl_from_old_build","axioms":[]}]}]}"#,
+        )
+        .unwrap();
+        let mut manifest = counter_manifest();
+        manifest.obligations.push(public_obligation());
+        manifest.obligations[0].mirrors.clear();
+        manifest.obligations[0].proof_only_reason = Some("test".to_string());
+        let mut issues = Vec::new();
+        trust(&root, &config, &[manifest], &mut issues);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.code == "TAMA_TRUST_DECL_UNKNOWN"
+                    && issue.message.contains("stale_decl_from_old_build")),
+            "expected TAMA_TRUST_DECL_UNKNOWN for stale probe decl, got {issues:?}"
+        );
     }
 
     #[test]

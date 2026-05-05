@@ -424,7 +424,7 @@ impl ContractManifest {
                 obligation.id
             ));
         }
-        if !is_identifier(&obligation.name) {
+        if !is_lean_identifier(&obligation.name) {
             return self.invalid(format!(
                 "obligation `{}` name `{}` must be a Lean identifier",
                 obligation.id, obligation.name
@@ -596,15 +596,24 @@ pub fn parse_mirror_path(raw: &str) -> std::result::Result<MirrorPath<'_>, Mirro
     })
 }
 
-fn is_qualified_lean_name(value: &str) -> bool {
+pub fn is_qualified_lean_name(value: &str) -> bool {
     let mut segment_count = 0;
     for segment in value.split('.') {
         segment_count += 1;
-        if !is_identifier(segment) {
+        if !is_lean_identifier(segment) {
             return false;
         }
     }
     segment_count >= 2
+}
+
+pub fn is_lean_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '\'')
 }
 
 fn is_identifier(value: &str) -> bool {
@@ -1115,6 +1124,16 @@ mod tests {
             wrong_contract.validate(),
             Err(Error::Invalid { message, .. }) if message.contains("must match manifest contract")
         ));
+    }
+
+    #[test]
+    fn obligation_name_accepts_lean_prime() {
+        let mut manifest = manifest();
+        manifest.obligations[0].name = "transfer'".to_string();
+        manifest.obligations[0].lean_decl = "spec.ERC20LiteSpec.transfer'".to_string();
+        manifest.obligations[0].dischargers =
+            vec!["proof.ERC20LiteProof.transfer'_meets".to_string()];
+        manifest.validate().unwrap();
     }
 
     #[test]
