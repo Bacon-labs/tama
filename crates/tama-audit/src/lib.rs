@@ -3005,6 +3005,17 @@ contract CounterTest {}
         permissions.set_mode(0o000);
         std::fs::set_permissions(&mirror, permissions).unwrap();
 
+        // chmod 000 is bypassed for uid 0, so this test can't reproduce the
+        // unreadable-file scenario when the suite runs as root (CI sandboxes,
+        // some container envs). Detect that by trying to read the file we
+        // just chmodded and skip cleanly when the read still succeeds.
+        if std::fs::read(&mirror).is_ok() {
+            let mut restored = std::fs::metadata(&mirror).unwrap().permissions();
+            restored.set_mode(0o600);
+            std::fs::set_permissions(&mirror, restored).unwrap();
+            return;
+        }
+
         let mut issues = Vec::new();
         coverage(&root, &[manifest], &mut issues);
 

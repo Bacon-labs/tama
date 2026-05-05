@@ -724,7 +724,7 @@ pub fn compile_yul_standard_json(
     let input_path = root.join(&manifest.artifacts.solc_input);
     tama_common::write_string(&input_path, &(input_pretty + "\n"))?;
 
-    let solc = tama_toolchain::resolve_solc(&config.yul.solc, root)?;
+    let solc = tama_toolchain::resolve_or_install_solc(&config.yul.solc, root)?;
     let solc_program = solc.path.to_string();
     let mut child = Command::new(solc.path.as_std_path())
         .arg("--standard-json")
@@ -3504,6 +3504,9 @@ TAMA_AXIOMS_END proof.CounterProof.increment_meets_spec
         let _solc_guard = EnvVarGuard::unset("TAMA_SOLC");
         let _path_guard = EnvVarGuard::set("PATH", bin.as_os_str());
         let _home_guard = EnvVarGuard::set("HOME", home.as_os_str());
+        // Suppress the auto-install fallback so the test stays offline and
+        // exercises the missing-solc error path rather than downloading.
+        let _offline_guard = EnvVarGuard::set("TAMA_OFFLINE", "1");
         let config = test_config();
         let mut manifest = test_manifest("Counter");
         tama_common::write_string(

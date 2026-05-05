@@ -8,13 +8,15 @@ authors.workspace = true
 
 [dependencies]
 camino.workspace = true
+hex.workspace = true
 regex.workspace = true
 semver.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 tama-common = { path = "../tama-common" }
 thiserror.workspace = true
 which.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tempfile.workspace = true
