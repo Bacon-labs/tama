@@ -28,6 +28,12 @@ struct Cli {
     #[arg(
         long,
         global = true,
+        help = "Reinstall the resolved version even if it is already active"
+    )]
+    force: bool,
+    #[arg(
+        long,
+        global = true,
         value_name = "WHEN",
         value_enum,
         default_value_t = ColorChoice::Auto,
@@ -134,13 +140,14 @@ fn run(cli: Cli) -> Result<(), String> {
             version.as_deref().unwrap_or("stable"),
             manifest_file,
             cli.offline,
+            cli.force,
             &palette,
         ),
         Command::Use { version } => use_version(&version, &palette),
         Command::List => list_versions(&palette),
         Command::Self_ {
             command: SelfCommand::Update,
-        } => install("stable", None, cli.offline, &palette),
+        } => install("stable", None, cli.offline, cli.force, &palette),
         Command::Uninstall => uninstall(),
     }
 }
@@ -149,6 +156,7 @@ fn install(
     version: &str,
     manifest_file: Option<Utf8PathBuf>,
     offline: bool,
+    force: bool,
     palette: &Palette,
 ) -> Result<(), String> {
     let local_manifest = manifest_file.is_some();
@@ -168,6 +176,24 @@ fn install(
     }
     let platform = platform()?;
     let (selected_version, artifact) = select_artifact(&manifest, &platform, version)?;
+    let home = tama_home();
+    let active = read_active_version(&home)?;
+    if !force
+        && active.as_deref() == Some(selected_version.as_str())
+        && home
+            .join("versions")
+            .join(&selected_version)
+            .join("bin/tama")
+            .exists()
+    {
+        anstream::println!(
+            "{} {} {}",
+            paint(palette.ok, "Tama"),
+            paint(palette.count, &selected_version),
+            paint(palette.ok, "is already up to date"),
+        );
+        return Ok(());
+    }
     let archive = if artifact.url.starts_with("file://") {
         fs::read(artifact.url.trim_start_matches("file://")).map_err(|err| err.to_string())?
     } else {
@@ -177,7 +203,6 @@ fn install(
         download(&artifact.url)?
     };
     verify_sha256(&archive, &artifact.sha256)?;
-    let home = tama_home();
     install_archive_at(&home, &selected_version, &archive)?;
     use_version_at(&home, &selected_version)?;
     anstream::println!(
@@ -1258,7 +1283,7 @@ mod tests {
         let manifest = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).unwrap();
         fs::write(&manifest, br#"{"version":"0.1.0","artifacts":[]}"#).unwrap();
 
-        let err = install("stable", Some(manifest), true, &Palette::plain()).unwrap_err();
+        let err = install("stable", Some(manifest), true, false, &Palette::plain()).unwrap_err();
 
         assert!(!err.is_empty());
     }
@@ -1291,7 +1316,7 @@ mod tests {
         });
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
 
-        let err = install("stable", Some(manifest_path), true, &Palette::plain()).unwrap_err();
+        let err = install("stable", Some(manifest_path), true, false, &Palette::plain()).unwrap_err();
 
         assert!(err.contains("bad artifact SHA-256"));
         assert!(!home.exists());
@@ -1319,7 +1344,7 @@ mod tests {
         });
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
 
-        let err = install("stable", Some(manifest_path), true, &Palette::plain()).unwrap_err();
+        let err = install("stable", Some(manifest_path), true, false, &Palette::plain()).unwrap_err();
 
         assert_eq!(err, "offline install cannot download artifact");
         assert!(!home.exists());
@@ -1358,13 +1383,137 @@ mod tests {
         )
         .unwrap();
 
-        install("stable", Some(manifest_path), true, &Palette::plain()).unwrap();
+        install("stable", Some(manifest_path), true, false, &Palette::plain()).unwrap();
 
         assert!(home.join("versions/0.1.0/bin/tama").is_file());
         assert!(home.join("versions/0.1.0/bin/tamaup").is_file());
         assert!(home.join("bin/tama").exists());
         assert!(home.join("bin/tamaup").exists());
         assert_eq!(fs::read_to_string(home.join("active")).unwrap(), "0.1.0");
+    }
+
+    #[test]
+    fn install_skips_when_active_matches_target() {
+        let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let home = root.join("home");
+        let _home_guard = EnvVarGuard::set("TAMAUP_HOME", home.as_std_path().as_os_str());
+        // Pre-seed `home` as if 0.1.0 is already installed and active.
+        let bin_dir = home.join("versions/0.1.0/bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::write(bin_dir.join("tama"), b"installed tama").unwrap();
+        fs::write(bin_dir.join("tamaup"), b"installed tamaup").unwrap();
+        fs::create_dir_all(home.join("bin")).unwrap();
+        fs::write(home.join("active"), b"0.1.0").unwrap();
+        // Manifest still pins stable to 0.1.0; the artifact URL points at a
+        // file that does not exist, so any actual download attempt would fail.
+        let manifest_path = root.join("manifest.json");
+        let manifest = serde_json::json!({
+            "schema": RELEASE_MANIFEST_SCHEMA,
+            "stable": "0.1.0",
+            "releases": [{
+                "version": "0.1.0",
+                "artifacts": [{
+                    "platform": platform().unwrap(),
+                    "url": format!("file://{}", root.join("missing-archive.tar.gz")),
+                    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+                }]
+            }]
+        });
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        // Should short-circuit before touching the archive: no error.
+        install("stable", Some(manifest_path), true, false, &Palette::plain()).unwrap();
+
+        assert_eq!(fs::read(bin_dir.join("tama")).unwrap(), b"installed tama");
+    }
+
+    #[test]
+    fn install_force_reinstalls_even_when_active_matches_target() {
+        let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let home = root.join("home");
+        let _home_guard = EnvVarGuard::set("TAMAUP_HOME", home.as_std_path().as_os_str());
+        // Pre-seed home with a stale binary that we expect --force to overwrite.
+        let bin_dir = home.join("versions/0.1.0/bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::write(bin_dir.join("tama"), b"stale tama").unwrap();
+        fs::write(bin_dir.join("tamaup"), b"stale tamaup").unwrap();
+        fs::create_dir_all(home.join("bin")).unwrap();
+        fs::write(home.join("active"), b"0.1.0").unwrap();
+        let archive = test_archive(&[
+            ("bin/tama", b"fresh tama".as_slice(), 0o755),
+            ("bin/tamaup", b"fresh tamaup".as_slice(), 0o755),
+        ]);
+        let archive_path = root.join("tama.tar.gz");
+        fs::write(&archive_path, &archive).unwrap();
+        let sha256 = hex::encode(Sha256::digest(&archive));
+        let manifest_path = root.join("manifest.json");
+        let manifest = serde_json::json!({
+            "schema": RELEASE_MANIFEST_SCHEMA,
+            "stable": "0.1.0",
+            "releases": [{
+                "version": "0.1.0",
+                "artifacts": [{
+                    "platform": platform().unwrap(),
+                    "url": format!("file://{archive_path}"),
+                    "sha256": sha256
+                }]
+            }]
+        });
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        install("stable", Some(manifest_path), true, true, &Palette::plain()).unwrap();
+
+        assert_eq!(
+            fs::read(home.join("versions/0.1.0/bin/tama")).unwrap(),
+            b"fresh tama"
+        );
+    }
+
+    #[test]
+    fn install_proceeds_when_active_marker_points_to_missing_binary() {
+        // active points at 0.1.0 but the version dir doesn't actually have a
+        // tama binary -- recovery from a corrupt or partial install. We must
+        // download and install rather than skip.
+        let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let home = root.join("home");
+        let _home_guard = EnvVarGuard::set("TAMAUP_HOME", home.as_std_path().as_os_str());
+        fs::create_dir_all(home.join("versions/0.1.0/bin")).unwrap();
+        // No tama binary in the version dir -- corrupt state.
+        fs::write(home.join("active"), b"0.1.0").unwrap();
+        let archive = test_archive(&[
+            ("bin/tama", b"recovered tama".as_slice(), 0o755),
+            ("bin/tamaup", b"recovered tamaup".as_slice(), 0o755),
+        ]);
+        let archive_path = root.join("tama.tar.gz");
+        fs::write(&archive_path, &archive).unwrap();
+        let sha256 = hex::encode(Sha256::digest(&archive));
+        let manifest_path = root.join("manifest.json");
+        let manifest = serde_json::json!({
+            "schema": RELEASE_MANIFEST_SCHEMA,
+            "stable": "0.1.0",
+            "releases": [{
+                "version": "0.1.0",
+                "artifacts": [{
+                    "platform": platform().unwrap(),
+                    "url": format!("file://{archive_path}"),
+                    "sha256": sha256
+                }]
+            }]
+        });
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        install("stable", Some(manifest_path), true, false, &Palette::plain()).unwrap();
+
+        assert_eq!(
+            fs::read(home.join("versions/0.1.0/bin/tama")).unwrap(),
+            b"recovered tama"
+        );
     }
 
     #[test]
