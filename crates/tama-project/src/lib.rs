@@ -601,6 +601,12 @@ verity_contract ERC20Lite where
   -- proof obligation pair below shows both halves of access control: the
   -- authorized path actually rotates the slot, and the unauthorized path
   -- leaves it untouched.
+  --
+  -- This starter intentionally does NOT reject `newOwner = 0`. A
+  -- production Ownable contract would add a `require (newOwner != 0)
+  -- "..."` check (and a corresponding `transferOwnership_rejects_zero`
+  -- spec); we keep the starter minimal so the access-control
+  -- demonstration stays focused on one property at a time.
   function transferOwnership (newOwner : Address) : Unit := do
     let sender ← msgSender
     let currentOwner ← getStorageAddr ownerSlot
@@ -621,7 +627,7 @@ open Verity.EVM.Uint256
 -- Discharging it in the proof file binds an obligation to the implementation;
 -- mirroring it in a Foundry test ties the same obligation to the compiled
 -- bytecode. The collection here is intentionally varied so the starter shows
--- five common shapes:
+-- four common shapes:
 --   1. View / read-only specs   — `balanceOf_spec`, `totalSupply_spec`, `owner_spec`
 --   2. Frame conditions          — `mint_owner_preserved`, `transfer_total_supply_preserved`,
 --                                  `transferOwnership_supply_preserved`,
@@ -630,7 +636,6 @@ open Verity.EVM.Uint256
 --                                  `transfer_balances_effect`
 --   4. Negative access control   — `mint_unauthorized_no_change`,
 --                                  `transferOwnership_unauthorized_owner_unchanged`
---   5. Conservation              — `transfer_total_supply_preserved`
 
 /-! ## Frame conditions
 Properties of the form `s'.X = s.X` — the function does not touch part of state. -/
@@ -672,15 +677,18 @@ def transferOwnership_authorized_sets_owner
 -- that does `balance[sender] -= amount; balance[recipient] += amount` reads
 -- a stale `balance[recipient]` after the debit, which can mint or burn
 -- value when sender = recipient. The spec explicitly demands that the
--- balance be left untouched in that branch — which the `if sender == toAddr
--- then pure ()` short-circuit in the contract is what makes true. The
--- non-self branch additionally requires that crediting the recipient does
--- not overflow Uint256, and pins down the exact debit and credit.
+-- *entire balance mapping* be left untouched in that branch — full mapping
+-- equality, not just the sender's slot, so a faulty implementation that
+-- happened to leave sender alone but corrupted some other balance would
+-- still fail proof. The `if sender == toAddr then pure ()` short-circuit
+-- in the contract is what makes that true. The non-self branch
+-- additionally requires that crediting the recipient does not overflow
+-- Uint256, and pins down the exact debit and credit.
 def transfer_balances_effect
     (toAddr : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
   amount.val ≤ (s.storageMap 1 s.sender).val →
     (s.sender = toAddr →
-      s'.storageMap 1 s.sender = s.storageMap 1 s.sender) ∧
+      s'.storageMap = s.storageMap) ∧
     (s.sender ≠ toAddr →
       (s.storageMap 1 toAddr).val + amount.val ≤ Verity.Stdlib.Math.MAX_UINT256 →
         s'.storageMap 1 s.sender = (s.storageMap 1 s.sender) - amount ∧
@@ -948,7 +956,11 @@ contract ERC20LiteTest is Test {
     }
 
     // Negative access control mirror: non-owner mint reverts and leaves both
-    // totalSupply and the recipient balance unchanged.
+    // totalSupply and the recipient balance unchanged. The revert is
+    // matched against the exact `Error(string)` selector + message so a
+    // failure on a different code path (out-of-gas, an unrelated check, …)
+    // would surface as a test failure rather than pass under a generic
+    // `vm.expectRevert()`.
     // tama: mirrors=mint_unauthorized_no_change
     function testFuzzMintRevertsForNonOwner(address attacker, address account, uint256 rawAmount) public {
         vm.assume(attacker != address(this));
@@ -957,7 +969,7 @@ contract ERC20LiteTest is Test {
         uint256 supplyBefore = token.totalSupply();
         uint256 balanceBefore = token.balanceOf(account);
         vm.prank(attacker);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "Caller is not the owner"));
         token.mint(account, amount);
         require(token.totalSupply() == supplyBefore, "supply unchanged");
         require(token.balanceOf(account) == balanceBefore, "balance unchanged");
@@ -1007,24 +1019,40 @@ contract ERC20LiteTest is Test {
         }
     }
 
-    // Authorized-path mirror: the current owner can promote a successor and
-    // `owner()` then reads back the new address.
+    // Authorized-path mirror: the current owner can promote a successor,
+    // `owner()` then reads back the new address, AND the previous owner has
+    // truly lost access — a `transferOwnership` from the previous owner
+    // after the rotation must revert. The second half catches a "copies
+    // instead of moves" bug class: an implementation that wrote to the new
+    // owner slot without invalidating the old owner's authority would pass
+    // the `owner()` read but fail the post-rotation revert check.
     // tama: mirrors=transferOwnership_authorized_sets_owner
     function testFuzzTransferOwnershipChangesOwner(address newOwner) public {
         ERC20LiteIface token = deployToken();
+        address oldOwner = address(this);
         token.transferOwnership(newOwner);
         require(token.owner() == newOwner, "owner rotated");
+        if (newOwner != oldOwner) {
+            vm.prank(oldOwner);
+            vm.expectRevert(abi.encodeWithSignature("Error(string)", "Caller is not the owner"));
+            token.transferOwnership(address(0xDEAD));
+            require(token.owner() == newOwner, "old owner cannot regain access");
+        }
     }
 
     // Negative access control mirror: a non-owner cannot transfer ownership
-    // and the slot is untouched after the revert.
+    // and the slot is untouched after the revert. The expected revert is
+    // matched against the exact `Error(string)` selector + message so a
+    // future change that started reverting for a different reason (gas, a
+    // new check, …) would surface as a test failure rather than slip
+    // through under a generic `vm.expectRevert()`.
     // tama: mirrors=transferOwnership_unauthorized_owner_unchanged
     function testFuzzTransferOwnershipRevertsForNonOwner(address attacker, address newOwner) public {
         vm.assume(attacker != address(this));
         ERC20LiteIface token = deployToken();
         address ownerBefore = token.owner();
         vm.prank(attacker);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "Caller is not the owner"));
         token.transferOwnership(newOwner);
         require(token.owner() == ownerBefore, "owner unchanged");
     }

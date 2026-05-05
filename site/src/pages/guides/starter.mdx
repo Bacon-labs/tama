@@ -172,32 +172,32 @@ def transferOwnership_unauthorized_owner_unchanged
 end ERC20LiteSpec
 ```
 
-The set is grouped to show the five common shapes a starter should
+The set is grouped to show the four common shapes a starter should
 exercise:
 
 1. **Frame conditions** — `transfer_total_supply_preserved`,
    `mint_owner_preserved`, `transferOwnership_supply_preserved`,
    `transferOwnership_balances_preserved`. The function does not touch
-   that part of state.
+   that part of state. `transfer_total_supply_preserved` is also the
+   contract's conservation law: a token moves, nothing is created or
+   destroyed.
 2. **Read-only views** — `balanceOf_spec`, `totalSupply_spec`,
    `owner_spec`. The query is a faithful read.
 3. **Authorized-path effects** —
    `transferOwnership_authorized_sets_owner` pins down what the owner
    observes after a successful rotation; `transfer_balances_effect`
    pins down the exact debit and credit on the success path, and
-   *demands the self-transfer branch leaves the balance untouched* —
-   the well-known double-debit footgun gets a first-class proof
-   obligation, not a comment.
+   *demands the self-transfer branch leaves the entire balance mapping
+   untouched* — the well-known double-debit footgun gets a first-class
+   proof obligation, not a comment.
 4. **Negative access control** — `mint_unauthorized_no_change`,
    `transferOwnership_unauthorized_owner_unchanged`. The
    complementary half of access control: not only does the authorized
    path do the right thing, the unauthorized path does *nothing*. This
    is the property that prevents a non-owner from minting tokens or
    stealing the contract.
-5. **Conservation** — `transfer_total_supply_preserved` doubles as
-   the conservation law: a token moves; nothing is created or destroyed.
 
-Four are facts about pure reads. The rest are facts about state
+Three are facts about pure reads. The rest are facts about state
 transitions — split between "what changes" (effects) and "what doesn't
 change" (frames and revert-on-unauthorized).
 
