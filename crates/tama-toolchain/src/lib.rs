@@ -138,19 +138,37 @@ pub fn resolve_solc(expected: &str, root: &Utf8Path) -> Result<Tool> {
     })
 }
 
-/// Resolve solc per `resolve_solc`; if no binary is found at any search
-/// location, download the requested version from binaries.soliditylang.org
-/// into `~/.tama/solc/<version>/solc` and resolve again. Lets `tama build`
-/// follow whatever solc version is pinned in `tama.toml` without forcing the
-/// user to install each version manually.
+/// Resolve solc per `resolve_solc`; if the binary is missing or the
+/// resolved binary's version doesn't match `expected`, download the
+/// requested version from binaries.soliditylang.org into
+/// `~/.tama/solc/<version>/solc` and resolve again. The home-managed
+/// path sits ahead of `PATH` in `resolve_solc_path`'s search order, so
+/// the freshly installed pin wins on retry. Lets `tama build` follow
+/// whatever solc version is pinned in `tama.toml` without forcing the
+/// user to install each version manually. Set `TAMA_OFFLINE=1` to
+/// suppress the network fallback (CI, air-gapped envs, unit tests).
 pub fn resolve_or_install_solc(expected: &str, root: &Utf8Path) -> Result<Tool> {
     match resolve_solc(expected, root) {
         Err(Error::MissingTool(name)) if name == "solc" => {
+            if offline_mode() {
+                return Err(Error::MissingTool(name));
+            }
+            install_solc(expected)?;
+            resolve_solc(expected, root)
+        }
+        Err(Error::ToolVersionMismatch(message)) => {
+            if offline_mode() {
+                return Err(Error::ToolVersionMismatch(message));
+            }
             install_solc(expected)?;
             resolve_solc(expected, root)
         }
         other => other,
     }
+}
+
+fn offline_mode() -> bool {
+    std::env::var_os("TAMA_OFFLINE").is_some_and(|value| !value.is_empty())
 }
 
 /// Download solc `version` from binaries.soliditylang.org into
@@ -165,12 +183,26 @@ pub fn install_solc(expected: &str) -> Result<Utf8PathBuf> {
         return Ok(dest);
     }
     let platform = solc_platform()?;
-    let release_path = solc_release_path(platform, &version_str)?;
+    let list_bytes = fetch_solc_list(platform)?;
+    let (release_path, expected_sha) = parse_solc_release(&list_bytes, platform, &version_str)?;
     std::fs::create_dir_all(&dest_dir)
         .map_err(|err| Error::Failure(format!("failed to create {dest_dir}: {err}")))?;
     let url = format!("https://binaries.soliditylang.org/{platform}/{release_path}");
-    download(&url, &dest)?;
-    set_executable(&dest)?;
+    // Download to a per-process temp file inside the destination dir, then
+    // rename for an atomic publish. Two concurrent `tama build` invocations
+    // won't see each other's half-written binary.
+    let tmp_dest = dest_dir.join(format!("solc.{}.tmp", std::process::id()));
+    download(&url, &tmp_dest)?;
+    if let Some(expected) = expected_sha.as_deref() {
+        verify_sha256(&tmp_dest, expected).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp_dest);
+        })?;
+    }
+    set_executable(&tmp_dest)?;
+    std::fs::rename(&tmp_dest, &dest).map_err(|err| {
+        let _ = std::fs::remove_file(&tmp_dest);
+        Error::Failure(format!("failed to publish {dest}: {err}"))
+    })?;
     Ok(dest)
 }
 
@@ -186,40 +218,104 @@ fn solc_platform() -> Result<&'static str> {
     }
 }
 
-fn solc_release_path(platform: &str, version: &str) -> Result<String> {
+const SOLC_LIST_TTL_SECS: u64 = 24 * 60 * 60;
+
+/// Fetch list.json for `platform`, using a 24h on-disk cache at
+/// `~/.tama/cache/solc-list-<platform>.json` so repeated `tama build`
+/// invocations don't hit the network for every cold solc install.
+fn fetch_solc_list(platform: &str) -> Result<Vec<u8>> {
+    let cache_dir = home_cache_dir()?;
+    let cache = cache_dir.join(format!("solc-list-{platform}.json"));
+    if let Ok(bytes) = read_if_fresh(&cache, SOLC_LIST_TTL_SECS) {
+        return Ok(bytes);
+    }
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|err| Error::Failure(format!("failed to create {cache_dir}: {err}")))?;
     let url = format!("https://binaries.soliditylang.org/{platform}/list.json");
-    let mut tmp = std::env::temp_dir();
-    tmp.push(format!("tama-solc-list-{platform}.json"));
-    let tmp_path = Utf8PathBuf::from_path_buf(tmp)
-        .map_err(|p| Error::Failure(format!("non-utf8 tmp path: {}", p.display())))?;
-    download(&url, &tmp_path)?;
-    let bytes = std::fs::read(&tmp_path)
-        .map_err(|err| Error::Failure(format!("failed to read {tmp_path}: {err}")))?;
-    let _ = std::fs::remove_file(&tmp_path);
-    parse_solc_release_path(&bytes, platform, version)
+    let tmp = cache_dir.join(format!(
+        "solc-list-{platform}.json.{}.tmp",
+        std::process::id()
+    ));
+    download(&url, &tmp)?;
+    std::fs::rename(&tmp, &cache).map_err(|err| {
+        let _ = std::fs::remove_file(&tmp);
+        Error::Failure(format!("failed to publish {cache}: {err}"))
+    })?;
+    std::fs::read(&cache)
+        .map_err(|err| Error::Failure(format!("failed to read {cache}: {err}")))
 }
 
-fn parse_solc_release_path(list_bytes: &[u8], platform: &str, version: &str) -> Result<String> {
+fn read_if_fresh(path: &Utf8Path, ttl_secs: u64) -> Result<Vec<u8>> {
+    let meta = std::fs::metadata(path)
+        .map_err(|err| Error::Failure(format!("stat {path}: {err}")))?;
+    let modified = meta
+        .modified()
+        .map_err(|err| Error::Failure(format!("mtime {path}: {err}")))?;
+    let elapsed = modified
+        .elapsed()
+        .map_err(|err| Error::Failure(format!("clock skew on {path}: {err}")))?;
+    if elapsed.as_secs() > ttl_secs {
+        return Err(Error::Failure("cache stale".to_string()));
+    }
+    std::fs::read(path).map_err(|err| Error::Failure(format!("read {path}: {err}")))
+}
+
+fn parse_solc_release(
+    list_bytes: &[u8],
+    platform: &str,
+    version: &str,
+) -> Result<(String, Option<String>)> {
+    #[derive(Deserialize)]
+    struct Build {
+        path: String,
+        #[serde(default)]
+        sha256: Option<String>,
+    }
     #[derive(Deserialize)]
     struct List {
         releases: std::collections::BTreeMap<String, String>,
+        #[serde(default)]
+        builds: Vec<Build>,
     }
     let list: List = serde_json::from_slice(list_bytes)
         .map_err(|err| Error::Failure(format!("failed to parse solc list.json: {err}")))?;
-    list.releases.get(version).cloned().ok_or_else(|| {
-        Error::Failure(format!(
-            "solc {version} is not available for {platform}"
-        ))
-    })
+    let path = list.releases.get(version).cloned().ok_or_else(|| {
+        Error::Failure(format!("solc {version} is not available for {platform}"))
+    })?;
+    let sha256 = list
+        .builds
+        .into_iter()
+        .find(|build| build.path == path)
+        .and_then(|build| build.sha256);
+    Ok((path, sha256))
 }
 
 fn home_solc_dir(version: &str) -> Result<Utf8PathBuf> {
+    Ok(home_tama_dir()?.join("solc").join(version))
+}
+
+fn home_cache_dir() -> Result<Utf8PathBuf> {
+    Ok(home_tama_dir()?.join("cache"))
+}
+
+fn home_tama_dir() -> Result<Utf8PathBuf> {
     let home = std::env::var("HOME")
         .map_err(|_| Error::Failure("HOME is not set; cannot install solc".to_string()))?;
-    Ok(Utf8PathBuf::from(home)
-        .join(".tama")
-        .join("solc")
-        .join(version))
+    Ok(Utf8PathBuf::from(home).join(".tama"))
+}
+
+fn verify_sha256(path: &Utf8Path, expected: &str) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path)
+        .map_err(|err| Error::Failure(format!("failed to read {path} for SHA: {err}")))?;
+    let actual = hex::encode(Sha256::digest(&bytes));
+    let expected_normalized = expected.trim_start_matches("0x").to_ascii_lowercase();
+    if actual != expected_normalized {
+        return Err(Error::Failure(format!(
+            "solc SHA-256 mismatch for {path}: expected {expected_normalized}, got {actual}"
+        )));
+    }
+    Ok(())
 }
 
 fn download(url: &str, dest: &Utf8Path) -> Result<()> {
@@ -493,16 +589,32 @@ mod tests {
                 "0.8.33": "solc-linux-amd64-v0.8.33+commit.64118f21",
                 "0.8.32": "solc-linux-amd64-v0.8.32+commit.aaaaaaaa"
             },
+            "builds": [
+                {"path": "solc-linux-amd64-v0.8.33+commit.64118f21", "sha256": "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"}
+            ]
+        }"#;
+        let (path, sha) = parse_solc_release(list, "linux-amd64", "0.8.33").unwrap();
+        assert_eq!(path, "solc-linux-amd64-v0.8.33+commit.64118f21");
+        assert_eq!(
+            sha.as_deref(),
+            Some("0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+        );
+    }
+
+    #[test]
+    fn solc_release_path_returns_none_sha_when_build_entry_missing() {
+        let list = br#"{
+            "releases": {"0.8.33": "solc-linux-amd64-v0.8.33+commit.64118f21"},
             "builds": []
         }"#;
-        let path = parse_solc_release_path(list, "linux-amd64", "0.8.33").unwrap();
-        assert_eq!(path, "solc-linux-amd64-v0.8.33+commit.64118f21");
+        let (_path, sha) = parse_solc_release(list, "linux-amd64", "0.8.33").unwrap();
+        assert!(sha.is_none());
     }
 
     #[test]
     fn solc_release_path_errors_when_version_missing() {
         let list = br#"{"releases": {"0.8.33": "solc-x"}, "builds": []}"#;
-        let err = parse_solc_release_path(list, "linux-amd64", "0.8.99").unwrap_err();
+        let err = parse_solc_release(list, "linux-amd64", "0.8.99").unwrap_err();
         assert!(matches!(err, Error::Failure(message) if message.contains("0.8.99")));
     }
 
@@ -522,6 +634,38 @@ mod tests {
             dir,
             Utf8PathBuf::from("/tmp/tama-test-home/.tama/solc/0.8.33")
         );
+    }
+
+    #[test]
+    fn home_cache_dir_uses_dot_tama_layout() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let _home = EnvVarGuard::set("HOME", "/tmp/tama-test-home");
+        let dir = home_cache_dir().unwrap();
+        assert_eq!(dir, Utf8PathBuf::from("/tmp/tama-test-home/.tama/cache"));
+    }
+
+    #[test]
+    fn verify_sha256_accepts_matching_digest_with_or_without_0x_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = Utf8PathBuf::from_path_buf(dir.path().join("solc")).unwrap();
+        std::fs::write(&file, b"hello world").unwrap();
+        // sha256("hello world") = b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
+        verify_sha256(
+            &file,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+        )
+        .unwrap();
+        verify_sha256(
+            &file,
+            "0xb94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+        )
+        .unwrap();
+        let err = verify_sha256(
+            &file,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Failure(m) if m.contains("SHA-256 mismatch")));
     }
 
     #[test]

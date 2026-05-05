@@ -3504,6 +3504,9 @@ TAMA_AXIOMS_END proof.CounterProof.increment_meets_spec
         let _solc_guard = EnvVarGuard::unset("TAMA_SOLC");
         let _path_guard = EnvVarGuard::set("PATH", bin.as_os_str());
         let _home_guard = EnvVarGuard::set("HOME", home.as_os_str());
+        // Suppress the auto-install fallback so the test stays offline and
+        // exercises the missing-solc error path rather than downloading.
+        let _offline_guard = EnvVarGuard::set("TAMA_OFFLINE", "1");
         let config = test_config();
         let mut manifest = test_manifest("Counter");
         tama_common::write_string(
