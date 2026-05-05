@@ -1566,8 +1566,8 @@ fn extract_mirrors(
             .expect("valid function regex");
     let any_function_re = Regex::new(r"^\s*function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
         .expect("valid any function regex");
-    let contract_re =
-        Regex::new(r"^\s*contract\s+([A-Za-z_][A-Za-z0-9_]*)\b").expect("valid contract regex");
+    let contract_re = Regex::new(r"^\s*(?:abstract\s+)?contract\s+([A-Za-z_][A-Za-z0-9_]*)\b")
+        .expect("valid contract regex");
     walk_test_files(test_dir, &mut |path| {
         let text = tama_common::read_to_string(path)?;
         let rel = path
@@ -2819,6 +2819,36 @@ contract CounterTest {
         assert_eq!(count_brace_delta("bytes memory s = \"}\";"), 0);
         assert_eq!(count_brace_delta("/* } */ {"), 1);
         assert_eq!(count_brace_delta("if (a) { /* inner } */ }"), 0);
+    }
+
+    #[test]
+    fn extract_mirrors_recognizes_abstract_contract_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let test_dir = root.join("test/verity");
+        let test_file = test_dir.join("Foo.t.sol");
+        tama_common::write_string(
+            &test_file,
+            r#"abstract contract FooTestBase {
+    // tama: mirrors=foo_spec
+    function testFuzzShared(uint256 x) public {}
+}
+
+contract ConcreteFooTest is FooTestBase {
+    function setUp() public {}
+}
+"#,
+        )
+        .unwrap();
+        let mut spec_owner = BTreeMap::new();
+        spec_owner.insert("foo_spec".to_string(), "Foo".to_string());
+        let mirrors = extract_mirrors(&root, &test_dir, &spec_owner).unwrap();
+        assert_eq!(
+            mirrors
+                .get(&("Foo".to_string(), "foo_spec".to_string()))
+                .map(|v| v.as_slice()),
+            Some(&["test/verity/Foo.t.sol:FooTestBase.testFuzzShared".to_string()][..])
+        );
     }
 
     #[test]
