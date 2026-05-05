@@ -33,6 +33,48 @@ fetch() {
   fi
 }
 
+# Toolchain bootstrap: tama needs Lean (via elan), Foundry, and solc. We
+# install whatever is missing so a fresh machine reaches a working state
+# without flags. Each step is a no-op if the tool is already present.
+
+LEAN_TOOLCHAIN="leanprover/lean4:v4.22.0"
+if command -v elan >/dev/null 2>&1; then
+  ELAN="$(command -v elan)"
+elif [ -x "$HOME/.elan/bin/elan" ]; then
+  ELAN="$HOME/.elan/bin/elan"
+else
+  echo "Installing elan..."
+  fetch "https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh" "$INSTALL_TMPDIR/elan-init.sh"
+  sh "$INSTALL_TMPDIR/elan-init.sh" -y --default-toolchain none
+  ELAN="$HOME/.elan/bin/elan"
+fi
+echo "Ensuring Lean toolchain $LEAN_TOOLCHAIN is installed..."
+"$ELAN" toolchain install "$LEAN_TOOLCHAIN"
+
+if ! command -v forge >/dev/null 2>&1 && [ ! -x "$HOME/.foundry/bin/forge" ]; then
+  echo "Installing Foundry..."
+  fetch "https://foundry.paradigm.xyz" "$INSTALL_TMPDIR/foundryup-init.sh"
+  sh "$INSTALL_TMPDIR/foundryup-init.sh"
+  "$HOME/.foundry/bin/foundryup"
+fi
+
+SOLC_VERSION="0.8.33"
+SOLC_COMMIT="64118f21"
+SOLC_DIR="$TAMAUP_HOME/solc/$SOLC_VERSION"
+SOLC_BIN="$SOLC_DIR/solc"
+if [ ! -x "$SOLC_BIN" ]; then
+  case "$PLATFORM" in
+    linux-x86_64)  SOLC_URL_PATH="linux-amd64/solc-linux-amd64-v${SOLC_VERSION}+commit.${SOLC_COMMIT}" ;;
+    linux-aarch64) SOLC_URL_PATH="linux-aarch64/solc-linux-aarch64-v${SOLC_VERSION}+commit.${SOLC_COMMIT}" ;;
+    macos-aarch64) SOLC_URL_PATH="macosx-amd64/solc-macosx-amd64-v${SOLC_VERSION}+commit.${SOLC_COMMIT}" ;;
+    *) echo "no solc binary mapping for platform: $PLATFORM" >&2; exit 1 ;;
+  esac
+  echo "Installing solc $SOLC_VERSION to $SOLC_BIN..."
+  mkdir -p "$SOLC_DIR"
+  fetch "https://binaries.soliditylang.org/$SOLC_URL_PATH" "$SOLC_BIN"
+  chmod 755 "$SOLC_BIN"
+fi
+
 fetch "$BASE_URL/manifest.json" "$INSTALL_TMPDIR/manifest.json"
 
 if ! command -v python3 >/dev/null 2>&1; then
