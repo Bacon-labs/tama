@@ -10,6 +10,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use clap::CommandFactory;
 use clap::{Parser, Subcommand};
 use flate2::read::GzDecoder;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -19,8 +20,9 @@ use style::{paint, ColorChoice, Palette, Stream};
 
 const DEFAULT_BASE_URL: &str = "https://github.com/bacon-labs/tama/releases/latest/download";
 const DEFAULT_LEAN_TOOLCHAIN: &str = "leanprover/lean4:v4.22.0";
-const DEFAULT_LEAN_VERSION: &str = "4.22.0";
+const DEFAULT_LEAN_REQ: &str = "^4.22.0";
 const DEFAULT_SOLC_VERSION: &str = "0.8.33";
+const DEFAULT_SOLC_REQ: &str = "=0.8.33";
 const RELEASE_MANIFEST_SCHEMA: &str = "tama.release-manifest.v1";
 
 #[derive(Debug, Parser)]
@@ -709,11 +711,13 @@ fn bootstrap_toolchain(opts: BootstrapOptions) -> Result<(), String> {
 }
 
 fn detect_toolchain_presence() -> ToolchainPresence {
+    let lean_req = VersionReq::parse(DEFAULT_LEAN_REQ).expect("valid lean version requirement");
+    let solc_req = VersionReq::parse(DEFAULT_SOLC_REQ).expect("valid solc version requirement");
     ToolchainPresence {
-        lean: command_version_matches("lean", DEFAULT_LEAN_VERSION),
-        lake: command_version_matches("lake", DEFAULT_LEAN_VERSION),
+        lean: command_version_satisfies("lean", &lean_req, tama_toolchain::parse_lean_version),
+        lake: command_exists("lake"),
         forge: command_exists("forge"),
-        solc: command_version_matches("solc", DEFAULT_SOLC_VERSION),
+        solc: command_version_satisfies("solc", &solc_req, tama_toolchain::parse_solc_version),
     }
 }
 
@@ -721,8 +725,15 @@ fn command_exists(name: &str) -> bool {
     command_version(name).is_some()
 }
 
-fn command_version_matches(name: &str, expected: &str) -> bool {
-    command_version(name).is_some_and(|output| version_output_matches(&output, expected))
+fn command_version_satisfies(
+    name: &str,
+    req: &VersionReq,
+    parse: fn(&str) -> tama_toolchain::Result<Version>,
+) -> bool {
+    let Some(output) = command_version(name) else {
+        return false;
+    };
+    parse(&output).is_ok_and(|version| req.matches(&version))
 }
 
 fn command_version(name: &str) -> Option<String> {
@@ -744,12 +755,6 @@ fn command_version(name: &str) -> Option<String> {
         stdout
     };
     Some(text.trim().to_string())
-}
-
-fn version_output_matches(output: &str, expected: &str) -> bool {
-    output
-        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '.')
-        .any(|token| token == expected)
 }
 
 fn bootstrap_actions(
@@ -1164,27 +1169,32 @@ mod tests {
     }
 
     #[test]
-    fn tool_version_matching_uses_exact_version_token() {
-        assert!(version_output_matches(
+    fn lean_requirement_accepts_compatible_patches_and_rejects_drift() {
+        let req = VersionReq::parse(DEFAULT_LEAN_REQ).unwrap();
+        for output in [
             "Lean (version 4.22.0, x86_64-unknown-linux-gnu)",
-            DEFAULT_LEAN_VERSION
-        ));
-        assert!(version_output_matches(
-            "Lake version 5.0.0-src+abc123 (Lean version 4.22.0)",
-            DEFAULT_LEAN_VERSION
-        ));
-        assert!(version_output_matches(
-            "Version: 0.8.33+commit.64118f21",
-            DEFAULT_SOLC_VERSION
-        ));
-        assert!(!version_output_matches(
-            "Lake version 5.0.0-src+abc123 (Lean version 4.29.1)",
-            DEFAULT_LEAN_VERSION
-        ));
-        assert!(!version_output_matches(
-            "Version: 0.8.330+commit.64118f21",
-            DEFAULT_SOLC_VERSION
-        ));
+            "Lean (version 4.22.5, x86_64-unknown-linux-gnu)",
+            "Lean (version 4.23.0, x86_64-unknown-linux-gnu)",
+        ] {
+            let version = tama_toolchain::parse_lean_version(output).unwrap();
+            assert!(req.matches(&version), "expected {version} to satisfy {req}");
+        }
+        for output in [
+            "Lean (version 4.21.0, x86_64-unknown-linux-gnu)",
+            "Lean (version 5.0.0, x86_64-unknown-linux-gnu)",
+        ] {
+            let version = tama_toolchain::parse_lean_version(output).unwrap();
+            assert!(!req.matches(&version), "expected {version} to fail {req}");
+        }
+    }
+
+    #[test]
+    fn solc_requirement_pins_exact_version() {
+        let req = VersionReq::parse(DEFAULT_SOLC_REQ).unwrap();
+        let ok = tama_toolchain::parse_solc_version("Version: 0.8.33+commit.64118f21").unwrap();
+        assert!(req.matches(&ok));
+        let drift = tama_toolchain::parse_solc_version("Version: 0.8.32+commit.64118f21").unwrap();
+        assert!(!req.matches(&drift));
     }
 
     #[test]
