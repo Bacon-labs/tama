@@ -724,7 +724,7 @@ pub fn compile_yul_standard_json(
     let input_path = root.join(&manifest.artifacts.solc_input);
     tama_common::write_string(&input_path, &(input_pretty + "\n"))?;
 
-    let solc = tama_toolchain::resolve_solc(&config.yul.solc, root)?;
+    let solc = tama_toolchain::resolve_or_install_solc(&config.yul.solc, root)?;
     let solc_program = solc.path.to_string();
     let mut child = Command::new(solc.path.as_std_path())
         .arg("--standard-json")

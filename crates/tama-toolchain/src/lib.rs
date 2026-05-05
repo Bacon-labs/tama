@@ -138,6 +138,144 @@ pub fn resolve_solc(expected: &str, root: &Utf8Path) -> Result<Tool> {
     })
 }
 
+/// Resolve solc per `resolve_solc`; if no binary is found at any search
+/// location, download the requested version from binaries.soliditylang.org
+/// into `~/.tama/solc/<version>/solc` and resolve again. Lets `tama build`
+/// follow whatever solc version is pinned in `tama.toml` without forcing the
+/// user to install each version manually.
+pub fn resolve_or_install_solc(expected: &str, root: &Utf8Path) -> Result<Tool> {
+    match resolve_solc(expected, root) {
+        Err(Error::MissingTool(name)) if name == "solc" => {
+            install_solc(expected)?;
+            resolve_solc(expected, root)
+        }
+        other => other,
+    }
+}
+
+/// Download solc `version` from binaries.soliditylang.org into
+/// `~/.tama/solc/<version>/solc` and mark it executable. Returns the path
+/// to the installed binary. No-op if the binary already exists.
+pub fn install_solc(expected: &str) -> Result<Utf8PathBuf> {
+    let version = parse_expected_version("solc", expected)?;
+    let version_str = version.to_string();
+    let dest_dir = home_solc_dir(&version_str)?;
+    let dest = dest_dir.join("solc");
+    if dest.is_file() {
+        return Ok(dest);
+    }
+    let platform = solc_platform()?;
+    let release_path = solc_release_path(platform, &version_str)?;
+    std::fs::create_dir_all(&dest_dir)
+        .map_err(|err| Error::Failure(format!("failed to create {dest_dir}: {err}")))?;
+    let url = format!("https://binaries.soliditylang.org/{platform}/{release_path}");
+    download(&url, &dest)?;
+    set_executable(&dest)?;
+    Ok(dest)
+}
+
+fn solc_platform() -> Result<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Ok("linux-amd64"),
+        ("linux", "aarch64") => Ok("linux-aarch64"),
+        // solc only ships an Intel macOS binary; M-series runs it via Rosetta.
+        ("macos", _) => Ok("macosx-amd64"),
+        (os, arch) => Err(Error::Failure(format!(
+            "no solc binary mapping for platform {os}-{arch}"
+        ))),
+    }
+}
+
+fn solc_release_path(platform: &str, version: &str) -> Result<String> {
+    let url = format!("https://binaries.soliditylang.org/{platform}/list.json");
+    let mut tmp = std::env::temp_dir();
+    tmp.push(format!("tama-solc-list-{platform}.json"));
+    let tmp_path = Utf8PathBuf::from_path_buf(tmp)
+        .map_err(|p| Error::Failure(format!("non-utf8 tmp path: {}", p.display())))?;
+    download(&url, &tmp_path)?;
+    let bytes = std::fs::read(&tmp_path)
+        .map_err(|err| Error::Failure(format!("failed to read {tmp_path}: {err}")))?;
+    let _ = std::fs::remove_file(&tmp_path);
+    parse_solc_release_path(&bytes, platform, version)
+}
+
+fn parse_solc_release_path(list_bytes: &[u8], platform: &str, version: &str) -> Result<String> {
+    #[derive(Deserialize)]
+    struct List {
+        releases: std::collections::BTreeMap<String, String>,
+    }
+    let list: List = serde_json::from_slice(list_bytes)
+        .map_err(|err| Error::Failure(format!("failed to parse solc list.json: {err}")))?;
+    list.releases.get(version).cloned().ok_or_else(|| {
+        Error::Failure(format!(
+            "solc {version} is not available for {platform}"
+        ))
+    })
+}
+
+fn home_solc_dir(version: &str) -> Result<Utf8PathBuf> {
+    let home = std::env::var("HOME")
+        .map_err(|_| Error::Failure("HOME is not set; cannot install solc".to_string()))?;
+    Ok(Utf8PathBuf::from(home)
+        .join(".tama")
+        .join("solc")
+        .join(version))
+}
+
+fn download(url: &str, dest: &Utf8Path) -> Result<()> {
+    let status = if which::which("curl").is_ok() {
+        Command::new("curl")
+            .args([
+                "-fsSL",
+                "--retry",
+                "3",
+                "--retry-delay",
+                "2",
+                "--retry-connrefused",
+                url,
+                "-o",
+                dest.as_str(),
+            ])
+            .stdin(Stdio::null())
+            .status()
+    } else if which::which("wget").is_ok() {
+        Command::new("wget")
+            .args(["-q", "--tries=3", "--waitretry=2", url, "-O", dest.as_str()])
+            .stdin(Stdio::null())
+            .status()
+    } else {
+        return Err(Error::Failure(
+            "curl or wget is required to download solc".to_string(),
+        ));
+    };
+    let status = status.map_err(|err| Error::Failure(format!("download spawn failed: {err}")))?;
+    if !status.success() {
+        let _ = std::fs::remove_file(dest);
+        return Err(Error::Failure(format!(
+            "download of {url} failed with status {status}"
+        )));
+    }
+    Ok(())
+}
+
+fn set_executable(path: &Utf8Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path)
+            .map_err(|err| Error::Failure(format!("failed to stat {path}: {err}")))?
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms)
+            .map_err(|err| Error::Failure(format!("failed to chmod {path}: {err}")))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
 pub fn parse_forge_version(output: &str) -> Result<Version> {
     let re = Regex::new(r"forge Version:\s*([0-9]+\.[0-9]+\.[0-9]+)").expect("valid regex");
     parse_version_with(output, "forge", &re)
@@ -346,6 +484,44 @@ mod tests {
     fn parses_forge_version() {
         let version = parse_forge_version("forge Version: 1.6.0-v1.7.0").unwrap();
         assert_eq!(version, Version::new(1, 6, 0));
+    }
+
+    #[test]
+    fn solc_release_path_extracted_from_list_json() {
+        let list = br#"{
+            "releases": {
+                "0.8.33": "solc-linux-amd64-v0.8.33+commit.64118f21",
+                "0.8.32": "solc-linux-amd64-v0.8.32+commit.aaaaaaaa"
+            },
+            "builds": []
+        }"#;
+        let path = parse_solc_release_path(list, "linux-amd64", "0.8.33").unwrap();
+        assert_eq!(path, "solc-linux-amd64-v0.8.33+commit.64118f21");
+    }
+
+    #[test]
+    fn solc_release_path_errors_when_version_missing() {
+        let list = br#"{"releases": {"0.8.33": "solc-x"}, "builds": []}"#;
+        let err = parse_solc_release_path(list, "linux-amd64", "0.8.99").unwrap_err();
+        assert!(matches!(err, Error::Failure(message) if message.contains("0.8.99")));
+    }
+
+    #[test]
+    fn solc_platform_maps_supported_targets() {
+        // The function reads std::env::consts; we can at least confirm it does
+        // not return an Err on the host that the test runs on.
+        assert!(solc_platform().is_ok());
+    }
+
+    #[test]
+    fn home_solc_dir_uses_dot_tama_layout() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let _home = EnvVarGuard::set("HOME", "/tmp/tama-test-home");
+        let dir = home_solc_dir("0.8.33").unwrap();
+        assert_eq!(
+            dir,
+            Utf8PathBuf::from("/tmp/tama-test-home/.tama/solc/0.8.33")
+        );
     }
 
     #[test]
