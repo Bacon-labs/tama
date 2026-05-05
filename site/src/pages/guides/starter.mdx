@@ -73,6 +73,12 @@ verity_contract ERC20Lite where
       setMapping balancesSlot toAddr newRecipientBalance
     return true
 
+  function transferOwnership (newOwner : Address) : Unit := do
+    let sender ← msgSender
+    let currentOwner ← getStorageAddr ownerSlot
+    require (sender == currentOwner) "Caller is not the owner"
+    setStorageAddr ownerSlot newOwner
+
   function view balanceOf  (addr : Address) : Uint256 := ...
   function view totalSupply ()              : Uint256 := ...
   function view owner       ()              : Address := ...
@@ -95,6 +101,12 @@ would double-count when `from == to`. The branch handles that case
 explicitly — partly for correctness, partly because the proof has to walk
 through both halves of the `if`.
 
+**`transferOwnership` is the access-control half of mint.** `mint`
+guards behind `sender == owner`; `transferOwnership` guards behind the
+same predicate and rotates that owner to a successor. The pair gives
+the spec file two access-control obligations to demonstrate (one for
+each function, with both halves — authorized and unauthorized).
+
 ## The specification
 
 `verity/spec/ERC20LiteSpec.lean` is **pure Lean** — no `-- tama:`
@@ -107,12 +119,21 @@ import ERC20Lite
 
 namespace ERC20LiteSpec
 
+-- Frame conditions: parts of state the function never touches.
 def transfer_total_supply_preserved (s s' : ContractState) : Prop :=
   s'.storage 2 = s.storage 2
 
 def mint_owner_preserved (s s' : ContractState) : Prop :=
   s'.storageAddr 0 = s.storageAddr 0
 
+def transferOwnership_supply_preserved (s s' : ContractState) : Prop :=
+  s'.storage 2 = s.storage 2
+
+def transferOwnership_balances_preserved
+    (account : Address) (s s' : ContractState) : Prop :=
+  s'.storageMap 1 account = s.storageMap 1 account
+
+-- Read-only views: pure reads of storage.
 def balanceOf_spec (account : Address) (result : Uint256) (s : ContractState) : Prop :=
   result = s.storageMap 1 account
 
@@ -122,28 +143,68 @@ def totalSupply_spec (result : Uint256) (s : ContractState) : Prop :=
 def owner_spec (result : Address) (s : ContractState) : Prop :=
   result = s.storageAddr 0
 
+-- Authorized-path effects: what an authorized caller observes.
+def transferOwnership_authorized_sets_owner
+    (newOwner : Address) (s s' : ContractState) : Prop :=
+  s.sender = s.storageAddr 0 → s'.storageAddr 0 = newOwner
+
+def transfer_balances_effect
+    (toAddr : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
+  amount.val ≤ (s.storageMap 1 s.sender).val →
+    (s.sender = toAddr →
+      s'.storageMap 1 s.sender = s.storageMap 1 s.sender) ∧
+    (s.sender ≠ toAddr →
+      (s.storageMap 1 toAddr).val + amount.val ≤ Verity.Stdlib.Math.MAX_UINT256 →
+        s'.storageMap 1 s.sender = (s.storageMap 1 s.sender) - amount ∧
+        s'.storageMap 1 toAddr = (s.storageMap 1 toAddr) + amount)
+
+-- Negative access control: unauthorized callers leave state alone.
+def mint_unauthorized_no_change
+    (toAddr : Address) (_amount : Uint256) (s s' : ContractState) : Prop :=
+  s.sender ≠ s.storageAddr 0 →
+    s'.storage 2 = s.storage 2 ∧
+    s'.storageMap 1 toAddr = s.storageMap 1 toAddr
+
+def transferOwnership_unauthorized_owner_unchanged
+    (s s' : ContractState) : Prop :=
+  s.sender ≠ s.storageAddr 0 → s'.storageAddr 0 = s.storageAddr 0
+
 end ERC20LiteSpec
 ```
 
-Five properties:
+The set is grouped to show the five common shapes a starter should
+exercise:
 
-1. **`transfer` preserves total supply.** A token moves; nothing is
-   created or destroyed.
-2. **`mint` preserves the owner.** Only the owner can mint, and minting
-   doesn't change who the owner is.
-3. **`balanceOf` returns the storage balance.** The view is a faithful read.
-4. **`totalSupply` returns the storage supply.** Same shape.
-5. **`owner` returns the storage owner.** Same shape.
+1. **Frame conditions** — `transfer_total_supply_preserved`,
+   `mint_owner_preserved`, `transferOwnership_supply_preserved`,
+   `transferOwnership_balances_preserved`. The function does not touch
+   that part of state.
+2. **Read-only views** — `balanceOf_spec`, `totalSupply_spec`,
+   `owner_spec`. The query is a faithful read.
+3. **Authorized-path effects** —
+   `transferOwnership_authorized_sets_owner` pins down what the owner
+   observes after a successful rotation; `transfer_balances_effect`
+   pins down the exact debit and credit on the success path, and
+   *demands the self-transfer branch leaves the balance untouched* —
+   the well-known double-debit footgun gets a first-class proof
+   obligation, not a comment.
+4. **Negative access control** — `mint_unauthorized_no_change`,
+   `transferOwnership_unauthorized_owner_unchanged`. The
+   complementary half of access control: not only does the authorized
+   path do the right thing, the unauthorized path does *nothing*. This
+   is the property that prevents a non-owner from minting tokens or
+   stealing the contract.
+5. **Conservation** — `transfer_total_supply_preserved` doubles as
+   the conservation law: a token moves; nothing is created or destroyed.
 
-Three are facts about views (they read what they say). Two are facts
-about state transitions. For a teaching contract this is the small core;
-a richer ERC20 spec would add monotonicity of total supply under mint,
-balance arithmetic under transfer, and so on.
+Four are facts about pure reads. The rest are facts about state
+transitions — split between "what changes" (effects) and "what doesn't
+change" (frames and revert-on-unauthorized).
 
 ## The proofs
 
 `verity/proof/ERC20LiteProof.lean` discharges each spec definition. The
-transfer proof is the most interesting:
+transfer-supply proof is the most case-splitty:
 
 ```lean
 -- tama: discharges=transfer_total_supply_preserved
@@ -162,28 +223,55 @@ theorem transfer_total_supply_preserved_after_run
   · simp [transfer, ..., h_balance]
 ```
 
-Two case splits drive the proof: *did the sender have enough balance?*
+Two case splits drive that proof: *did the sender have enough balance?*
 and *is the recipient the same as the sender?* That's a proof shape
 worth recognizing — one branch per `require`, one branch per non-trivial
 `if`. The `simp` invocations unfold the contract definitions and rely
 on the Verity standard library for the storage and arithmetic lemmas.
 
+The implication-shaped specs (effects and negative access control)
+take a slightly different shape. They drop the `let s' := ...` binder
+because `intro` would otherwise consume it before reaching the
+implication's antecedent, and they `intro` the precondition before
+discharging the conjunction:
+
+```lean
+-- tama: discharges=transferOwnership_authorized_sets_owner
+theorem transferOwnership_authorized_sets_owner_after_run
+    (newOwner : Address) (s : ContractState) :
+    transferOwnership_authorized_sets_owner newOwner s
+      ((transferOwnership newOwner).run s).snd := by
+  unfold transferOwnership_authorized_sets_owner
+  intro h_owner
+  simp [transferOwnership, ownerSlot, msgSender, getStorageAddr,
+    setStorageAddr, Contract.run, ContractResult.snd, Verity.bind,
+    Bind.bind, Verity.require, h_owner]
+```
+
+The `transfer_balances_effect` proof is the most elaborate of the new
+ones: it case-splits on `s.sender = toAddr` to handle the spec's two
+branches separately, uses `subst` in the self-transfer branch so the
+balance precondition lines up after the substitution, and ends with a
+`show` step that rewrites the `s' - amount` form into the `sub s'`
+form `setMapping` literally produces. (The two are definitionally
+equal via the `HSub` instance, but `simp`'s `add_comm` fires on `+`
+while leaving `sub` alone, so the sender side has to be canonicalized
+by hand.)
+
 The model is symmetric. The spec file declares an obligation by
-defining `transfer_total_supply_preserved`. The proof claims it with
+defining `transfer_total_supply_preserved`; the proof claims it with
 `-- tama: discharges=transfer_total_supply_preserved` directly above
-the theorem. The Foundry test mirrors it with a matching
+the theorem; the Foundry test mirrors it with a matching
 `// tama: mirrors=transfer_total_supply_preserved` (next section).
 Theorems and `lemma`s without a `discharges=` tag are silently treated
-as helpers; the four other obligations —
-`mint_preserves_owner_after_run`, `balanceOf_returns_storage_balance`,
-`totalSupply_returns_storage_supply`, `owner_returns_storage_owner` —
-each carry their own `discharges=` tag pointing at the matching spec
-def, and each spec is mirrored by a corresponding `testFuzz_*` function
-in the Foundry test file.
+as helpers; the ten other obligations each carry their own
+`discharges=` tag pointing at the matching spec def, and each spec is
+mirrored by at least one `testFuzz_*` (or `invariant_*`) function in
+the Foundry test file.
 
 ## The mirror tests
 
-`test/verity/ERC20Lite.t.sol` does two things.
+`test/verity/ERC20Lite.t.sol` does three things.
 
 **One. Property-shaped fuzz tests.** Each obligation has a `testFuzz_*`
 function that exercises the same property on the real bytecode, with a
@@ -211,7 +299,33 @@ the deployed bytecode are about the same contract, they agree. If a
 bridge regeneration drifts, the fuzz test catches it before audit even
 runs.
 
-**Two. A Foundry stateful invariant.** A handler calls `mint` and
+**Two. Negative access-control tests with `vm.prank` /
+`vm.expectRevert`.** The unauthorized-path specs are mirrored by tests
+that impersonate a non-owner and assert the call reverts and the slot
+is untouched:
+
+```solidity
+// tama: mirrors=transferOwnership_unauthorized_owner_unchanged
+function testFuzzTransferOwnershipRevertsForNonOwner(
+    address attacker, address newOwner
+) public {
+    vm.assume(attacker != address(this));
+    ERC20LiteIface token = deployToken();
+    address ownerBefore = token.owner();
+    vm.prank(attacker);
+    vm.expectRevert();
+    token.transferOwnership(newOwner);
+    require(token.owner() == ownerBefore, "owner unchanged");
+}
+```
+
+Two pieces of state are checked: the call reverts (via `expectRevert`),
+and the storage slot is unchanged after the revert. A would-be exploit
+that bypassed the require would either not revert (caught by
+`expectRevert`) or modify state across the revert (caught by the
+post-call read).
+
+**Three. A Foundry stateful invariant.** A handler calls `mint` and
 `transfer` with random parameters across a long stateful run, while
 `invariant_totalSupplyTracksMinted` checks the global property at every
 step:
@@ -245,18 +359,18 @@ tama build
 tama audit
 ```
 
-You should see five obligations covered:
+You should see eleven obligations covered:
 
 ```text
 audit:
   ✓ structure       artifacts present, hashes match
-  ✓ selectors       5 functions agree across Verity / manifest / Yul / Solidity
+  ✓ selectors       6 functions agree across Verity / manifest / Yul / Solidity
   ✓ storage-layout  3 slots, no overlap
   ✓ coverage        every spec has a discharger and a mirror
   ✓ trust-boundary  no sorry, axioms allowlisted
 ```
 
-Five functions, three storage slots, five obligations all mirrored.
+Six functions, three storage slots, eleven obligations all mirrored.
 The whole pipeline you just toured is sealed end-to-end.
 
 ## Where to go next

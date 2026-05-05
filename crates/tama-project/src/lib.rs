@@ -597,6 +597,16 @@ verity_contract ERC20Lite where
     let currentOwner ← getStorageAddr ownerSlot
     return currentOwner
 
+  -- Ownership transfer: only the current owner can promote a successor. The
+  -- proof obligation pair below shows both halves of access control: the
+  -- authorized path actually rotates the slot, and the unauthorized path
+  -- leaves it untouched.
+  function transferOwnership (newOwner : Address) : Unit := do
+    let sender ← msgSender
+    let currentOwner ← getStorageAddr ownerSlot
+    require (sender == currentOwner) "Caller is not the owner"
+    setStorageAddr ownerSlot newOwner
+
 end src
 "#;
 
@@ -607,11 +617,38 @@ namespace spec.ERC20LiteSpec
 open Verity
 open Verity.EVM.Uint256
 
+-- Each definition below is a `Prop` over (input, pre-state, post-state, …).
+-- Discharging it in the proof file binds an obligation to the implementation;
+-- mirroring it in a Foundry test ties the same obligation to the compiled
+-- bytecode. The collection here is intentionally varied so the starter shows
+-- five common shapes:
+--   1. View / read-only specs   — `balanceOf_spec`, `totalSupply_spec`, `owner_spec`
+--   2. Frame conditions          — `mint_owner_preserved`, `transfer_total_supply_preserved`,
+--                                  `transferOwnership_supply_preserved`,
+--                                  `transferOwnership_balances_preserved`
+--   3. Authorized-path effects   — `transferOwnership_authorized_sets_owner`,
+--                                  `transfer_balances_effect`
+--   4. Negative access control   — `mint_unauthorized_no_change`,
+--                                  `transferOwnership_unauthorized_owner_unchanged`
+--   5. Conservation              — `transfer_total_supply_preserved`
+
+/-! ## Frame conditions
+Properties of the form `s'.X = s.X` — the function does not touch part of state. -/
+
 def transfer_total_supply_preserved (s s' : ContractState) : Prop :=
   s'.storage 2 = s.storage 2
 
 def mint_owner_preserved (s s' : ContractState) : Prop :=
   s'.storageAddr 0 = s.storageAddr 0
+
+def transferOwnership_supply_preserved (s s' : ContractState) : Prop :=
+  s'.storage 2 = s.storage 2
+
+def transferOwnership_balances_preserved (account : Address) (s s' : ContractState) : Prop :=
+  s'.storageMap 1 account = s.storageMap 1 account
+
+/-! ## Read-only specs
+Pure queries that return storage and leave state alone. -/
 
 def balanceOf_spec (account : Address) (result : Uint256) (s : ContractState) : Prop :=
   result = s.storageMap 1 account
@@ -621,6 +658,49 @@ def totalSupply_spec (result : Uint256) (s : ContractState) : Prop :=
 
 def owner_spec (result : Address) (s : ContractState) : Prop :=
   result = s.storageAddr 0
+
+/-! ## Authorized-path effects
+Capturing what an authorized caller observes after a successful state write. -/
+
+def transferOwnership_authorized_sets_owner
+    (newOwner : Address) (s s' : ContractState) : Prop :=
+  s.sender = s.storageAddr 0 → s'.storageAddr 0 = newOwner
+
+-- Successful-path arithmetic for `transfer`. The single shared precondition
+-- is "sender has enough balance"; the body splits on whether sender equals
+-- recipient. Self-transfer is the well-known footgun: a naive implementation
+-- that does `balance[sender] -= amount; balance[recipient] += amount` reads
+-- a stale `balance[recipient]` after the debit, which can mint or burn
+-- value when sender = recipient. The spec explicitly demands that the
+-- balance be left untouched in that branch — which the `if sender == toAddr
+-- then pure ()` short-circuit in the contract is what makes true. The
+-- non-self branch additionally requires that crediting the recipient does
+-- not overflow Uint256, and pins down the exact debit and credit.
+def transfer_balances_effect
+    (toAddr : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
+  amount.val ≤ (s.storageMap 1 s.sender).val →
+    (s.sender = toAddr →
+      s'.storageMap 1 s.sender = s.storageMap 1 s.sender) ∧
+    (s.sender ≠ toAddr →
+      (s.storageMap 1 toAddr).val + amount.val ≤ Verity.Stdlib.Math.MAX_UINT256 →
+        s'.storageMap 1 s.sender = (s.storageMap 1 s.sender) - amount ∧
+        s'.storageMap 1 toAddr = (s.storageMap 1 toAddr) + amount)
+
+/-! ## Negative access control
+The half of access control that says "non-owners cannot move state at all".
+Together with the authorized-path effect this is the full access-control story
+for `transferOwnership`; for `mint` it captures the security property that
+unauthorized callers leave totalSupply and the recipient's balance untouched. -/
+
+def mint_unauthorized_no_change
+    (toAddr : Address) (_amount : Uint256) (s s' : ContractState) : Prop :=
+  s.sender ≠ s.storageAddr 0 →
+    s'.storage 2 = s.storage 2 ∧
+    s'.storageMap 1 toAddr = s.storageMap 1 toAddr
+
+def transferOwnership_unauthorized_owner_unchanged
+    (s s' : ContractState) : Prop :=
+  s.sender ≠ s.storageAddr 0 → s'.storageAddr 0 = s.storageAddr 0
 
 end spec.ERC20LiteSpec
 "#;
@@ -677,6 +757,47 @@ theorem transfer_total_supply_preserved_after_run (toAddr : Address) (amount : U
   · simp [transfer, balancesSlot, msgSender, getMapping, Contract.run, ContractResult.snd,
       Verity.bind, Bind.bind, Verity.require, h_balance]
 
+-- Successful-path effect for `transfer`. The proof case-splits on
+-- self-transfer to discharge the spec's two branches: in the self-transfer
+-- branch the contract takes the `pure ()` shortcut and the storageMap is
+-- untouched; in the non-self branch the simp set unfolds `safeAdd` under
+-- `h_not_overflow_strict` and the if-then-else inside the storageMap
+-- closure resolves to `sub` and the recipient credit. The `show` step in
+-- the sender debit goal rewrites `s' - amount` into the `sub s'` form that
+-- `setMapping` literally produces — they are definitionally equal via the
+-- HSub instance, but simp on `+` fires `add_comm` while `sub` is left
+-- alone, so the two sides need to be brought into the same shape by hand.
+-- tama: discharges=transfer_balances_effect
+theorem transfer_balances_effect_after_run
+    (toAddr : Address) (amount : Uint256) (s : ContractState) :
+  transfer_balances_effect toAddr amount s ((transfer toAddr amount).run s).snd := by
+  unfold transfer_balances_effect
+  intro h_balance
+  refine ⟨?_, ?_⟩
+  · -- Self-transfer branch: `pure ()` shortcut leaves the balance unchanged.
+    -- `subst` rewrites `toAddr` to `s.sender` everywhere so `h_balance`
+    -- discharges the `senderBalance >= amount` require directly.
+    intro h_eq
+    subst h_eq
+    simp [transfer, balancesSlot, msgSender, getMapping,
+      Contract.run, ContractResult.snd, Verity.bind, Bind.bind, Verity.pure, Pure.pure,
+      Verity.require, h_balance]
+  · -- Non-self branch: full debit/credit under no-overflow.
+    intro h_ne h_no_overflow
+    have h_not_overflow_strict :
+        ¬ Verity.Stdlib.Math.MAX_UINT256 < (s.storageMap 1 toAddr).val + amount.val := by omega
+    refine ⟨?_, ?_⟩
+    · show ((transfer toAddr amount).run s).snd.storageMap 1 s.sender =
+        sub (s.storageMap 1 s.sender) amount
+      simp [transfer, balancesSlot, msgSender, getMapping, setMapping,
+        Contract.run, ContractResult.snd, Verity.bind, Bind.bind, Verity.pure, Pure.pure,
+        Verity.require, Verity.Stdlib.Math.requireSomeUint, Verity.Stdlib.Math.safeAdd,
+        h_balance, h_ne, h_not_overflow_strict]
+    · simp [transfer, balancesSlot, msgSender, getMapping, setMapping,
+        Contract.run, ContractResult.snd, Verity.bind, Bind.bind, Verity.pure, Pure.pure,
+        Verity.require, Verity.Stdlib.Math.requireSomeUint, Verity.Stdlib.Math.safeAdd,
+        h_balance, h_ne, h_not_overflow_strict]
+
 -- tama: discharges=balanceOf_spec
 theorem balanceOf_returns_storage_balance (account : Address) (s : ContractState) :
   let result := ((balanceOf account).run s).fst
@@ -695,6 +816,78 @@ theorem owner_returns_storage_owner (s : ContractState) :
   owner_spec result s := by
   simp [owner_spec, owner, ownerSlot, Bind.bind, Pure.pure]
 
+-- Negative access control: when the caller is not the owner, `mint` reverts,
+-- and a revert carries the original state unchanged. Specs whose body is an
+-- implication are stated without `let s'` so `intro` reaches the antecedent
+-- directly (a `let` binder would otherwise be the first thing introduced).
+-- tama: discharges=mint_unauthorized_no_change
+theorem mint_unauthorized_no_change_after_run
+    (toAddr : Address) (amount : Uint256) (s : ContractState) :
+  mint_unauthorized_no_change toAddr amount s ((mint toAddr amount).run s).snd := by
+  unfold mint_unauthorized_no_change
+  intro h_not_owner
+  refine ⟨?_, ?_⟩ <;>
+    simp [mint, ownerSlot, msgSender, getStorageAddr, Contract.run, ContractResult.snd,
+      Verity.bind, Bind.bind, Verity.require, h_not_owner]
+
+-- Authorized-path effect: when sender = owner, `transferOwnership` writes the
+-- new owner into slot 0. The single-branch proof is the simplest shape — no
+-- case split, just unfold and let `setStorageAddr` rewrite the slot.
+-- tama: discharges=transferOwnership_authorized_sets_owner
+theorem transferOwnership_authorized_sets_owner_after_run
+    (newOwner : Address) (s : ContractState) :
+  transferOwnership_authorized_sets_owner newOwner s
+    ((transferOwnership newOwner).run s).snd := by
+  unfold transferOwnership_authorized_sets_owner
+  intro h_owner
+  simp [transferOwnership, ownerSlot, msgSender, getStorageAddr, setStorageAddr,
+    Contract.run, ContractResult.snd, Verity.bind, Bind.bind,
+    Verity.require, h_owner]
+
+-- Negative access control: a non-owner caller leaves slot 0 untouched.
+-- tama: discharges=transferOwnership_unauthorized_owner_unchanged
+theorem transferOwnership_unauthorized_owner_unchanged_after_run
+    (newOwner : Address) (s : ContractState) :
+  transferOwnership_unauthorized_owner_unchanged s
+    ((transferOwnership newOwner).run s).snd := by
+  unfold transferOwnership_unauthorized_owner_unchanged
+  intro h_not_owner
+  simp [transferOwnership, ownerSlot, msgSender, getStorageAddr,
+    Contract.run, ContractResult.snd, Verity.bind, Bind.bind,
+    Verity.require, h_not_owner]
+
+-- Frame condition: `transferOwnership` never touches the totalSupply slot.
+-- The proof case-splits on authorization so the same statement covers both
+-- branches — the authorized branch does write a slot, just not slot 2.
+-- tama: discharges=transferOwnership_supply_preserved
+theorem transferOwnership_supply_preserved_after_run
+    (newOwner : Address) (s : ContractState) :
+  let s' := ((transferOwnership newOwner).run s).snd
+  transferOwnership_supply_preserved s s' := by
+  unfold transferOwnership_supply_preserved
+  by_cases h_owner : s.sender = s.storageAddr 0
+  · simp [transferOwnership, ownerSlot, msgSender, getStorageAddr, setStorageAddr,
+      Contract.run, ContractResult.snd, Verity.bind, Bind.bind,
+      Verity.require, h_owner]
+  · simp [transferOwnership, ownerSlot, msgSender, getStorageAddr,
+      Contract.run, ContractResult.snd, Verity.bind, Bind.bind,
+      Verity.require, h_owner]
+
+-- Frame condition: `transferOwnership` never touches the balances mapping.
+-- tama: discharges=transferOwnership_balances_preserved
+theorem transferOwnership_balances_preserved_after_run
+    (account : Address) (newOwner : Address) (s : ContractState) :
+  let s' := ((transferOwnership newOwner).run s).snd
+  transferOwnership_balances_preserved account s s' := by
+  unfold transferOwnership_balances_preserved
+  by_cases h_owner : s.sender = s.storageAddr 0
+  · simp [transferOwnership, ownerSlot, msgSender, getStorageAddr,
+      setStorageAddr, Contract.run, ContractResult.snd, Verity.bind, Bind.bind,
+      Verity.require, h_owner]
+  · simp [transferOwnership, ownerSlot, msgSender, getStorageAddr,
+      Contract.run, ContractResult.snd, Verity.bind, Bind.bind,
+      Verity.require, h_owner]
+
 end proof.ERC20LiteProof
 "#;
 
@@ -703,12 +896,17 @@ pragma solidity ^0.8.20;
 
 import {ERC20LiteDeployer} from "../../src/generated/verity/ERC20LiteDeployer.sol";
 import {ERC20LiteIface} from "../../src/generated/verity/ERC20LiteIface.sol";
-import {StdInvariant} from "forge-std/StdInvariant.sol";
+import {Test} from "forge-std/Test.sol";
 
 // These Foundry tests mirror the proof obligations in
 // verity/proof/ERC20LiteProof.lean. Run `tama build` first so the generated
 // deployer contains bytecode compiled from the Verity/Yul pipeline.
-contract ERC20LiteTest is StdInvariant {
+//
+// `Test` (from forge-std) provides the `vm` cheatcode entry point, which we
+// use below to exercise the negative access-control path with `vm.prank` and
+// `vm.expectRevert`. It also inherits from `StdInvariant`, so the invariant
+// handler harness still works.
+contract ERC20LiteTest is Test {
     ERC20LiteIface internal invariantToken;
     uint256 internal invariantMinted;
 
@@ -749,6 +947,22 @@ contract ERC20LiteTest is StdInvariant {
         require(token.owner() == address(this), "owner preserved");
     }
 
+    // Negative access control mirror: non-owner mint reverts and leaves both
+    // totalSupply and the recipient balance unchanged.
+    // tama: mirrors=mint_unauthorized_no_change
+    function testFuzzMintRevertsForNonOwner(address attacker, address account, uint256 rawAmount) public {
+        vm.assume(attacker != address(this));
+        ERC20LiteIface token = deployToken();
+        uint256 amount = rawAmount % 1e36;
+        uint256 supplyBefore = token.totalSupply();
+        uint256 balanceBefore = token.balanceOf(account);
+        vm.prank(attacker);
+        vm.expectRevert();
+        token.mint(account, amount);
+        require(token.totalSupply() == supplyBefore, "supply unchanged");
+        require(token.balanceOf(account) == balanceBefore, "balance unchanged");
+    }
+
     // Transfer mirror: moving tokens changes balances but preserves supply.
     // tama: mirrors=transfer_total_supply_preserved
     function testFuzzTransferPreservesTotalSupply(address recipient, uint256 rawMint, uint256 rawTransfer) public {
@@ -764,6 +978,74 @@ contract ERC20LiteTest is StdInvariant {
             require(token.balanceOf(recipient) == amount, "recipient balance");
         }
         require(token.totalSupply() == minted, "supply preserved");
+    }
+
+    // Transfer effect mirror: covers both branches the spec splits on.
+    // The non-self branch debits the sender by `amount` and credits the
+    // recipient by `amount`. The self-transfer branch leaves the balance
+    // unchanged — the spec demands this explicitly because a naive
+    // `balance[a] -= n; balance[b] += n` (without the `if a == b` guard)
+    // reads a stale recipient balance after the debit, which has been a
+    // recurring source of token-implementation bugs.
+    // tama: mirrors=transfer_balances_effect
+    function testFuzzTransferDebitAndCredit(address recipient, uint256 rawMint, uint256 rawTransfer) public {
+        ERC20LiteIface token = deployToken();
+        uint256 minted = rawMint % 1e36;
+        uint256 amount = minted == 0 ? 0 : rawTransfer % (minted + 1);
+        require(token.mint(address(this), minted), "mint");
+        uint256 senderBefore = token.balanceOf(address(this));
+        uint256 recipientBefore = token.balanceOf(recipient);
+        require(senderBefore >= amount, "precondition: balance");
+        require(token.transfer(recipient, amount), "transfer");
+        if (recipient == address(this)) {
+            // Self-transfer: balance unchanged.
+            require(token.balanceOf(address(this)) == senderBefore, "self balance preserved");
+        } else {
+            require(recipientBefore + amount >= recipientBefore, "precondition: no overflow");
+            require(token.balanceOf(address(this)) == senderBefore - amount, "sender debit");
+            require(token.balanceOf(recipient) == recipientBefore + amount, "recipient credit");
+        }
+    }
+
+    // Authorized-path mirror: the current owner can promote a successor and
+    // `owner()` then reads back the new address.
+    // tama: mirrors=transferOwnership_authorized_sets_owner
+    function testFuzzTransferOwnershipChangesOwner(address newOwner) public {
+        ERC20LiteIface token = deployToken();
+        token.transferOwnership(newOwner);
+        require(token.owner() == newOwner, "owner rotated");
+    }
+
+    // Negative access control mirror: a non-owner cannot transfer ownership
+    // and the slot is untouched after the revert.
+    // tama: mirrors=transferOwnership_unauthorized_owner_unchanged
+    function testFuzzTransferOwnershipRevertsForNonOwner(address attacker, address newOwner) public {
+        vm.assume(attacker != address(this));
+        ERC20LiteIface token = deployToken();
+        address ownerBefore = token.owner();
+        vm.prank(attacker);
+        vm.expectRevert();
+        token.transferOwnership(newOwner);
+        require(token.owner() == ownerBefore, "owner unchanged");
+    }
+
+    // Frame mirror: rotating the owner does not move tokens. Both authorized
+    // and unauthorized paths must hold the totalSupply and an account balance
+    // constant; the proof case-splits on authorization for the same reason.
+    // tama: mirrors=transferOwnership_supply_preserved,transferOwnership_balances_preserved
+    function testFuzzTransferOwnershipPreservesTokenState(
+        address newOwner,
+        address holder,
+        uint256 rawMint
+    ) public {
+        ERC20LiteIface token = deployToken();
+        uint256 minted = rawMint % 1e36;
+        require(token.mint(holder, minted), "mint");
+        uint256 supplyBefore = token.totalSupply();
+        uint256 balanceBefore = token.balanceOf(holder);
+        token.transferOwnership(newOwner);
+        require(token.totalSupply() == supplyBefore, "supply preserved");
+        require(token.balanceOf(holder) == balanceBefore, "balance preserved");
     }
 
     // tama: mirrors=balanceOf_spec
@@ -835,6 +1117,7 @@ pragma solidity ^0.8.20;
 interface ERC20LiteIface {
     function mint(address to, uint256 amount) external returns (bool);
     function transfer(address to, uint256 amount) external returns (bool);
+    function transferOwnership(address newOwner) external;
     function balanceOf(address account) external view returns (uint256);
     function totalSupply() external view returns (uint256);
     function owner() external view returns (address);
@@ -964,8 +1247,15 @@ metadata_bytecode_hash = "none"
         assert!(!proof.contains("kind="));
         assert!(!proof.contains("coverage="));
         assert!(proof.contains("tama: discharges=transfer_total_supply_preserved"));
+        assert!(proof.contains("tama: discharges=transfer_balances_effect"));
+        assert!(proof.contains("tama: discharges=mint_unauthorized_no_change"));
+        assert!(proof.contains("tama: discharges=transferOwnership_authorized_sets_owner"));
+        assert!(proof.contains("tama: discharges=transferOwnership_unauthorized_owner_unchanged"));
+        assert!(proof.contains("tama: discharges=transferOwnership_supply_preserved"));
+        assert!(proof.contains("tama: discharges=transferOwnership_balances_preserved"));
         assert!(proof.contains("((transfer toAddr amount).run s).snd"));
         assert!(proof.contains("((mint toAddr amount).run s).snd"));
+        assert!(proof.contains("((transferOwnership newOwner).run s).snd"));
         assert!(proof.contains("((balanceOf account).run s).fst"));
         let test = read_to_string(&root.join("test/verity/ERC20Lite.t.sol")).unwrap();
         assert!(!test.contains("testTransferPostPlaceholder"));
@@ -974,11 +1264,27 @@ metadata_bytecode_hash = "none"
         assert!(test.contains("ERC20LiteDeployer.deploy(initialOwner)"));
         assert!(test.contains("// tama: mirrors=owner_spec"));
         assert!(test.contains("// tama: mirrors=transfer_total_supply_preserved"));
+        assert!(test.contains("// tama: mirrors=transfer_balances_effect"));
+        assert!(test.contains("// tama: mirrors=mint_unauthorized_no_change"));
+        assert!(test.contains("// tama: mirrors=transferOwnership_authorized_sets_owner"));
+        assert!(test.contains("// tama: mirrors=transferOwnership_unauthorized_owner_unchanged"));
+        assert!(test.contains(
+            "// tama: mirrors=transferOwnership_supply_preserved,transferOwnership_balances_preserved"
+        ));
         assert!(test.contains("function testFuzzDeploymentSetsOwner(address initialOwner)"));
         assert!(test.contains("testFuzzTransferPreservesTotalSupply"));
-        assert!(test.contains("StdInvariant"));
+        assert!(test.contains("function testFuzzTransferDebitAndCredit("));
+        assert!(test.contains("function testFuzzMintRevertsForNonOwner("));
+        assert!(test.contains("function testFuzzTransferOwnershipChangesOwner("));
+        assert!(test.contains("function testFuzzTransferOwnershipRevertsForNonOwner("));
+        assert!(test.contains("function testFuzzTransferOwnershipPreservesTokenState("));
+        assert!(test.contains("vm.prank(attacker)"));
+        assert!(test.contains("vm.expectRevert()"));
+        assert!(test.contains("import {Test} from \"forge-std/Test.sol\""));
+        assert!(test.contains("contract ERC20LiteTest is Test"));
         assert!(test.contains("invariant_totalSupplyTracksMinted"));
         assert!(test.contains("token.transfer(recipient, amount)"));
+        assert!(test.contains("token.transferOwnership(newOwner)"));
         assert!(test.contains("These Foundry tests mirror the proof obligations"));
         let script = read_to_string(&root.join("script/ERC20Lite.s.sol")).unwrap();
         assert!(script.contains("contract DeployERC20Lite is Script"));
@@ -989,10 +1295,19 @@ metadata_bytecode_hash = "none"
         assert!(source.contains("This starter is intentionally small"));
         assert!(source.contains("Storage slots are explicit"));
         assert!(source.contains("function view balanceOf"));
+        assert!(source.contains("function transferOwnership (newOwner : Address)"));
         assert!(!source.contains(r#"emit "Transfer""#));
         let spec = read_to_string(&root.join("verity/spec/ERC20LiteSpec.lean")).unwrap();
         assert!(spec.contains("def transfer_total_supply_preserved"));
+        assert!(spec.contains("def transfer_balances_effect"));
+        assert!(spec.contains("def mint_unauthorized_no_change"));
+        assert!(spec.contains("def transferOwnership_authorized_sets_owner"));
+        assert!(spec.contains("def transferOwnership_unauthorized_owner_unchanged"));
+        assert!(spec.contains("def transferOwnership_supply_preserved"));
+        assert!(spec.contains("def transferOwnership_balances_preserved"));
         assert!(!spec.contains("-- tama:"));
+        let iface = read_to_string(&root.join("src/generated/verity/ERC20LiteIface.sol")).unwrap();
+        assert!(iface.contains("function transferOwnership(address newOwner) external"));
         let starter_readme = read_to_string(&root.join("docs/README.md")).unwrap();
         assert!(starter_readme.contains("script/ERC20Lite.s.sol:DeployERC20Lite"));
         assert!(starter_readme.contains("ERC20LITE_OWNER"));
