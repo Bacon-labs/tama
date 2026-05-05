@@ -17,12 +17,10 @@ camino.workspace = true
 clap.workspace = true
 flate2.workspace = true
 hex.workspace = true
-semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tama-common = { path = "../tama-common" }
-tama-toolchain = { path = "../tama-toolchain" }
 tar.workspace = true
 thiserror.workspace = true
 ureq.workspace = true

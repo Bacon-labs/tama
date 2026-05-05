@@ -1,16 +1,15 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read};
 #[cfg(unix)]
 use std::os::unix::fs::{symlink, PermissionsExt};
-use std::process::{Command as ProcessCommand, ExitCode, Stdio};
+use std::process::ExitCode;
 
 use camino::{Utf8Path, Utf8PathBuf};
 #[cfg(test)]
 use clap::CommandFactory;
 use clap::{Parser, Subcommand};
 use flate2::read::GzDecoder;
-use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -19,27 +18,13 @@ mod style;
 use style::{paint, ColorChoice, Palette, Stream};
 
 const DEFAULT_BASE_URL: &str = "https://github.com/bacon-labs/tama/releases/latest/download";
-const DEFAULT_LEAN_TOOLCHAIN: &str = "leanprover/lean4:v4.22.0";
-const DEFAULT_LEAN_REQ: &str = "^4.22.0";
-const DEFAULT_SOLC_VERSION: &str = "0.8.33";
-const DEFAULT_SOLC_REQ: &str = "=0.8.33";
 const RELEASE_MANIFEST_SCHEMA: &str = "tama.release-manifest.v1";
 
 #[derive(Debug, Parser)]
 #[command(name = "tamaup", version, about = "Install and update Tama")]
 struct Cli {
     #[arg(long, global = true)]
-    yes: bool,
-    #[arg(long, global = true)]
     offline: bool,
-    #[arg(long, global = true)]
-    no_modify_path: bool,
-    #[arg(long, global = true)]
-    no_install_lean: bool,
-    #[arg(long, global = true)]
-    no_install_foundry: bool,
-    #[arg(long, global = true)]
-    no_install_solc: bool,
     #[arg(
         long,
         global = true,
@@ -120,31 +105,6 @@ struct PendingArchiveEntry {
     content: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct BootstrapOptions {
-    yes: bool,
-    offline: bool,
-    no_modify_path: bool,
-    no_install_lean: bool,
-    no_install_foundry: bool,
-    no_install_solc: bool,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct ToolchainPresence {
-    lean: bool,
-    lake: bool,
-    forge: bool,
-    solc: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BootstrapAction {
-    Lean,
-    Foundry,
-    Solc,
-}
-
 fn main() -> ExitCode {
     let mut cli = Cli::parse();
     if cli.no_color {
@@ -163,14 +123,6 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), String> {
     let palette = Palette::new(style::resolve(cli.color, Stream::Stdout));
-    let bootstrap = BootstrapOptions {
-        yes: cli.yes,
-        offline: cli.offline,
-        no_modify_path: cli.no_modify_path,
-        no_install_lean: cli.no_install_lean,
-        no_install_foundry: cli.no_install_foundry,
-        no_install_solc: cli.no_install_solc,
-    };
     match cli.command.unwrap_or(Command::Install {
         version: None,
         manifest_file: None,
@@ -181,14 +133,14 @@ fn run(cli: Cli) -> Result<(), String> {
         } => install(
             version.as_deref().unwrap_or("stable"),
             manifest_file,
-            bootstrap,
+            cli.offline,
             &palette,
         ),
         Command::Use { version } => use_version(&version, &palette),
         Command::List => list_versions(&palette),
         Command::Self_ {
             command: SelfCommand::Update,
-        } => install("stable", None, bootstrap, &palette),
+        } => install("stable", None, cli.offline, &palette),
         Command::Uninstall => uninstall(),
     }
 }
@@ -196,30 +148,14 @@ fn run(cli: Cli) -> Result<(), String> {
 fn install(
     version: &str,
     manifest_file: Option<Utf8PathBuf>,
-    bootstrap: BootstrapOptions,
-    palette: &Palette,
-) -> Result<(), String> {
-    install_with_bootstrap(
-        version,
-        manifest_file,
-        bootstrap,
-        bootstrap_toolchain,
-        palette,
-    )
-}
-
-fn install_with_bootstrap(
-    version: &str,
-    manifest_file: Option<Utf8PathBuf>,
-    bootstrap: BootstrapOptions,
-    bootstrap_toolchain: impl FnOnce(BootstrapOptions) -> Result<(), String>,
+    offline: bool,
     palette: &Palette,
 ) -> Result<(), String> {
     let local_manifest = manifest_file.is_some();
     let manifest_bytes = if let Some(path) = manifest_file {
         fs::read(&path).map_err(|err| err.to_string())?
     } else {
-        if bootstrap.offline {
+        if offline {
             return Err("offline install requires --manifest-file".to_string());
         }
         download(&format!("{DEFAULT_BASE_URL}/manifest.json"))?
@@ -235,13 +171,12 @@ fn install_with_bootstrap(
     let archive = if artifact.url.starts_with("file://") {
         fs::read(artifact.url.trim_start_matches("file://")).map_err(|err| err.to_string())?
     } else {
-        if bootstrap.offline {
+        if offline {
             return Err("offline install cannot download artifact".to_string());
         }
         download(&artifact.url)?
     };
     verify_sha256(&archive, &artifact.sha256)?;
-    bootstrap_toolchain(bootstrap)?;
     let home = tama_home();
     install_archive_at(&home, &selected_version, &archive)?;
     use_version_at(&home, &selected_version)?;
@@ -698,211 +633,6 @@ fn validate_manifest_string(value: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn bootstrap_toolchain(opts: BootstrapOptions) -> Result<(), String> {
-    let actions = bootstrap_actions(opts, detect_toolchain_presence())?;
-    for action in actions {
-        match action {
-            BootstrapAction::Lean => install_lean_toolchain(opts.no_modify_path)?,
-            BootstrapAction::Foundry => install_foundry()?,
-            BootstrapAction::Solc => install_solc()?,
-        }
-    }
-    Ok(())
-}
-
-fn detect_toolchain_presence() -> ToolchainPresence {
-    let lean_req = VersionReq::parse(DEFAULT_LEAN_REQ).expect("valid lean version requirement");
-    let solc_req = VersionReq::parse(DEFAULT_SOLC_REQ).expect("valid solc version requirement");
-    ToolchainPresence {
-        lean: command_version_satisfies("lean", &lean_req, tama_toolchain::parse_lean_version),
-        lake: command_exists("lake"),
-        forge: command_exists("forge"),
-        solc: command_version_satisfies("solc", &solc_req, tama_toolchain::parse_solc_version),
-    }
-}
-
-fn command_exists(name: &str) -> bool {
-    command_version(name).is_some()
-}
-
-fn command_version_satisfies(
-    name: &str,
-    req: &VersionReq,
-    parse: fn(&str) -> tama_toolchain::Result<Version>,
-) -> bool {
-    let Some(output) = command_version(name) else {
-        return false;
-    };
-    parse(&output).is_ok_and(|version| req.matches(&version))
-}
-
-fn command_version(name: &str) -> Option<String> {
-    let output = ProcessCommand::new(name)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let text = if stdout.trim().is_empty() {
-        stderr
-    } else {
-        stdout
-    };
-    Some(text.trim().to_string())
-}
-
-fn bootstrap_actions(
-    opts: BootstrapOptions,
-    presence: ToolchainPresence,
-) -> Result<Vec<BootstrapAction>, String> {
-    let mut actions = Vec::new();
-    if (!presence.lean || !presence.lake) && !opts.no_install_lean {
-        require_bootstrap_allowed(opts, "Lean/Lake")?;
-        actions.push(BootstrapAction::Lean);
-    }
-    if !presence.forge && !opts.no_install_foundry {
-        require_bootstrap_allowed(opts, "Foundry")?;
-        if opts.no_modify_path {
-            return Err(
-                "Foundry bootstrap may modify shell PATH; install Foundry manually or pass --no-install-foundry when using --no-modify-path"
-                    .to_string(),
-            );
-        }
-        actions.push(BootstrapAction::Foundry);
-    }
-    if !presence.solc && !opts.no_install_solc {
-        require_bootstrap_allowed(opts, "solc")?;
-        actions.push(BootstrapAction::Solc);
-    }
-    Ok(actions)
-}
-
-fn require_bootstrap_allowed(opts: BootstrapOptions, tool: &str) -> Result<(), String> {
-    if opts.offline {
-        return Err(format!(
-            "{tool} is missing or incompatible and cannot be installed while --offline is set"
-        ));
-    }
-    if !opts.yes {
-        return Err(format!(
-            "{tool} is missing or incompatible; rerun with --yes to install it or pass the matching --no-install-* flag to skip bootstrap"
-        ));
-    }
-    Ok(())
-}
-
-fn install_lean_toolchain(no_modify_path: bool) -> Result<(), String> {
-    let script = download("https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh")?;
-    run_shell_script("elan-init.sh", &script, &elan_init_args(no_modify_path))?;
-    let elan = home_tool(".elan/bin/elan").unwrap_or_else(|| Utf8PathBuf::from("elan"));
-    run_command_path(
-        &elan,
-        &["toolchain", "install", DEFAULT_LEAN_TOOLCHAIN],
-        "elan toolchain install",
-    )
-}
-
-fn elan_init_args(no_modify_path: bool) -> Vec<&'static str> {
-    let mut args = vec!["-y", "--default-toolchain", "none"];
-    if no_modify_path {
-        args.push("--no-modify-path");
-    }
-    args
-}
-
-fn install_foundry() -> Result<(), String> {
-    let script = download("https://foundry.paradigm.xyz")?;
-    run_shell_script("foundryup bootstrap", &script, &[])?;
-    let foundryup =
-        home_tool(".foundry/bin/foundryup").unwrap_or_else(|| Utf8PathBuf::from("foundryup"));
-    run_command_path(&foundryup, &[], "foundryup")
-}
-
-fn install_solc() -> Result<(), String> {
-    run_command(
-        "python3",
-        &["-m", "pip", "install", "--user", "solc-select"],
-        "python3 -m pip install solc-select",
-    )?;
-    run_command(
-        "solc-select",
-        &["install", DEFAULT_SOLC_VERSION],
-        "solc-select install",
-    )?;
-    run_command(
-        "solc-select",
-        &["use", DEFAULT_SOLC_VERSION],
-        "solc-select use",
-    )
-}
-
-fn home_tool(rel: &str) -> Option<Utf8PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(|home| Utf8PathBuf::from(home).join(rel))
-}
-
-fn run_shell_script(name: &str, script: &[u8], args: &[&str]) -> Result<(), String> {
-    let mut child = ProcessCommand::new("sh")
-        .arg("-s")
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(|err| format!("failed to run {name}: {err}"))?;
-    child
-        .stdin
-        .as_mut()
-        .ok_or_else(|| format!("failed to open stdin for {name}"))?
-        .write_all(script)
-        .map_err(|err| format!("failed to write {name}: {err}"))?;
-    let status = child
-        .wait()
-        .map_err(|err| format!("failed to wait for {name}: {err}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("{name} failed with status {status}"))
-    }
-}
-
-fn run_command(program: &str, args: &[&str], display: &str) -> Result<(), String> {
-    let status = ProcessCommand::new(program)
-        .args(args)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .map_err(|err| format!("failed to run {display}: {err}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("{display} failed with status {status}"))
-    }
-}
-
-fn run_command_path(path: &Utf8Path, args: &[&str], display: &str) -> Result<(), String> {
-    let status = ProcessCommand::new(path.as_std_path())
-        .args(args)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .map_err(|err| format!("failed to run {display}: {err}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("{display} failed with status {status}"))
-    }
-}
-
 fn extract_archive(bytes: &[u8], dest: &Utf8Path) -> Result<(), String> {
     let decoder = GzDecoder::new(Cursor::new(bytes));
     let mut archive = tar::Archive::new(decoder);
@@ -1046,221 +776,6 @@ mod tests {
         assert!(!platform.contains("windows"));
     }
 
-    #[test]
-    fn bootstrap_requires_consent_or_opt_out_for_missing_tools() {
-        let presence = ToolchainPresence {
-            lean: false,
-            lake: false,
-            forge: false,
-            solc: false,
-        };
-        let err = bootstrap_actions(
-            BootstrapOptions {
-                yes: false,
-                offline: false,
-                no_modify_path: false,
-                no_install_lean: false,
-                no_install_foundry: false,
-                no_install_solc: false,
-            },
-            presence,
-        )
-        .unwrap_err();
-        assert!(err.contains("--yes"));
-
-        let err = bootstrap_actions(
-            BootstrapOptions {
-                yes: true,
-                offline: true,
-                no_modify_path: false,
-                no_install_lean: false,
-                no_install_foundry: false,
-                no_install_solc: false,
-            },
-            presence,
-        )
-        .unwrap_err();
-        assert!(err.contains("--offline"));
-
-        let actions = bootstrap_actions(
-            BootstrapOptions {
-                yes: true,
-                offline: false,
-                no_modify_path: false,
-                no_install_lean: true,
-                no_install_foundry: false,
-                no_install_solc: true,
-            },
-            presence,
-        )
-        .unwrap();
-        assert_eq!(actions, vec![BootstrapAction::Foundry]);
-    }
-
-    #[test]
-    fn bootstrap_treats_incompatible_version_as_missing_tool() {
-        let presence = ToolchainPresence {
-            lean: true,
-            lake: true,
-            forge: true,
-            solc: false,
-        };
-
-        let err = bootstrap_actions(
-            BootstrapOptions {
-                yes: false,
-                offline: false,
-                no_modify_path: false,
-                no_install_lean: false,
-                no_install_foundry: false,
-                no_install_solc: false,
-            },
-            presence,
-        )
-        .unwrap_err();
-        assert!(err.contains("missing or incompatible"));
-
-        let actions = bootstrap_actions(
-            BootstrapOptions {
-                yes: true,
-                offline: false,
-                no_modify_path: false,
-                no_install_lean: false,
-                no_install_foundry: false,
-                no_install_solc: false,
-            },
-            presence,
-        )
-        .unwrap();
-        assert_eq!(actions, vec![BootstrapAction::Solc]);
-    }
-
-    #[test]
-    fn bootstrap_honors_no_modify_path() {
-        assert_eq!(
-            elan_init_args(true),
-            vec!["-y", "--default-toolchain", "none", "--no-modify-path"]
-        );
-        assert_eq!(
-            elan_init_args(false),
-            vec!["-y", "--default-toolchain", "none"]
-        );
-
-        let err = bootstrap_actions(
-            BootstrapOptions {
-                yes: true,
-                offline: false,
-                no_modify_path: true,
-                no_install_lean: true,
-                no_install_foundry: false,
-                no_install_solc: true,
-            },
-            ToolchainPresence {
-                lean: true,
-                lake: true,
-                forge: false,
-                solc: true,
-            },
-        )
-        .unwrap_err();
-
-        assert!(err.contains("--no-modify-path"));
-        assert!(err.contains("Foundry"));
-    }
-
-    #[test]
-    fn lean_requirement_accepts_realistic_patch_drift() {
-        // Real `lean --version` output across compatible patches. The original bug
-        // was an exact `4.22.0` token match that rejected every other patch in the
-        // 4.22.x line on otherwise-working installs.
-        let req = VersionReq::parse(DEFAULT_LEAN_REQ).unwrap();
-        for output in [
-            "Lean (version 4.22.0, x86_64-unknown-linux-gnu, commit 28bd58c41a3a, Release)",
-            "Lean (version 4.22.1, x86_64-unknown-linux-gnu, commit deadbeefcafe, Release)",
-            "Lean (version 4.22.5, aarch64-apple-darwin, commit 1234567890ab, Release)",
-            "Lean (version 4.23.0, x86_64-unknown-linux-gnu, commit abc123def456, Release)",
-        ] {
-            let version = tama_toolchain::parse_lean_version(output).unwrap();
-            assert!(req.matches(&version), "expected {version} to satisfy {req}");
-        }
-    }
-
-    #[test]
-    fn lean_requirement_rejects_incompatible_versions() {
-        let req = VersionReq::parse(DEFAULT_LEAN_REQ).unwrap();
-        for output in [
-            "Lean (version 4.21.0, x86_64-unknown-linux-gnu, commit aaaa, Release)",
-            "Lean (version 4.0.0, x86_64-unknown-linux-gnu, commit bbbb, Release)",
-            "Lean (version 5.0.0, x86_64-unknown-linux-gnu, commit cccc, Release)",
-        ] {
-            let version = tama_toolchain::parse_lean_version(output).unwrap();
-            assert!(!req.matches(&version), "expected {version} to fail {req}");
-        }
-    }
-
-    #[test]
-    fn solc_requirement_accepts_realistic_version_output() {
-        // Real `solc --version` carries a `+commit.<sha>.<platform>.<compiler>`
-        // tail; the trailing `g++` is invalid semver build metadata, so the
-        // parser must work on the X.Y.Z core only.
-        let req = VersionReq::parse(DEFAULT_SOLC_REQ).unwrap();
-        let output = "solc, the solidity compiler commandline interface\n\
-                      Version: 0.8.33+commit.64118f21.Linux.g++";
-        let version = tama_toolchain::parse_solc_version(output).unwrap();
-        assert!(req.matches(&version));
-    }
-
-    #[test]
-    fn solc_requirement_rejects_patch_drift() {
-        // Solc bytecode is not stable across patches; pin must be exact.
-        let req = VersionReq::parse(DEFAULT_SOLC_REQ).unwrap();
-        for output in [
-            "Version: 0.8.32+commit.64118f21.Linux.g++",
-            "Version: 0.8.34+commit.64118f21.Linux.g++",
-            "Version: 0.9.0+commit.64118f21.Linux.g++",
-        ] {
-            let version = tama_toolchain::parse_solc_version(output).unwrap();
-            assert!(!req.matches(&version), "expected {version} to fail {req}");
-        }
-    }
-
-    #[test]
-    fn default_lean_toolchain_satisfies_lean_requirement() {
-        // Invariant: if bootstrap installs DEFAULT_LEAN_TOOLCHAIN, the resulting
-        // `lean --version` must satisfy DEFAULT_LEAN_REQ. Otherwise tamaup would
-        // install a toolchain it then immediately rejects.
-        let installed = DEFAULT_LEAN_TOOLCHAIN
-            .strip_prefix("leanprover/lean4:v")
-            .and_then(|v| Version::parse(v).ok())
-            .expect("DEFAULT_LEAN_TOOLCHAIN must be `leanprover/lean4:vX.Y.Z`");
-        let req = VersionReq::parse(DEFAULT_LEAN_REQ).unwrap();
-        assert!(
-            req.matches(&installed),
-            "DEFAULT_LEAN_TOOLCHAIN {installed} does not satisfy DEFAULT_LEAN_REQ {req}"
-        );
-    }
-
-    #[test]
-    fn default_solc_version_satisfies_solc_requirement() {
-        // Same invariant for solc: `solc-select install <DEFAULT_SOLC_VERSION>`
-        // must produce a binary that satisfies DEFAULT_SOLC_REQ.
-        let installed = Version::parse(DEFAULT_SOLC_VERSION).unwrap();
-        let req = VersionReq::parse(DEFAULT_SOLC_REQ).unwrap();
-        assert!(
-            req.matches(&installed),
-            "DEFAULT_SOLC_VERSION {installed} does not satisfy DEFAULT_SOLC_REQ {req}"
-        );
-    }
-
-    #[test]
-    fn unparsable_version_output_errors_cleanly() {
-        // An elan shim with no default toolchain prints something like the line
-        // below to stderr; the parser must error rather than panic so the tool
-        // is reported as missing/incompatible without crashing tamaup.
-        assert!(tama_toolchain::parse_lean_version("error: no default toolchain configured").is_err());
-        assert!(tama_toolchain::parse_solc_version("solc-select: 0.8.33 not installed").is_err());
-        assert!(tama_toolchain::parse_lean_version("").is_err());
-    }
 
     #[test]
     fn website_install_command_matches_spec() {
@@ -1701,17 +1216,15 @@ mod tests {
     }
 
     #[test]
-    fn install_accepts_global_bootstrap_flags_after_subcommand() {
+    fn install_accepts_global_flags_after_subcommand() {
         let cli = Cli::try_parse_from([
             "tamaup",
             "install",
-            "--yes",
             "--offline",
             "--manifest-file",
             "manifest.json",
         ])
         .unwrap();
-        assert!(cli.yes);
         assert!(cli.offline);
         match cli.command.unwrap() {
             Command::Install { manifest_file, .. } => {
@@ -1720,8 +1233,7 @@ mod tests {
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let cli = Cli::try_parse_from(["tamaup", "install", "0.1.0", "--no-install-solc"]).unwrap();
-        assert!(cli.no_install_solc);
+        let cli = Cli::try_parse_from(["tamaup", "install", "0.1.0"]).unwrap();
         match cli.command.unwrap() {
             Command::Install { version, .. } => assert_eq!(version.as_deref(), Some("0.1.0")),
             other => panic!("unexpected command: {other:?}"),
@@ -1741,37 +1253,18 @@ mod tests {
     }
 
     #[test]
-    fn install_verifies_manifest_before_bootstrap() {
+    fn install_verifies_manifest_before_extract() {
         let dir = tempfile::tempdir().unwrap();
         let manifest = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).unwrap();
         fs::write(&manifest, br#"{"version":"0.1.0","artifacts":[]}"#).unwrap();
-        let mut bootstrap_called = false;
 
-        let err = install_with_bootstrap(
-            "stable",
-            Some(manifest),
-            BootstrapOptions {
-                yes: true,
-                offline: true,
-                no_modify_path: false,
-                no_install_lean: false,
-                no_install_foundry: false,
-                no_install_solc: false,
-            },
-            |_| {
-                bootstrap_called = true;
-                Ok(())
-            },
-            &Palette::plain(),
-        )
-        .unwrap_err();
+        let err = install("stable", Some(manifest), true, &Palette::plain()).unwrap_err();
 
-        assert!(!bootstrap_called);
         assert!(!err.is_empty());
     }
 
     #[test]
-    fn install_rejects_bad_sha_before_bootstrap_and_extract() {
+    fn install_rejects_bad_sha_before_extract() {
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -1797,34 +1290,15 @@ mod tests {
             }]
         });
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-        let mut bootstrap_called = false;
 
-        let err = install_with_bootstrap(
-            "stable",
-            Some(manifest_path),
-            BootstrapOptions {
-                yes: true,
-                offline: true,
-                no_modify_path: true,
-                no_install_lean: true,
-                no_install_foundry: true,
-                no_install_solc: true,
-            },
-            |_| {
-                bootstrap_called = true;
-                Ok(())
-            },
-            &Palette::plain(),
-        )
-        .unwrap_err();
+        let err = install("stable", Some(manifest_path), true, &Palette::plain()).unwrap_err();
 
         assert!(err.contains("bad artifact SHA-256"));
-        assert!(!bootstrap_called);
         assert!(!home.exists());
     }
 
     #[test]
-    fn install_offline_refuses_remote_artifact_before_bootstrap() {
+    fn install_offline_refuses_remote_artifact() {
         let _env_lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -1844,29 +1318,10 @@ mod tests {
             }]
         });
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-        let mut bootstrap_called = false;
 
-        let err = install_with_bootstrap(
-            "stable",
-            Some(manifest_path),
-            BootstrapOptions {
-                yes: true,
-                offline: true,
-                no_modify_path: true,
-                no_install_lean: true,
-                no_install_foundry: true,
-                no_install_solc: true,
-            },
-            |_| {
-                bootstrap_called = true;
-                Ok(())
-            },
-            &Palette::plain(),
-        )
-        .unwrap_err();
+        let err = install("stable", Some(manifest_path), true, &Palette::plain()).unwrap_err();
 
         assert_eq!(err, "offline install cannot download artifact");
-        assert!(!bootstrap_called);
         assert!(!home.exists());
     }
 
@@ -1902,28 +1357,9 @@ mod tests {
             serde_json::to_vec_pretty(&manifest).unwrap(),
         )
         .unwrap();
-        let mut bootstrap_called = false;
 
-        install_with_bootstrap(
-            "stable",
-            Some(manifest_path),
-            BootstrapOptions {
-                yes: true,
-                offline: true,
-                no_modify_path: true,
-                no_install_lean: true,
-                no_install_foundry: true,
-                no_install_solc: true,
-            },
-            |_| {
-                bootstrap_called = true;
-                Ok(())
-            },
-            &Palette::plain(),
-        )
-        .unwrap();
+        install("stable", Some(manifest_path), true, &Palette::plain()).unwrap();
 
-        assert!(bootstrap_called);
         assert!(home.join("versions/0.1.0/bin/tama").is_file());
         assert!(home.join("versions/0.1.0/bin/tamaup").is_file());
         assert!(home.join("bin/tama").exists());
