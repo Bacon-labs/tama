@@ -180,7 +180,7 @@ pub fn scaffold_contract(root: &Utf8Path, name: &str) -> Result<()> {
     let mut lock = tama_config::load_lock(root)?;
     write_string(&src, &contract_template(name))?;
     write_string(&spec, &spec_template(name))?;
-    write_string(&proof, &proof_template(name, paths.test.as_str()))?;
+    write_string(&proof, &proof_template(name))?;
     let generated_import_root = relative_project_path(&paths.test, &paths.generated);
     write_string(&test, &test_template(name, generated_import_root.as_str()))?;
     update_aggregate(root, "TamaSrc.lean", &format!("import src.{name}"))?;
@@ -465,7 +465,7 @@ end spec.{name}Spec
     )
 }
 
-fn proof_template(name: &str, _mirror_test_dir: &str) -> String {
+fn proof_template(name: &str) -> String {
     format!(
         r#"import spec.{name}Spec
 

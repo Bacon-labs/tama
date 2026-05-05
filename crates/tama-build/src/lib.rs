@@ -1451,9 +1451,9 @@ fn extract_specs(spec_path: &Utf8Path) -> Result<Vec<String>> {
     }
     let text = tama_common::read_to_string(spec_path)?;
     let stripped = strip_lean_block_comments(&text);
-    let def_re = Regex::new(r"^def\s+([A-Za-z_][A-Za-z0-9_']*)\b").expect("valid def regex");
+    let def_re = Regex::new(r"^def\s+([A-Za-z_][A-Za-z0-9_']*)").expect("valid def regex");
     let gen_spec_re =
-        Regex::new(r"^#gen_spec\s+([A-Za-z_][A-Za-z0-9_']*)\b").expect("valid gen_spec regex");
+        Regex::new(r"^#gen_spec\s+([A-Za-z_][A-Za-z0-9_']*)").expect("valid gen_spec regex");
     let mut names = Vec::new();
     for raw in stripped.lines() {
         if raw.is_empty() || raw.starts_with(|ch: char| ch.is_whitespace()) {
@@ -1509,7 +1509,7 @@ fn extract_dischargers(
     }
     let text = tama_common::read_to_string(proof_path)?;
     let theorem_re = Regex::new(
-        r"^\s*(?:@\[[^\]]*\]\s*)*(?:(?:private|protected)\s+)*(?:theorem|lemma)\s+([A-Za-z_][A-Za-z0-9_.']*)\b",
+        r"^\s*(?:@\[[^\]]*\]\s*)*(?:(?:private|protected)\s+)*(?:theorem|lemma)\s+([A-Za-z_][A-Za-z0-9_.']*)",
     )
     .expect("valid theorem regex");
     let stripped = strip_lean_block_comments(&text);
@@ -1577,7 +1577,27 @@ fn extract_mirrors(
         let mut current_contract: Option<String> = None;
         let mut pending: Vec<String> = Vec::new();
         let mut brace_depth: i32 = 0;
+        let mut in_block_comment = false;
         for raw in text.lines() {
+            if in_block_comment {
+                if let Some(idx) = raw.find("*/") {
+                    let rest = &raw[idx + 2..];
+                    in_block_comment = false;
+                    if rest.trim().is_empty() {
+                        continue;
+                    }
+                    // Treat the post-`*/` remainder as a fresh logical line; fall through.
+                    let trimmed = rest.trim();
+                    if trimmed.starts_with("/*") {
+                        in_block_comment = true;
+                        continue;
+                    }
+                    brace_depth += count_brace_delta(rest);
+                    continue;
+                } else {
+                    continue;
+                }
+            }
             let trimmed = raw.trim();
             if trimmed.is_empty() {
                 continue;
@@ -1601,7 +1621,13 @@ fn extract_mirrors(
                 }
                 continue;
             }
-            if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+            if trimmed.starts_with("//") || trimmed.starts_with('*') {
+                continue;
+            }
+            if let Some(after) = trimmed.strip_prefix("/*") {
+                if !after.contains("*/") {
+                    in_block_comment = true;
+                }
                 continue;
             }
             let mut consumed = false;
@@ -2608,6 +2634,50 @@ end spec.CounterSpec
     }
 
     #[test]
+    fn extract_specs_preserves_lean_prime_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
+            .unwrap()
+            .join("Spec.lean");
+        tama_common::write_string(
+            &spec,
+            r#"namespace spec.Foo
+
+def transfer' (s : Nat) : Prop := s = 0
+
+end spec.Foo
+"#,
+        )
+        .unwrap();
+        let names = extract_specs(&spec).unwrap();
+        assert_eq!(names, vec!["transfer'".to_string()]);
+    }
+
+    #[test]
+    fn extract_dischargers_preserves_lean_prime_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let proof = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
+            .unwrap()
+            .join("Proof.lean");
+        tama_common::write_string(
+            &proof,
+            r#"namespace proof.Foo
+
+-- tama: discharges=transfer'
+theorem transfer'_meets : True := by trivial
+
+end proof.Foo
+"#,
+        )
+        .unwrap();
+        let map = extract_dischargers(&proof, "proof.Foo", &["transfer'".to_string()]).unwrap();
+        assert_eq!(
+            map.get("transfer'").map(|v| v.as_slice()),
+            Some(&["proof.Foo.transfer'_meets".to_string()][..])
+        );
+    }
+
+    #[test]
     fn extract_specs_rejects_forbidden_top_level_form() {
         let dir = tempfile::tempdir().unwrap();
         let spec = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
@@ -2819,6 +2889,39 @@ contract CounterTest {
         assert_eq!(count_brace_delta("bytes memory s = \"}\";"), 0);
         assert_eq!(count_brace_delta("/* } */ {"), 1);
         assert_eq!(count_brace_delta("if (a) { /* inner } */ }"), 0);
+    }
+
+    #[test]
+    fn extract_mirrors_skips_multi_line_block_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let test_dir = root.join("test/verity");
+        let test_file = test_dir.join("Foo.t.sol");
+        tama_common::write_string(
+            &test_file,
+            r#"/*
+ contract FakeOuter {
+   function testFuzzFake() public {}
+ }
+*/
+
+contract FooTest {
+    // tama: mirrors=foo_spec
+    function testFuzzReal(uint256 x) public {}
+}
+"#,
+        )
+        .unwrap();
+        let mut spec_owner = BTreeMap::new();
+        spec_owner.insert("foo_spec".to_string(), "Foo".to_string());
+        let mirrors = extract_mirrors(&root, &test_dir, &spec_owner).unwrap();
+        assert_eq!(
+            mirrors
+                .get(&("Foo".to_string(), "foo_spec".to_string()))
+                .map(|v| v.as_slice()),
+            Some(&["test/verity/Foo.t.sol:FooTest.testFuzzReal".to_string()][..]),
+            "block-commented contract must not affect parsing, got {mirrors:?}"
+        );
     }
 
     #[test]
