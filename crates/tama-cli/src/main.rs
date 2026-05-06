@@ -1938,7 +1938,17 @@ fn should_replace_cached_package(source: &Utf8Path, target: &Utf8Path) -> Result
     }
     let source_rev = git_head_rev(source).ok();
     let target_rev = git_head_rev(target).ok();
-    Ok(source_rev.is_none() || source_rev != target_rev)
+    if source_rev.is_none() || source_rev != target_rev {
+        return Ok(true);
+    }
+    Ok(lake_build_artifacts_present(source) && !lake_build_artifacts_present(target))
+}
+
+fn lake_build_artifacts_present(package: &Utf8Path) -> bool {
+    let build = package.join(".lake/build");
+    std::fs::read_dir(build)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
 }
 
 fn should_seed_manifest_package(target: &Utf8Path, expected_rev: &str) -> Result<bool, String> {
@@ -3313,6 +3323,49 @@ mod tests {
 
         tama_common::write_string(&cache.join("verity/untracked.lean"), "local change\n").unwrap();
         assert!(should_replace_cached_package(&package, &cache.join("verity")).unwrap());
+    }
+
+    #[test]
+    fn lake_package_cache_refreshes_matching_revisions_missing_build_artifacts() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let cache = Utf8PathBuf::from_path_buf(dir.path().join("cache")).unwrap();
+        let package = root.join(".lake/packages/verity");
+
+        init_git_package(&package, "same").unwrap();
+        tama_common::write_string(&package.join(".gitignore"), ".lake/\n").unwrap();
+        run_process("git", &["add", ".gitignore"], Some(&package)).unwrap();
+        run_process(
+            "git",
+            &[
+                "-c",
+                "user.name=Tama Test",
+                "-c",
+                "user.email=tama@example.test",
+                "commit",
+                "-m",
+                "ignore lake builds",
+            ],
+            Some(&package),
+        )
+        .unwrap();
+
+        sync_lake_package_cache(&root, &cache).unwrap();
+        assert!(!should_replace_cached_package(&package, &cache.join("verity")).unwrap());
+
+        let build_artifact = package.join(".lake/build/lib/Compiler.olean");
+        tama_common::write_string(&build_artifact, "compiled\n").unwrap();
+
+        assert!(git_worktree_clean(&package).unwrap());
+        assert!(should_replace_cached_package(&package, &cache.join("verity")).unwrap());
+
+        sync_lake_package_cache(&root, &cache).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(cache.join("verity/.lake/build/lib/Compiler.olean")).unwrap(),
+            "compiled\n"
+        );
     }
 
     #[test]
