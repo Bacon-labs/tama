@@ -11,7 +11,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  TAMA_LAKE_CACHE_SCHEMA: tama-lake-v3
+  TAMA_LAKE_CACHE_SCHEMA: tama-lake-v4
   TAMA_LAKE_PACKAGE_CACHE: ${{ github.workspace }}/.cache/tama/lake-packages
 
 jobs:
