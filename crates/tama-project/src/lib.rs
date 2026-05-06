@@ -6,12 +6,11 @@ use tama_common::{read_to_string, write_string};
 use tama_config::{PathsConfig, TamaLock};
 use toml_edit::Item;
 
+mod starter_deps;
+use starter_deps::{DEFAULT_LEAN_TOOLCHAIN, DEFAULT_SOLC, DEFAULT_VERITY_GIT, DEFAULT_VERITY_REV};
+
 pub type Result<T> = std::result::Result<T, Error>;
 
-const DEFAULT_VERITY_GIT: &str = "https://github.com/lfglabs-dev/verity.git";
-const DEFAULT_VERITY_REV: &str = "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e";
-const DEFAULT_LEAN_TOOLCHAIN: &str = "leanprover/lean4:v4.22.0";
-const DEFAULT_SOLC: &str = "0.8.33";
 const STARTER_LAKE_MANIFEST: &str = include_str!("templates/starter-lake-manifest.json");
 const STARTER_CI_WORKFLOW: &str = include_str!("templates/starter-ci.yml");
 

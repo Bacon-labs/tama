@@ -10,6 +10,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  TAMA_LAKE_CACHE_SCHEMA: tama-lake-v3
   TAMA_LAKE_PACKAGE_CACHE: ${{ github.workspace }}/.cache/tama/lake-packages
 
 jobs:
@@ -61,15 +62,16 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .cache/tama
-          key: tama-lake-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/tama-project/src/lib.rs', 'crates/tama-project/src/templates/starter-lake-manifest.json', 'fixtures/projects/counter/lake-manifest.json', 'fixtures/projects/counter/lean-toolchain') }}
+          key: ${{ env.TAMA_LAKE_CACHE_SCHEMA }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/tama-project/src/starter_deps.rs', 'crates/tama-project/src/templates/starter-lake-manifest.json', 'fixtures/projects/counter/lake-manifest.json', 'fixtures/projects/counter/lean-toolchain') }}
           restore-keys: |
-            tama-lake-v2-${{ runner.os }}-${{ runner.arch }}-
+            ${{ env.TAMA_LAKE_CACHE_SCHEMA }}-${{ runner.os }}-${{ runner.arch }}-
       - name: Lake cache diagnostics
         shell: bash
         run: |
           set -euo pipefail
           echo "cache-hit=${{ steps.tama-lake-cache.outputs.cache-hit }}"
           found=0
+          marker=0
           for dir in .cache/tama/lake-packages/*/.lake/build; do
             if [ -d "$dir" ]; then
               found=1
@@ -78,6 +80,16 @@ jobs:
           done
           if [ "$found" -eq 0 ]; then
             echo "No cached Lake package builds found."
+          fi
+          if [ -f .cache/tama/lake-cache-ready ]; then
+            marker=1
+            cat .cache/tama/lake-cache-ready
+          else
+            echo "No Lake cache readiness marker found."
+          fi
+          if [ "${{ steps.tama-lake-cache.outputs.cache-hit }}" = "true" ] && { [ "$found" -eq 0 ] || [ "$marker" -eq 0 ]; }; then
+            echo "::error::Exact Lake cache hit is missing compiled package builds or the readiness marker. Bump TAMA_LAKE_CACHE_SCHEMA or delete the cache entry."
+            exit 1
           fi
       - uses: ./.github/actions/install-toolchain
       - name: Build Tama
@@ -132,6 +144,33 @@ jobs:
             tama --root "$counter" inspect Counter "$field" >/dev/null
             tama --root "$counter" --json inspect Counter "$field" | python3 -m json.tool >/dev/null
           done
+      - name: Mark Lake package cache ready
+        if: steps.tama-lake-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for dir in .cache/tama/lake-packages/*/.lake/build; do
+            if [ -d "$dir" ]; then
+              found=1
+              du -sh "$dir"
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No cached Lake package builds found."
+            exit 1
+          fi
+          {
+            echo "schema=${{ env.TAMA_LAKE_CACHE_SCHEMA }}"
+            echo "key=${{ steps.tama-lake-cache.outputs.cache-primary-key }}"
+            echo "source=${{ github.workflow }} run ${{ github.run_id }}"
+          } > .cache/tama/lake-cache-ready
+      - name: Save Lake package cache
+        if: steps.tama-lake-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/tama
+          key: ${{ steps.tama-lake-cache.outputs.cache-primary-key }}
 
   negative-audit:
     name: Release negative audit
@@ -146,15 +185,16 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .cache/tama
-          key: tama-lake-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/tama-project/src/lib.rs', 'crates/tama-project/src/templates/starter-lake-manifest.json', 'fixtures/projects/counter/lake-manifest.json', 'fixtures/projects/counter/lean-toolchain') }}
+          key: ${{ env.TAMA_LAKE_CACHE_SCHEMA }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/tama-project/src/starter_deps.rs', 'crates/tama-project/src/templates/starter-lake-manifest.json', 'fixtures/projects/counter/lake-manifest.json', 'fixtures/projects/counter/lean-toolchain') }}
           restore-keys: |
-            tama-lake-v2-${{ runner.os }}-${{ runner.arch }}-
+            ${{ env.TAMA_LAKE_CACHE_SCHEMA }}-${{ runner.os }}-${{ runner.arch }}-
       - name: Lake cache diagnostics
         shell: bash
         run: |
           set -euo pipefail
           echo "cache-hit=${{ steps.tama-lake-cache.outputs.cache-hit }}"
           found=0
+          marker=0
           for dir in .cache/tama/lake-packages/*/.lake/build; do
             if [ -d "$dir" ]; then
               found=1
@@ -163,6 +203,16 @@ jobs:
           done
           if [ "$found" -eq 0 ]; then
             echo "No cached Lake package builds found."
+          fi
+          if [ -f .cache/tama/lake-cache-ready ]; then
+            marker=1
+            cat .cache/tama/lake-cache-ready
+          else
+            echo "No Lake cache readiness marker found."
+          fi
+          if [ "${{ steps.tama-lake-cache.outputs.cache-hit }}" = "true" ] && { [ "$found" -eq 0 ] || [ "$marker" -eq 0 ]; }; then
+            echo "::error::Exact Lake cache hit is missing compiled package builds or the readiness marker. Bump TAMA_LAKE_CACHE_SCHEMA or delete the cache entry."
+            exit 1
           fi
       - uses: ./.github/actions/install-toolchain
       - name: Build baseline
@@ -355,7 +405,6 @@ jobs:
           json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
           PY
           expect_audit_failure "$project" trust-boundary
-
   installer:
     name: Release installer safety
     runs-on: ubuntu-22.04
