@@ -14,9 +14,21 @@ env:
   TAMA_LAKE_PACKAGE_CACHE: ${{ github.workspace }}/.cache/tama/lake-packages
 
 jobs:
+  release-version:
+    name: Release version matches tag
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check Cargo and CLI versions
+        shell: bash
+        run: bash .github/scripts/check-release-version.sh
+
   verify:
     name: Verify release ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    needs: release-version
     strategy:
       fail-fast: false
       matrix:
