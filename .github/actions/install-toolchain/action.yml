@@ -1,4 +1,4 @@
-name: Install Lean, Foundry, and solc
+name: Install toolchain
 description: Install elan (Lean), Foundry, and solc 0.8.33 with retry-tolerant fetches.
 
 inputs:
@@ -6,6 +6,14 @@ inputs:
     description: Token used by foundryup to query the GitHub releases API. Avoids unauthenticated rate-limit 403s.
     required: false
     default: ${{ github.token }}
+  install-foundry:
+    description: Install Foundry.
+    required: false
+    default: "true"
+  install-solc:
+    description: Install solc-select and solc 0.8.33.
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -39,11 +47,13 @@ runs:
         exit 1
 
     - name: Install Foundry
+      if: ${{ inputs.install-foundry == 'true' }}
       uses: foundry-rs/foundry-toolchain@v1.6.0
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
 
     - name: Install solc-select and solc 0.8.33 (in venv)
+      if: ${{ inputs.install-solc == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
@@ -61,5 +71,10 @@ runs:
     - name: Print toolchain versions
       shell: bash
       run: |
-        forge --version
-        solc --version
+        elan --version
+        if command -v forge >/dev/null 2>&1; then
+          forge --version
+        fi
+        if command -v solc >/dev/null 2>&1; then
+          solc --version
+        fi
