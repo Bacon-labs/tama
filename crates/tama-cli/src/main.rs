@@ -19,8 +19,8 @@ Creates a Foundry-compatible Verity starter. The starter includes commented
 ERC20Lite source/spec/proof files, mirror Foundry tests, generated bridge
 placeholders, and a deploy script that works after `tama build`.
 
-Online init also runs `lake update`, initializes Git when needed, installs the
-pinned forge-std dependency as a submodule, and refreshes tama.lock.
+Online init also runs `lake update`, initializes Git when needed, installs
+forge-std as a pinned submodule, and refreshes tama.lock.
 Use --offline to write files only and do dependency setup later.";
 const NEW_AFTER_HELP: &str = "\
 Adds one Verity contract scaffold under the configured source, spec, proof, and
@@ -2168,9 +2168,9 @@ fn forge_install_optional_flags() -> Result<Vec<&'static str>, String> {
 
 fn select_forge_install_optional_flags(help: &str) -> Vec<&'static str> {
     let mut flags = Vec::new();
-    if help.contains("--shallow") {
-        flags.push("--shallow");
-    }
+    // `forge install <repo>@<tag> --shallow` can clone the default branch
+    // without the requested tag, then fail tag checkout even when the tag
+    // exists upstream. Keep pinned installs reproducible and non-shallow.
     if help.contains("--no-commit") {
         flags.push("--no-commit");
     }
@@ -2184,7 +2184,7 @@ fn offline_init_instructions() -> [&'static str; 6] {
         "  when network access is available, run:",
         "  lake update",
         "  git init  # if this project is not already inside a Git worktree",
-        "  forge install foundry-rs/forge-std@v1.16.1 --shallow",
+        "  forge install foundry-rs/forge-std@v1.16.1",
     ]
 }
 
@@ -2788,7 +2788,8 @@ mod tests {
         assert!(instructions.contains("lake update"));
         assert!(instructions.contains("git init"));
         assert!(instructions.contains("TAMA_LAKE_PACKAGE_CACHE"));
-        assert!(instructions.contains("forge install foundry-rs/forge-std@v1.16.1 --shallow"));
+        assert!(instructions.contains("forge install foundry-rs/forge-std@v1.16.1"));
+        assert!(!instructions.contains("--shallow"));
         assert!(!instructions.contains("--no-git"));
     }
 
@@ -3109,11 +3110,11 @@ mod tests {
         );
         assert_eq!(
             select_forge_install_optional_flags("Options:\n      --shallow\n      --no-commit\n"),
-            vec!["--shallow", "--no-commit"]
+            vec!["--no-commit"]
         );
         assert_eq!(
             select_forge_install_optional_flags("Options:\n      --shallow\n"),
-            vec!["--shallow"]
+            Vec::<&'static str>::new()
         );
     }
 
