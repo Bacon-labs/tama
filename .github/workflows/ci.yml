@@ -57,12 +57,29 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v4
+      - name: Restore Lake package cache
+        id: tama-lake-cache
+        uses: actions/cache/restore@v4
         with:
           path: .cache/tama
-          key: tama-lake-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/lake-manifest.json') }}
+          key: tama-lake-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/tama-project/src/lib.rs', 'crates/tama-project/src/templates/starter-lake-manifest.json', 'fixtures/projects/counter/lake-manifest.json', 'fixtures/projects/counter/lean-toolchain') }}
           restore-keys: |
-            tama-lake-${{ runner.os }}-${{ runner.arch }}-
+            tama-lake-v2-${{ runner.os }}-${{ runner.arch }}-
+      - name: Lake cache diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "cache-hit=${{ steps.tama-lake-cache.outputs.cache-hit }}"
+          found=0
+          for dir in .cache/tama/lake-packages/*/.lake/build; do
+            if [ -d "$dir" ]; then
+              found=1
+              du -sh "$dir"
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No cached Lake package builds found."
+          fi
       - uses: ./.github/actions/install-toolchain
       - name: Build Tama
         run: cargo build --workspace
@@ -137,12 +154,29 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v4
+      - name: Restore Lake package cache
+        id: tama-lake-cache
+        uses: actions/cache/restore@v4
         with:
           path: .cache/tama
-          key: tama-lake-negative-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/lake-manifest.json') }}
+          key: tama-lake-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/tama-project/src/lib.rs', 'crates/tama-project/src/templates/starter-lake-manifest.json', 'fixtures/projects/counter/lake-manifest.json', 'fixtures/projects/counter/lean-toolchain') }}
           restore-keys: |
-            tama-lake-negative-${{ runner.os }}-${{ runner.arch }}-
+            tama-lake-v2-${{ runner.os }}-${{ runner.arch }}-
+      - name: Lake cache diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "cache-hit=${{ steps.tama-lake-cache.outputs.cache-hit }}"
+          found=0
+          for dir in .cache/tama/lake-packages/*/.lake/build; do
+            if [ -d "$dir" ]; then
+              found=1
+              du -sh "$dir"
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No cached Lake package builds found."
+          fi
       - uses: ./.github/actions/install-toolchain
       - name: Build Tama and starter baseline
         shell: bash

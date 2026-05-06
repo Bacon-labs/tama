@@ -1,0 +1,100 @@
+name: Lake Cache
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/lake-cache.yml"
+      - ".github/actions/install-toolchain/action.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
+      - "fixtures/projects/counter/lake-manifest.json"
+      - "fixtures/projects/counter/lean-toolchain"
+  schedule:
+    - cron: "17 8 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  TAMA_LAKE_PACKAGE_CACHE: ${{ github.workspace }}/.cache/tama/lake-packages
+
+jobs:
+  warm:
+    name: Warm Lake cache ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+          - name: macos-arm64
+            os: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore Lake package cache
+        id: tama-lake-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/tama
+          key: tama-lake-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/tama-project/src/lib.rs', 'crates/tama-project/src/templates/starter-lake-manifest.json', 'fixtures/projects/counter/lake-manifest.json', 'fixtures/projects/counter/lean-toolchain') }}
+          restore-keys: |
+            tama-lake-v2-${{ runner.os }}-${{ runner.arch }}-
+      - name: Lake cache diagnostics after restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "cache-hit=${{ steps.tama-lake-cache.outputs.cache-hit }}"
+          found=0
+          for dir in .cache/tama/lake-packages/*/.lake/build; do
+            if [ -d "$dir" ]; then
+              found=1
+              du -sh "$dir"
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No cached Lake package builds found."
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.tama-lake-cache.outputs.cache-hit != 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.tama-lake-cache.outputs.cache-hit != 'true'
+      - uses: ./.github/actions/install-toolchain
+        if: steps.tama-lake-cache.outputs.cache-hit != 'true'
+      - name: Warm starter Lake package builds
+        if: steps.tama-lake-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$PWD/target/debug:$HOME/.elan/bin:$HOME/.foundry/bin:$HOME/.local/bin:$PATH"
+          cargo build --workspace
+          tmp="$(mktemp -d)"
+          project="$tmp/cache-warm"
+          tama init "$project"
+          tama --root "$project" build --no-solc --no-forge
+      - name: Lake cache diagnostics after warmup
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for dir in .cache/tama/lake-packages/*/.lake/build; do
+            if [ -d "$dir" ]; then
+              found=1
+              du -sh "$dir"
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No cached Lake package builds found."
+            exit 1
+          fi
+      - name: Save Lake package cache
+        if: steps.tama-lake-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/tama
+          key: ${{ steps.tama-lake-cache.outputs.cache-primary-key }}
