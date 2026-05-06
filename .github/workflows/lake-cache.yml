@@ -78,6 +78,9 @@ jobs:
         if: steps.tama-lake-cache.outputs.cache-hit != 'true'
       - uses: ./.github/actions/install-toolchain
         if: steps.tama-lake-cache.outputs.cache-hit != 'true'
+        with:
+          install-foundry: "false"
+          install-solc: "false"
       - name: Warm starter Lake package builds
         if: steps.tama-lake-cache.outputs.cache-hit != 'true'
         shell: bash
