@@ -1192,10 +1192,12 @@ Set `ERC20LITE_OWNER=<address>` to choose an owner other than Foundry's sender.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs `tama doctor`, `tama check`, `tama build
---locked`, `tama test`, and `tama audit` on every push and pull request. The
-first run installs Lean (elan), Foundry, solc 0.8.33, and Tama; later runs
-reuse caches keyed on `lake-manifest.json` and `tama.lock`.
+`.github/workflows/ci.yml` runs `tama doctor --fix` for checkout-only generated
+directories, verifies tracked dependency files did not change, then runs
+`tama doctor`, `tama check`, `tama build --locked`, `tama test`, and
+`tama audit` on every push and pull request. The first run installs Lean (elan),
+Foundry, solc 0.8.33, and Tama; later runs reuse caches keyed on
+`lake-manifest.json` and `tama.lock`.
 "#;
 
 #[cfg(test)]
@@ -1390,6 +1392,9 @@ metadata_bytecode_hash = "none"
         let workflow = read_to_string(&workflow_path).unwrap();
         for needle in [
             "name: CI",
+            "submodules: recursive",
+            "tama doctor --fix",
+            "git diff --exit-code -- tama.lock lakefile.toml lake-manifest.json",
             "tama doctor",
             "tama check",
             "tama build --locked",

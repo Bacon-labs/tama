@@ -113,10 +113,21 @@ jobs:
           tmp="$(mktemp -d)"
           project="$tmp/my-protocol"
           tama init "$project"
-          cd "$project"
+          git -C "$project" add .
+          git -C "$project" \
+            -c user.name=tama-ci \
+            -c user.email=tama-ci@example.invalid \
+            commit -m "starter checkout fixture"
+          checkout="$tmp/my-protocol-checkout"
+          git clone --recurse-submodules "$project" "$checkout"
+          cd "$checkout"
+          test ! -d artifacts/yul
+          test ! -d artifacts/lean
           test -f .github/workflows/ci.yml
           test -f .gitignore
           actionlint -color .github/workflows/ci.yml
+          tama doctor --fix
+          git diff --exit-code -- tama.lock lakefile.toml lake-manifest.json
           tama doctor
           tama check
           tama build --locked

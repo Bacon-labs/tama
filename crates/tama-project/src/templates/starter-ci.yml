@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Cache Lake packages and Tama artifacts
         uses: actions/cache@v4
@@ -106,6 +108,8 @@ jobs:
           forge --version
           solc --version
 
+      - run: tama doctor --fix
+      - run: git diff --exit-code -- tama.lock lakefile.toml lake-manifest.json
       - run: tama doctor
       - run: tama check
       - run: tama build --locked
