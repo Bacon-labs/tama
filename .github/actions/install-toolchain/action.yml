@@ -47,13 +47,13 @@ runs:
         exit 1
 
     - name: Install Foundry
-      if: inputs.install-foundry == 'true'
+      if: ${{ inputs.install-foundry == 'true' }}
       uses: foundry-rs/foundry-toolchain@v1.6.0
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
 
     - name: Install solc-select and solc 0.8.33 (in venv)
-      if: inputs.install-solc == 'true'
+      if: ${{ inputs.install-solc == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
