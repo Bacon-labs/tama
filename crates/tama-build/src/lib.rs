@@ -3,7 +3,7 @@ use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -106,9 +106,13 @@ impl Lake {
         clear_verity_codegen_outputs(&self.root, config, opts.contract.as_deref())?;
         let module_manifest = self.root.join(config.paths.out.join("verity-modules.txt"));
         let modules = if let Some(contract) = &opts.contract {
-            format!("src.{contract}\n")
+            format!(
+                "{}\n",
+                discover_contract_module(&self.root, config, contract)?
+            )
         } else {
-            let mut modules = discover_modules(&self.root.join(&config.paths.src))?.join("\n");
+            let mut modules =
+                discover_modules(&self.root.join(&config.paths.src), "src")?.join("\n");
             if !modules.is_empty() {
                 modules.push('\n');
             }
@@ -535,7 +539,7 @@ pub fn adapt_verity_outputs(
     }
     abi_paths.sort();
 
-    let mut all_contracts: Vec<(String, Utf8PathBuf, SourcePaths)> = Vec::new();
+    let mut all_contracts: Vec<(String, Utf8PathBuf, DiscoveredContractSources)> = Vec::new();
     for path in &abi_paths {
         let contract =
             contract_name_from_abi_path(path).ok_or_else(|| Error::Adapter(path.to_string()))?;
@@ -546,19 +550,14 @@ pub fn adapt_verity_outputs(
                 path: yul,
             });
         }
-        let source = SourcePaths {
-            implementation: config.paths.src.join(format!("{contract}.lean")),
-            spec: config.paths.spec.join(format!("{contract}Spec.lean")),
-            proof: config.paths.proof.join(format!("{contract}Proof.lean")),
-        };
-        require_contract_files(root, &contract, &source)?;
+        let source = discover_contract_sources(root, config, &contract)?;
         all_contracts.push((contract, path.clone(), source));
     }
 
     let mut specs_by_contract: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut spec_owner: BTreeMap<String, String> = BTreeMap::new();
     for (contract, _, source) in &all_contracts {
-        let names = extract_specs(&root.join(&source.spec))?;
+        let names = extract_specs(&root.join(&source.paths.spec))?;
         for name in &names {
             if let Some(prev) = spec_owner.insert(name.clone(), contract.clone()) {
                 return Err(Error::Adapter(format!(
@@ -591,16 +590,18 @@ pub fn adapt_verity_outputs(
         if contract_filter.is_some_and(|filter| filter != contract) {
             continue;
         }
-        let proof_module = format!("proof.{contract}Proof");
-        let spec_module = format!("spec.{contract}Spec");
         let specs = specs_by_contract
             .get(&contract)
             .cloned()
             .unwrap_or_default();
-        let dischargers = extract_dischargers(&root.join(&source.proof), &proof_module, &specs)?;
+        let dischargers = extract_dischargers(
+            &root.join(&source.paths.proof),
+            &source.modules.proof_module,
+            &specs,
+        )?;
         let obligations = merge_obligations(
             &contract,
-            &spec_module,
+            &source.modules.spec_module,
             &specs,
             &dischargers,
             &mirrors_index,
@@ -609,12 +610,8 @@ pub fn adapt_verity_outputs(
         let manifest = ContractManifest {
             schema: SCHEMA.to_string(),
             contract: contract.clone(),
-            source,
-            lean: LeanModules {
-                implementation_module: format!("src.{contract}"),
-                spec_module,
-                proof_module,
-            },
+            source: source.paths,
+            lean: source.modules,
             abi: parse_abi(&abi_path)?,
             storage: parse_storage(&storage_report, &contract)?,
             obligations,
@@ -678,6 +675,122 @@ fn require_contract_files(root: &Utf8Path, contract: &str, source: &SourcePaths)
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct DiscoveredContractSources {
+    paths: SourcePaths,
+    modules: LeanModules,
+}
+
+fn discover_contract_module(
+    root: &Utf8Path,
+    config: &TamaConfig,
+    contract: &str,
+) -> Result<String> {
+    let implementation = find_unique_contract_file(
+        root,
+        &config.paths.src,
+        contract,
+        &format!("{contract}.lean"),
+    )?;
+    module_name_from_lean_path(
+        "src",
+        &root.join(&config.paths.src),
+        &root.join(implementation),
+    )
+}
+
+fn discover_contract_sources(
+    root: &Utf8Path,
+    config: &TamaConfig,
+    contract: &str,
+) -> Result<DiscoveredContractSources> {
+    let implementation = find_unique_contract_file(
+        root,
+        &config.paths.src,
+        contract,
+        &format!("{contract}.lean"),
+    )?;
+    let spec = find_unique_contract_file(
+        root,
+        &config.paths.spec,
+        contract,
+        &format!("{contract}Spec.lean"),
+    )?;
+    let proof = find_unique_contract_file(
+        root,
+        &config.paths.proof,
+        contract,
+        &format!("{contract}Proof.lean"),
+    )?;
+    let modules = LeanModules {
+        implementation_module: module_name_from_lean_path(
+            "src",
+            &root.join(&config.paths.src),
+            &root.join(&implementation),
+        )?,
+        spec_module: module_name_from_lean_path(
+            "spec",
+            &root.join(&config.paths.spec),
+            &root.join(&spec),
+        )?,
+        proof_module: module_name_from_lean_path(
+            "proof",
+            &root.join(&config.paths.proof),
+            &root.join(&proof),
+        )?,
+    };
+    let paths = SourcePaths {
+        implementation,
+        spec,
+        proof,
+    };
+    require_contract_files(root, contract, &paths)?;
+    Ok(DiscoveredContractSources { paths, modules })
+}
+
+fn find_unique_contract_file(
+    root: &Utf8Path,
+    search_dir: &Utf8Path,
+    contract: &str,
+    file_name: &str,
+) -> Result<Utf8PathBuf> {
+    let mut matches = Vec::new();
+    collect_project_files_named(root, search_dir, file_name, &mut matches)?;
+    match matches.as_slice() {
+        [path] => Ok(path.clone()),
+        [] => Err(Error::MissingProjectFile {
+            contract: contract.to_string(),
+            path: search_dir.join(file_name),
+        }),
+        paths => Err(Error::Adapter(format!(
+            "multiple project files named `{file_name}` found for {contract}: {}",
+            paths
+                .iter()
+                .map(|path| path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+fn collect_project_files_named(
+    root: &Utf8Path,
+    search_dir: &Utf8Path,
+    file_name: &str,
+    out: &mut Vec<Utf8PathBuf>,
+) -> Result<()> {
+    let base = root.join(search_dir);
+    if !base.is_dir() {
+        return Ok(());
+    }
+    walk_project_files(&base, search_dir, &mut |path| {
+        if path.file_name() == Some(file_name) {
+            out.push(path.to_path_buf());
+        }
+        Ok(())
+    })
 }
 
 fn contract_name_from_abi_path(path: &Utf8Path) -> Option<String> {
@@ -1200,22 +1313,95 @@ impl Drop for EvmyulConformanceGuard {
     }
 }
 
-fn discover_modules(src: &Utf8Path) -> Result<Vec<String>> {
+fn discover_modules(src: &Utf8Path, module_root: &str) -> Result<Vec<String>> {
     let mut modules = Vec::new();
-    for entry in
-        fs::read_dir(src).map_err(|source| tama_common::io_error(src.to_owned(), source))?
-    {
-        let entry = entry.map_err(|source| tama_common::io_error(src.to_owned(), source))?;
-        let path = Utf8PathBuf::from_path_buf(entry.path())
-            .map_err(|path| tama_common::Error::NonUtf8Path(path.display().to_string()))?;
+    walk_files(src, &mut |path| {
         if path.extension() == Some("lean") {
-            if let Some(stem) = path.file_stem() {
-                modules.push(format!("src.{stem}"));
+            modules.push(module_name_from_lean_path(module_root, src, path)?);
+        }
+        Ok(())
+    })?;
+    modules.sort();
+    Ok(modules)
+}
+
+fn module_name_from_lean_path(
+    module_root: &str,
+    base_dir: &Utf8Path,
+    path: &Utf8Path,
+) -> Result<String> {
+    let relative = path.strip_prefix(base_dir).map_err(|_| {
+        Error::Adapter(format!(
+            "Lean file `{path}` is not under configured module root `{base_dir}`"
+        ))
+    })?;
+    let relative = relative.with_extension("");
+    let mut parts = vec![module_root.to_string()];
+    for component in relative.components() {
+        match component {
+            Utf8Component::Normal(part) => parts.push(part.to_string()),
+            Utf8Component::CurDir => {}
+            other => {
+                return Err(Error::Adapter(format!(
+                    "Lean file `{path}` contains unsupported module path component `{}`",
+                    other.as_str()
+                )));
             }
         }
     }
-    modules.sort();
-    Ok(modules)
+    Ok(parts.join("."))
+}
+
+fn walk_files<F>(dir: &Utf8Path, visit: &mut F) -> Result<()>
+where
+    F: FnMut(&Utf8Path) -> Result<()>,
+{
+    let entries =
+        fs::read_dir(dir).map_err(|source| tama_common::io_error(dir.to_owned(), source))?;
+    let mut paths: Vec<Utf8PathBuf> = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| tama_common::io_error(dir.to_owned(), source))?;
+        let path = Utf8PathBuf::from_path_buf(entry.path())
+            .map_err(|path| tama_common::Error::NonUtf8Path(path.display().to_string()))?;
+        paths.push(path);
+    }
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            walk_files(&path, visit)?;
+        } else {
+            visit(&path)?;
+        }
+    }
+    Ok(())
+}
+
+fn walk_project_files<F>(dir: &Utf8Path, project_dir: &Utf8Path, visit: &mut F) -> Result<()>
+where
+    F: FnMut(&Utf8Path) -> Result<()>,
+{
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    let entries =
+        fs::read_dir(dir).map_err(|source| tama_common::io_error(dir.to_owned(), source))?;
+    let mut paths: Vec<Utf8PathBuf> = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| tama_common::io_error(dir.to_owned(), source))?;
+        let path = Utf8PathBuf::from_path_buf(entry.path())
+            .map_err(|path| tama_common::Error::NonUtf8Path(path.display().to_string()))?;
+        paths.push(path);
+    }
+    paths.sort();
+    for path in paths {
+        let rel = project_dir.join(path.file_name().unwrap_or_default());
+        if path.is_dir() {
+            walk_project_files(&path, &rel, visit)?;
+        } else {
+            visit(&rel)?;
+        }
+    }
+    Ok(())
 }
 
 fn read_json_required(path: &Utf8Path) -> Result<Value> {
@@ -3007,6 +3193,30 @@ contract ConcreteFooTest is FooTestBase {
     }
 
     #[test]
+    fn discover_modules_recurses_into_nested_lean_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(&root.join("verity/src/Counter.lean"), "namespace src\n")
+            .unwrap();
+        tama_common::write_string(
+            &root.join("verity/src/defi/Vault.lean"),
+            "namespace src.defi\n",
+        )
+        .unwrap();
+
+        let modules = discover_modules(&root.join("verity/src"), "src").unwrap();
+
+        assert_eq!(
+            modules,
+            vec!["src.Counter".to_string(), "src.defi.Vault".to_string()]
+        );
+        assert_eq!(
+            discover_contract_module(&root, &test_config(), "Vault").unwrap(),
+            "src.defi.Vault"
+        );
+    }
+
+    #[test]
     fn counter_fixture_obligations_cover_behavior_with_properties() {
         let root =
             Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/counter");
@@ -3134,6 +3344,68 @@ contract ConcreteFooTest is FooTestBase {
         assert_eq!(manifests.len(), 1);
         assert_eq!(manifests[0].contract, "Foo");
         assert_eq!(manifests[0].obligations[0].mirrors.len(), 1);
+    }
+
+    #[test]
+    fn adapter_accepts_nested_verity_files_and_mirror_tests() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("verity/src/defi/Vault.lean"),
+            "import Contracts.Common\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("verity/spec/defi/VaultSpec.lean"),
+            "namespace spec.defi.VaultSpec\ndef balance_spec (n : Nat) : Prop := n = 0\nend spec.defi.VaultSpec\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("verity/proof/defi/VaultProof.lean"),
+            "namespace proof.defi.VaultProof\n-- tama: discharges=balance_spec\ntheorem balance_meets_spec : True := by trivial\nend proof.defi.VaultProof\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("test/verity/defi/Vault.t.sol"),
+            "contract VaultTest {\n    // tama: mirrors=balance_spec\n    function testFuzzBalance(uint256 amount) public {}\n}\n",
+        )
+        .unwrap();
+        tama_common::write_string(&root.join("artifacts/abi/Vault.abi.json"), "[]\n").unwrap();
+        tama_common::write_string(&root.join("artifacts/yul/Vault.yul"), "{ }\n").unwrap();
+        write_empty_layout_report(&root, &["Vault"]);
+
+        let manifests = adapt_verity_outputs(&root, &test_config(), None).unwrap();
+
+        assert_eq!(manifests.len(), 1);
+        let manifest = &manifests[0];
+        assert_eq!(
+            manifest.source.implementation,
+            Utf8PathBuf::from("verity/src/defi/Vault.lean")
+        );
+        assert_eq!(
+            manifest.source.spec,
+            Utf8PathBuf::from("verity/spec/defi/VaultSpec.lean")
+        );
+        assert_eq!(
+            manifest.source.proof,
+            Utf8PathBuf::from("verity/proof/defi/VaultProof.lean")
+        );
+        assert_eq!(manifest.lean.implementation_module, "src.defi.Vault");
+        assert_eq!(manifest.lean.spec_module, "spec.defi.VaultSpec");
+        assert_eq!(manifest.lean.proof_module, "proof.defi.VaultProof");
+        assert_eq!(manifest.obligations.len(), 1);
+        assert_eq!(
+            manifest.obligations[0].lean_decl,
+            "spec.defi.VaultSpec.balance_spec"
+        );
+        assert_eq!(
+            manifest.obligations[0].dischargers,
+            vec!["proof.defi.VaultProof.balance_meets_spec".to_string()]
+        );
+        assert_eq!(
+            manifest.obligations[0].mirrors,
+            vec!["test/verity/defi/Vault.t.sol:VaultTest.testFuzzBalance".to_string()]
+        );
     }
 
     #[test]
