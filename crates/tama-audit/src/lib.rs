@@ -340,19 +340,7 @@ fn structure(
         }
         check_bytecode_hash(root, manifest, issues);
         check_deployer_bytecode(root, manifest, issues);
-        let test_path = config
-            .paths
-            .test
-            .join(format!("{}.t.sol", manifest.contract));
-        if !root.join(&test_path).is_file() {
-            issues.push(issue(
-                "structure",
-                Some(&manifest.contract),
-                "TAMA_STRUCTURE_MISSING_TEST",
-                format!("mirror test file is missing: {test_path}"),
-                Some(test_path),
-            ));
-        }
+        check_mirror_test_files(root, manifest, issues);
         for (aggregate, import) in [
             ("TamaSrc.lean", manifest.lean.implementation_module.as_str()),
             ("TamaSpec.lean", manifest.lean.spec_module.as_str()),
@@ -372,6 +360,30 @@ fn structure(
                     "TAMA_GENERATED_HEADER",
                     format!("generated bridge is missing Tama header: {path}"),
                     Some(path.clone()),
+                ));
+            }
+        }
+    }
+}
+
+fn check_mirror_test_files(root: &Utf8Path, manifest: &ContractManifest, issues: &mut Vec<Issue>) {
+    let mut seen = BTreeSet::<Utf8PathBuf>::new();
+    for obligation in &manifest.obligations {
+        for path_ref in &obligation.mirrors {
+            let Ok(mirror) = parse_mirror_path(path_ref) else {
+                continue;
+            };
+            let file = Utf8PathBuf::from(mirror.file);
+            if !seen.insert(file.clone()) {
+                continue;
+            }
+            if !root.join(&file).is_file() {
+                issues.push(issue(
+                    "structure",
+                    Some(&manifest.contract),
+                    "TAMA_STRUCTURE_MISSING_TEST",
+                    format!("mirror test file is missing: {file}"),
+                    Some(file),
                 ));
             }
         }
@@ -2269,6 +2281,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
         let config = test_config();
+        let mut manifest = counter_manifest();
+        let mut obligation = public_obligation();
+        obligation.mirrors =
+            vec!["test/verity/Counter.t.sol:CounterTest.testFuzzIncrement".to_string()];
+        obligation.proof_only_reason = None;
+        manifest.obligations = vec![obligation];
         for dir in [
             &config.paths.src,
             &config.paths.spec,
@@ -2295,13 +2313,51 @@ mod tests {
             .unwrap();
 
         let mut issues = Vec::new();
-        structure(&root, &config, &[counter_manifest()], &mut issues);
+        structure(&root, &config, &[manifest], &mut issues);
         let codes = issues
             .iter()
             .map(|issue| issue.code.as_str())
             .collect::<BTreeSet<_>>();
         assert!(codes.contains("TAMA_STRUCTURE_MISSING_TEST"));
         assert!(codes.contains("TAMA_STRUCTURE_AGGREGATE_IMPORT"));
+    }
+
+    #[test]
+    fn structure_accepts_nested_mirror_test_paths_from_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        let mut manifest = counter_manifest();
+        manifest.source.implementation = "verity/src/tokens/Counter.lean".into();
+        manifest.source.spec = "verity/spec/tokens/CounterSpec.lean".into();
+        manifest.source.proof = "verity/proof/tokens/CounterProof.lean".into();
+        manifest.lean.implementation_module = "src.tokens.Counter".to_string();
+        manifest.lean.spec_module = "spec.tokens.CounterSpec".to_string();
+        manifest.lean.proof_module = "proof.tokens.CounterProof".to_string();
+        let mut obligation = public_obligation();
+        obligation.lean_decl = "spec.tokens.CounterSpec.increment_spec".to_string();
+        obligation.dischargers = vec!["proof.tokens.CounterProof.increment_meets_spec".to_string()];
+        obligation.mirrors =
+            vec!["test/verity/tokens/Counter.t.sol:CounterTest.testFuzzIncrement".to_string()];
+        obligation.proof_only_reason = None;
+        manifest.obligations = vec![obligation];
+        write_complete_structure_fixture(&root, &config, &mut manifest);
+
+        let mut issues = Vec::new();
+        structure(&root, &config, &[manifest], &mut issues);
+
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.code == "TAMA_STRUCTURE_MISSING_TEST"),
+            "nested mirror path should satisfy structure test check, got {issues:?}"
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.code == "TAMA_STRUCTURE_AGGREGATE_IMPORT"),
+            "nested Lean module imports should satisfy aggregate checks, got {issues:?}"
+        );
     }
 
     #[test]
@@ -3586,7 +3642,12 @@ solc = "0.8.33"
         tama_common::write_string(&root.join(&manifest.source.implementation), "").unwrap();
         tama_common::write_string(&root.join(&manifest.source.spec), "").unwrap();
         tama_common::write_string(&root.join(&manifest.source.proof), "").unwrap();
-        tama_common::write_string(&root.join("test/verity/Counter.t.sol"), "").unwrap();
+        for obligation in &manifest.obligations {
+            for path_ref in &obligation.mirrors {
+                let mirror = parse_mirror_path(path_ref).unwrap();
+                tama_common::write_string(&root.join(mirror.file), "").unwrap();
+            }
+        }
         tama_common::write_string(&root.join(&manifest.artifacts.yul), "{ }\n").unwrap();
         tama_common::write_string(&root.join(&manifest.artifacts.creation_bytecode), "6000\n")
             .unwrap();
@@ -3606,15 +3667,19 @@ solc = "0.8.33"
 "#,
         )
         .unwrap();
-        tama_common::write_string(&root.join("TamaSrc.lean"), "import src.Counter\n").unwrap();
+        tama_common::write_string(
+            &root.join("TamaSrc.lean"),
+            &format!("import {}\n", manifest.lean.implementation_module),
+        )
+        .unwrap();
         tama_common::write_string(
             &root.join("TamaSpec.lean"),
-            "import TamaSrc\nimport spec.CounterSpec\n",
+            &format!("import TamaSrc\nimport {}\n", manifest.lean.spec_module),
         )
         .unwrap();
         tama_common::write_string(
             &root.join("TamaProof.lean"),
-            "import TamaSpec\nimport proof.CounterProof\n",
+            &format!("import TamaSpec\nimport {}\n", manifest.lean.proof_module),
         )
         .unwrap();
         manifest.artifacts.bytecode_hash = Some(
