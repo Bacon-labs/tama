@@ -89,7 +89,6 @@ pub fn init(path: &Utf8Path, opts: InitOptions) -> Result<()> {
         "artifacts/manifest",
         "artifacts/lean",
         "artifacts/trust-probe",
-        "docs",
         ".github/workflows",
     ] {
         fs::create_dir_all(path.join(dir))
@@ -138,7 +137,7 @@ pub fn init(path: &Utf8Path, opts: InitOptions) -> Result<()> {
         &path.join("src/generated/verity/ERC20LiteDeployer.sol"),
         ERC20LITE_DEPLOYER_SOL,
     )?;
-    write_string(&path.join("docs/README.md"), STARTER_README)?;
+    write_string(&path.join("README.md"), STARTER_README)?;
     write_string(&path.join(".github/workflows/ci.yml"), STARTER_CI_WORKFLOW)?;
     write_string(&path.join(".gitignore"), STARTER_GITIGNORE)?;
 
@@ -1194,10 +1193,11 @@ Set `ERC20LITE_OWNER=<address>` to choose an owner other than Foundry's sender.
 
 `.github/workflows/ci.yml` runs `tama doctor --fix` for checkout-only generated
 directories, verifies tracked dependency files did not change, then runs
-`tama doctor`, `tama check`, `tama build --locked`, `tama test`, and
-`tama audit` on every push and pull request. The first run installs Lean (elan),
-Foundry, solc 0.8.33, and Tama; later runs reuse caches keyed on
-`lake-manifest.json` and `tama.lock`.
+`tama doctor`, `tama build --locked`, `tama test`, and `tama audit` on every push
+and pull request. The first run installs Lean (elan), Foundry, Tama, and the solc
+version configured in `tama.toml`; later runs reuse Lake package and Lean build
+caches keyed on `lake-manifest.json`, `lakefile.toml`, `lean-toolchain`, and
+`tama.lock`.
 "#;
 
 #[cfg(test)]
@@ -1337,9 +1337,10 @@ metadata_bytecode_hash = "none"
         assert!(!spec.contains("-- tama:"));
         let iface = read_to_string(&root.join("src/generated/verity/ERC20LiteIface.sol")).unwrap();
         assert!(iface.contains("function transferOwnership(address newOwner) external"));
-        let starter_readme = read_to_string(&root.join("docs/README.md")).unwrap();
+        let starter_readme = read_to_string(&root.join("README.md")).unwrap();
         assert!(starter_readme.contains("script/ERC20Lite.s.sol:DeployERC20Lite"));
         assert!(starter_readme.contains("ERC20LITE_OWNER"));
+        assert!(!root.join("docs/README.md").exists());
         let config = read_to_string(&root.join("tama.toml")).unwrap();
         assert!(config.contains(&format!("verity = \"{DEFAULT_VERITY_REV}\"")));
         assert!(config.contains("mirror_test = \"test/verity\""));
@@ -1396,12 +1397,16 @@ metadata_bytecode_hash = "none"
             "tama doctor --fix",
             "git diff --exit-code -- tama.lock lakefile.toml lake-manifest.json",
             "tama doctor",
-            "tama check",
             "tama build --locked",
             "tama test",
             "tama audit",
-            "foundry-rs/foundry-toolchain",
-            "solc-select",
+            "Cache Lean build artifacts",
+            "Cache elan and Foundry toolchains",
+            "lake exe cache get",
+            "env -u CI tama build --locked",
+            "env -u CI tama audit",
+            "tama toolchain solc",
+            "TAMA_SOLC",
             "https://tama.tools/install.sh",
         ] {
             assert!(
@@ -1409,7 +1414,13 @@ metadata_bytecode_hash = "none"
                 "starter workflow missing `{needle}`"
             );
         }
-        let starter_readme = read_to_string(&root.join("docs/README.md")).unwrap();
+        assert!(!workflow.contains("solc-select"));
+        assert!(!workflow.contains("foundry-rs/foundry-toolchain"));
+        assert!(!workflow.contains("elan-init.sh"));
+        assert!(!workflow.contains(".tama/solc/0.8.33"));
+        assert!(!workflow.contains("continue-on-error"));
+        assert!(!workflow.contains("tama check"));
+        let starter_readme = read_to_string(&root.join("README.md")).unwrap();
         assert!(starter_readme.contains("Continuous integration"));
         assert!(starter_readme.contains(".github/workflows/ci.yml"));
     }

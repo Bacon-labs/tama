@@ -102,6 +102,13 @@ freshness.
 With --fix, Tama creates missing generated directories, repairs safe Verity
 dependency drift when possible, and refreshes tama.lock. It does not rewrite
 user-owned source, spec, proof, or test files.";
+const TOOLCHAIN_AFTER_HELP: &str = "\
+Commands:
+  solc    Resolve or install the solc binary configured by [yul].solc in tama.toml
+
+By default, network access is allowed for missing managed tool versions. With
+global --offline, Tama only resolves already-installed tools and fails if the
+configured version is unavailable.";
 const INSTALL_AFTER_HELP: &str = "\
 Adds a Tama package to lakefile.toml, runs `lake update`, and refreshes
 tama.lock. The package must contain tama.toml; pure Lake packages should be added
@@ -238,6 +245,15 @@ enum Command {
         fix: bool,
     },
     #[command(
+        about = "Resolve configured external tool binaries",
+        long_about = "Resolve configured external tool binaries for CI and shell setup.",
+        after_help = TOOLCHAIN_AFTER_HELP
+    )]
+    Toolchain {
+        #[command(subcommand)]
+        command: ToolchainCommand,
+    },
+    #[command(
         about = "Add a Tama/Lake dependency",
         long_about = "Add a Tama package dependency, run Lake update, and refresh tama.lock.",
         after_help = INSTALL_AFTER_HELP
@@ -320,6 +336,15 @@ struct InspectArgs {
     contract: String,
     #[arg(value_name = "FIELD", help = "Artifact field to print")]
     field: String,
+}
+
+#[derive(Debug, Subcommand)]
+enum ToolchainCommand {
+    #[command(
+        about = "Resolve or install the configured solc binary",
+        long_about = "Resolve or install the solc binary configured by [yul].solc in tama.toml, then print the resolved binary path."
+    )]
+    Solc,
 }
 
 fn main() -> ExitCode {
@@ -699,6 +724,21 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 ExitCode::SUCCESS
             })
         }
+        Command::Toolchain { command } => match command {
+            ToolchainCommand::Solc => {
+                let root = project_root(cli.root)?;
+                let tool = resolve_configured_solc(&root, cli.offline)?;
+                if cli.json {
+                    anstream::println!(
+                        "{}",
+                        serde_json::to_string_pretty(&tool).map_err(|err| err.to_string())?
+                    );
+                } else {
+                    anstream::println!("{}", tool.path);
+                }
+                Ok(ExitCode::SUCCESS)
+            }
+        },
         Command::Install { package } => {
             let root = project_root(cli.root)?;
             let progress = CommandProgress::new(!cli.json, palette);
@@ -871,6 +911,16 @@ fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::Doctor
         }
     }
     Ok(report)
+}
+
+fn resolve_configured_solc(root: &Utf8Path, offline: bool) -> Result<tama_toolchain::Tool, String> {
+    let config = tama_config::load_config(root).map_err(|err| err.to_string())?;
+    let result = if offline {
+        tama_toolchain::resolve_solc(&config.yul.solc, root)
+    } else {
+        tama_toolchain::resolve_or_install_solc(&config.yul.solc, root)
+    };
+    result.map_err(|err| err.to_string())
 }
 
 fn tama_status() -> tama_toolchain::ToolStatus {
@@ -2698,6 +2748,12 @@ mod tests {
             std::env::set_var(name, value.into());
             Self { name, old }
         }
+
+        fn unset(name: &'static str) -> Self {
+            let old = std::env::var_os(name);
+            std::env::remove_var(name);
+            Self { name, old }
+        }
     }
 
     impl Drop for EnvVarGuard {
@@ -2831,6 +2887,7 @@ mod tests {
         ));
         assert!(help.contains("Pass through directly to forge test"));
         assert!(help.contains("Diagnose toolchain and project drift"));
+        assert!(help.contains("Resolve configured external tool binaries"));
     }
 
     #[test]
@@ -2926,6 +2983,7 @@ mod tests {
                 "doctor",
                 ["required tools", "With --fix", "user-owned source, spec"],
             ),
+            ("toolchain", ["Commands:", "solc", "global --offline"]),
             (
                 "install",
                 ["lakefile.toml", "pure Lake packages", "Add @rev"],
@@ -4625,6 +4683,44 @@ buildDir = ""
             tama_toolchain::ToolStatus::Incompatible { found, expected, .. }
                 if found == "4.29.1" && expected == "4.22.0"
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn toolchain_solc_resolves_version_from_tama_config() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let home = Utf8PathBuf::from_path_buf(dir.path().join("home")).unwrap();
+        let solc = home.join(".tama/solc/0.8.34/solc");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(solc.parent().unwrap()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            "[project]\nname='x'\nverity='v'\n[yul]\nsolc='0.8.34'\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &solc,
+            "#!/bin/sh\nprintf '%s\\n' 'Version: 0.8.34+commit.test'\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&solc).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&solc, permissions).unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", home.as_str());
+        let _path_guard = EnvVarGuard::set("PATH", "");
+        let _solc_guard = EnvVarGuard::unset("TAMA_SOLC");
+
+        let tool = resolve_configured_solc(&root, true).unwrap();
+
+        assert_eq!(tool.path, solc);
+        assert!(tool
+            .version
+            .as_deref()
+            .is_some_and(|version| version.contains("0.8.34")));
     }
 
     #[test]
