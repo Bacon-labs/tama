@@ -2087,6 +2087,8 @@ fn generate_trust_probe(
     Ok(())
 }
 
+const COLLECT_AXIOMS_MARKER: &str = "TAMA_AXIOMS_JSON ";
+
 fn collect_axioms_probe_source(
     manifests: &[ContractManifest],
     obligations: &[&Obligation],
@@ -2118,95 +2120,109 @@ def tamaAxiomJson (decl : String) (constName : Name) : CoreM Json := do
     ("axioms", Json.arr (sorted.map Json.str))
   ]
 
-#eval show CoreM Unit from do
+def tamaEmitAxioms (decl : String) (constName : Name) : CoreM Unit := do
+  let entry ← tamaAxiomJson decl constName
+  IO.println ("TAMA_AXIOMS_JSON " ++ entry.compress)
 "#,
     );
-    for (oi, obligation) in obligations.iter().enumerate() {
-        for (di, discharger) in obligation.dischargers.iter().enumerate() {
-            let name = lean_name_literal(discharger)?;
-            out.push_str(&format!(
-                "  let d_{oi}_{di} ← tamaAxiomJson \"{discharger}\" {name}\n"
-            ));
-        }
-        out.push_str(&format!("  let dischargers_{oi} := #["));
-        for di in 0..obligation.dischargers.len() {
-            if di > 0 {
-                out.push_str(", ");
-            }
-            out.push_str(&format!("d_{oi}_{di}"));
-        }
-        out.push_str("]\n");
+    let dischargers = obligations
+        .iter()
+        .flat_map(|obligation| obligation.dischargers.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    for discharger in dischargers {
+        let name = lean_name_literal(discharger)?;
         out.push_str(&format!(
-            "  let obligation_{oi} := Json.mkObj [\n    (\"lean_decl\", Json.str \"{}\"),\n    (\"dischargers\", Json.arr dischargers_{oi})\n  ]\n",
-            obligation.lean_decl
+            "\n#eval show CoreM Unit from tamaEmitAxioms \"{discharger}\" {name}\n"
         ));
     }
-    out.push_str("  let obligations := #[");
-    for oi in 0..obligations.len() {
-        if oi > 0 {
-            out.push_str(", ");
-        }
-        out.push_str(&format!("obligation_{oi}"));
-    }
-    out.push_str(
-        r#"]
-  let report := Json.mkObj [
-    ("schema", Json.str "tama.trust-probe.v1"),
-    ("method", Json.str "lean.collectAxioms"),
-    ("obligations", Json.arr obligations)
-  ]
-  IO.println report.compress
-"#,
-    );
     Ok(out)
 }
 
 fn parse_collect_axioms_output(output: &str, obligations: &[&Obligation]) -> Result<Value> {
-    let json_line = output
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .ok_or_else(|| Error::Adapter("trust probe emitted no JSON".to_string()))?;
-    let value: Value =
-        serde_json::from_str(json_line).map_err(|err| Error::Adapter(err.to_string()))?;
-    if value.get("schema").and_then(Value::as_str) != Some("tama.trust-probe.v1") {
-        return Err(Error::Adapter(
-            "trust probe emitted unsupported schema".to_string(),
-        ));
-    }
-    if value.get("method").and_then(Value::as_str) != Some("lean.collectAxioms") {
-        return Err(Error::Adapter(
-            "trust probe did not use Lean.collectAxioms".to_string(),
-        ));
-    }
-    let Some(reported_obligations) = value.get("obligations").and_then(Value::as_array) else {
-        return Err(Error::Adapter(
-            "trust probe emitted no obligations array".to_string(),
-        ));
-    };
-    let mut reported_dischargers = BTreeSet::<&str>::new();
-    for entry in reported_obligations {
-        let Some(dischargers) = entry.get("dischargers").and_then(Value::as_array) else {
-            return Err(Error::Adapter(
-                "trust probe obligation entry missing `dischargers`".to_string(),
-            ));
+    let expected = obligations
+        .iter()
+        .flat_map(|obligation| obligation.dischargers.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    let mut reported = BTreeMap::<String, Value>::new();
+    for line in output.lines() {
+        let Some(payload) = line.strip_prefix(COLLECT_AXIOMS_MARKER) else {
+            continue;
         };
-        for d in dischargers {
-            if let Some(decl) = d.get("lean_decl").and_then(Value::as_str) {
-                reported_dischargers.insert(decl);
-            }
+        let entry: Value = serde_json::from_str(payload.trim()).map_err(|err| {
+            Error::Adapter(format!(
+                "trust probe emitted malformed axiom marker JSON: {err}"
+            ))
+        })?;
+        let decl = entry
+            .get("lean_decl")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::Adapter("trust probe marker missing `lean_decl`".to_string()))?
+            .to_string();
+        if !expected.contains(decl.as_str()) {
+            return Err(Error::Adapter(format!(
+                "trust probe reported unexpected discharger {decl}"
+            )));
         }
-    }
-    for obligation in obligations {
-        for discharger in &obligation.dischargers {
-            if !reported_dischargers.contains(discharger.as_str()) {
+        let axioms = entry
+            .get("axioms")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                Error::Adapter(format!(
+                    "trust probe marker for `{decl}` missing `axioms` array"
+                ))
+            })?;
+        let mut axiom_names = Vec::with_capacity(axioms.len());
+        for axiom in axioms {
+            let Some(name) = axiom.as_str() else {
                 return Err(Error::Adapter(format!(
-                    "trust probe did not report axioms for {discharger}"
+                    "trust probe marker for `{decl}` contains non-string axiom"
                 )));
-            }
+            };
+            axiom_names.push(name.to_string());
+        }
+        if reported.contains_key(decl.as_str()) {
+            return Err(Error::Adapter(format!(
+                "trust probe reported duplicate axioms for {decl}"
+            )));
+        }
+        reported.insert(
+            decl.clone(),
+            json!({
+                "lean_decl": decl,
+                "axioms": axiom_names,
+            }),
+        );
+    }
+    for decl in expected {
+        if !reported.contains_key(decl) {
+            return Err(Error::Adapter(format!(
+                "trust probe did not report axioms for {decl}"
+            )));
         }
     }
-    Ok(value)
+
+    let mut report_obligations = Vec::with_capacity(obligations.len());
+    for obligation in obligations {
+        let mut dischargers = Vec::with_capacity(obligation.dischargers.len());
+        for decl in &obligation.dischargers {
+            let Some(entry) = reported.get(decl).cloned() else {
+                return Err(Error::Adapter(format!(
+                    "trust probe did not report axioms for {decl}"
+                )));
+            };
+            dischargers.push(entry);
+        }
+        report_obligations.push(json!({
+            "lean_decl": obligation.lean_decl,
+            "dischargers": dischargers,
+        }));
+    }
+
+    Ok(json!({
+        "schema": "tama.trust-probe.v1",
+        "method": "lean.collectAxioms",
+        "obligations": report_obligations,
+    }))
 }
 
 fn lean_name_literal(name: &str) -> Result<String> {
@@ -3599,6 +3615,23 @@ contract ConcreteFooTest is FooTestBase {
         }
     }
 
+    fn fixture_decrement_obligation() -> Obligation {
+        Obligation {
+            id: "Counter.decrement_spec".to_string(),
+            name: "decrement_spec".to_string(),
+            lean_decl: "spec.CounterSpec.decrement_spec".to_string(),
+            contract: "Counter".to_string(),
+            dischargers: vec![
+                "proof.CounterProof.decrement_nonnegative".to_string(),
+                "proof.CounterProof.decrement_bounds".to_string(),
+            ],
+            mirrors: vec![
+                "test/verity/Counter.t.sol:CounterTest.testFuzzDecrementUpdatesCount".to_string(),
+            ],
+            proof_only_reason: None,
+        }
+    }
+
     #[test]
     fn print_axioms_output_is_parsed_into_probe_json() {
         let obligation = fixture_obligation();
@@ -3625,29 +3658,163 @@ TAMA_AXIOMS_END proof.CounterProof.increment_meets_spec
     }
 
     #[test]
-    fn collect_axioms_probe_uses_lean_api() {
-        let obligation = fixture_obligation();
+    fn collect_axioms_probe_streams_per_discharger() {
+        let mut obligation = fixture_obligation();
+        obligation
+            .dischargers
+            .push("proof.CounterProof.increment_preserves_bounds".to_string());
         let mut manifest = test_manifest("Counter");
         manifest.obligations.push(obligation.clone());
 
         let source = collect_axioms_probe_source(&[manifest], &[&obligation]).unwrap();
 
         assert!(source.contains("collectAxioms constName"));
-        assert!(source.contains(r#""method", Json.str "lean.collectAxioms""#));
-        assert!(source.contains(r#""dischargers", Json.arr dischargers_0"#));
+        assert!(source.contains("tamaEmitAxioms"));
+        assert!(!source.contains("Json.arr obligations"));
+        assert!(!source.contains("let obligations :="));
+        assert_eq!(
+            source
+                .matches("#eval show CoreM Unit from tamaEmitAxioms")
+                .count(),
+            2
+        );
         assert!(!source.contains("#print axioms"));
     }
 
     #[test]
     fn collect_axioms_output_is_parsed_into_probe_json() {
         let obligation = fixture_obligation();
-        let output = r#"{"schema":"tama.trust-probe.v1","obligations":[{"lean_decl":"spec.CounterSpec.increment_spec","dischargers":[{"lean_decl":"proof.CounterProof.increment_meets_spec","axioms":["Quot.sound","propext"]}]}],"method":"lean.collectAxioms"}"#;
+        let decrement = fixture_decrement_obligation();
+        let output = r#"
+lake noise before probe output
+TAMA_AXIOMS_JSON {"lean_decl":"proof.CounterProof.decrement_bounds","axioms":[]}
+[Info] unrelated stdout
+TAMA_AXIOMS_JSON {"lean_decl":"proof.CounterProof.increment_meets_spec","axioms":["Quot.sound","propext"]}
+TAMA_AXIOMS_JSON {"lean_decl":"proof.CounterProof.decrement_nonnegative","axioms":["Classical.choice"]}
+lake noise after probe output
+"#;
 
-        let report = parse_collect_axioms_output(output, &[&obligation]).unwrap();
+        let report = parse_collect_axioms_output(output, &[&obligation, &decrement]).unwrap();
 
         assert_eq!(
-            report.get("schema").and_then(Value::as_str),
-            Some("tama.trust-probe.v1")
+            report,
+            json!({
+                "schema": "tama.trust-probe.v1",
+                "method": "lean.collectAxioms",
+                "obligations": [
+                    {
+                        "lean_decl": "spec.CounterSpec.increment_spec",
+                        "dischargers": [{
+                            "lean_decl": "proof.CounterProof.increment_meets_spec",
+                            "axioms": ["Quot.sound", "propext"]
+                        }]
+                    },
+                    {
+                        "lean_decl": "spec.CounterSpec.decrement_spec",
+                        "dischargers": [
+                            {
+                                "lean_decl": "proof.CounterProof.decrement_nonnegative",
+                                "axioms": ["Classical.choice"]
+                            },
+                            {
+                                "lean_decl": "proof.CounterProof.decrement_bounds",
+                                "axioms": []
+                            }
+                        ]
+                    }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn collect_axioms_streaming_handles_large_obligation_sets() {
+        let obligations = (0..400)
+            .map(|index| Obligation {
+                id: format!("Big.obligation{index}"),
+                name: format!("obligation{index}"),
+                lean_decl: format!("spec.BigSpec.obligation{index}"),
+                contract: "Big".to_string(),
+                dischargers: vec![format!("proof.BigProof.discharger{index}")],
+                mirrors: vec![format!(
+                    "test/verity/Big.t.sol:BigTest.testObligation{index}"
+                )],
+                proof_only_reason: None,
+            })
+            .collect::<Vec<_>>();
+        let obligation_refs = obligations.iter().collect::<Vec<_>>();
+        let manifest = test_manifest("Big");
+
+        let source = collect_axioms_probe_source(&[manifest], &obligation_refs).unwrap();
+
+        assert!(!source.contains("Json.arr obligations"));
+        assert!(!source.contains("let obligations :="));
+        assert_eq!(
+            source
+                .matches("#eval show CoreM Unit from tamaEmitAxioms")
+                .count(),
+            400
+        );
+
+        let output = obligations
+            .iter()
+            .map(|obligation| {
+                format!(
+                    r#"TAMA_AXIOMS_JSON {{"lean_decl":"{}","axioms":["propext"]}}"#,
+                    obligation.dischargers[0]
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let report = parse_collect_axioms_output(&output, &obligation_refs).unwrap();
+        let report_obligations = report.get("obligations").and_then(Value::as_array).unwrap();
+
+        assert_eq!(report_obligations.len(), 400);
+        assert_eq!(
+            report_obligations[399]
+                .get("lean_decl")
+                .and_then(Value::as_str),
+            Some("spec.BigSpec.obligation399")
+        );
+        assert_eq!(
+            report_obligations[399]
+                .get("dischargers")
+                .and_then(Value::as_array)
+                .and_then(|dischargers| dischargers[0].get("lean_decl"))
+                .and_then(Value::as_str),
+            Some("proof.BigProof.discharger399")
+        );
+    }
+
+    #[test]
+    fn collect_axioms_output_fails_when_discharger_is_missing() {
+        let obligation = fixture_obligation();
+        let err = parse_collect_axioms_output("unrelated stdout", &[&obligation]).unwrap_err();
+
+        assert!(
+            matches!(err, Error::Adapter(message) if message.contains("trust probe did not report axioms for proof.CounterProof.increment_meets_spec"))
+        );
+    }
+
+    #[test]
+    fn collect_axioms_output_fails_on_duplicate_discharger() {
+        let obligation = fixture_obligation();
+        let output = r#"
+TAMA_AXIOMS_JSON {"lean_decl":"proof.CounterProof.increment_meets_spec","axioms":["propext"]}
+TAMA_AXIOMS_JSON {"lean_decl":"proof.CounterProof.increment_meets_spec","axioms":["propext"]}
+"#;
+        let err = parse_collect_axioms_output(output, &[&obligation]).unwrap_err();
+
+        assert!(matches!(err, Error::Adapter(message) if message.contains("duplicate axioms")));
+    }
+
+    #[test]
+    fn collect_axioms_output_fails_on_malformed_marker_json() {
+        let obligation = fixture_obligation();
+        let err = parse_collect_axioms_output("TAMA_AXIOMS_JSON {", &[&obligation]).unwrap_err();
+
+        assert!(
+            matches!(err, Error::Adapter(message) if message.contains("malformed axiom marker JSON"))
         );
     }
 
