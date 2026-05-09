@@ -81,16 +81,18 @@ tama new TipJar
 This creates four files:
 
 ```text
-verity/src/TipJar.lean         # implementation
-verity/spec/TipJarSpec.lean    # specification
-verity/proof/TipJarProof.lean  # proof
-test/verity/TipJar.t.sol       # Foundry mirror test
+verity/src/TipjarProtocol/TipJar.lean               # implementation
+verity/spec/TipjarProtocol/Spec/TipJarSpec.lean     # specification
+verity/proof/TipjarProtocol/Proof/TipJarProof.lean  # proof
+test/verity/TipJar.t.sol                            # Foundry mirror test
 ```
 
-Open `verity/src/TipJar.lean` and replace the scaffold body with:
+Open `verity/src/TipjarProtocol/TipJar.lean` and replace the scaffold body with:
 
 ```lean
 import Verity
+
+namespace TipjarProtocol
 
 verity_contract TipJar where
 
@@ -110,6 +112,8 @@ verity_contract TipJar where
     balances[me] := balances[me] - amount
     total        := total - amount
     transfer me amount
+
+end TipjarProtocol
 ```
 
 This is the entire implementation. It looks like Solidity because that's the
@@ -119,18 +123,18 @@ compiler can reason about.
 
 ## Step 3 — Write the specification
 
-Open `verity/spec/TipJarSpec.lean` and replace its body with:
+Open `verity/spec/TipjarProtocol/Spec/TipJarSpec.lean` and replace its body with:
 
 ```lean
-import TipJar
+import TipjarProtocol.TipJar
 
-namespace TipJarSpec
+namespace TipjarProtocol.Spec.TipJarSpec
 
 /-- The recorded `total` is always the sum of every balance. -/
 def total_tracks_balances (s : TipJar.State) : Prop :=
   s.total = s.balances.sumValues
 
-end TipJarSpec
+end TipjarProtocol.Spec.TipJarSpec
 ```
 
 One statement: an **invariant** — a property the contract must preserve
@@ -155,12 +159,15 @@ A specification points at every possible behavior at once.
 
 ## Step 4 — Discharge the proofs
 
-Open `verity/proof/TipJarProof.lean`:
+Open `verity/proof/TipjarProtocol/Proof/TipJarProof.lean`:
 
 ```lean
-import TipJarSpec
+import TipjarProtocol.Spec.TipJarSpec
 
-namespace TipJarProof
+namespace TipjarProtocol.Proof.TipJarProof
+
+open TipjarProtocol.Spec.TipJarSpec
+open TipjarProtocol.TipJar
 
 -- tama: discharges=total_tracks_balances
 theorem deposit_preserves_invariant
@@ -179,7 +186,7 @@ theorem withdraw_preserves_invariant
   simp [TipJarSpec.total_tracks_balances, TipJar.withdraw,
         Mapping.sumValues_update_sub k]
 
-end TipJarProof
+end TipjarProtocol.Proof.TipJarProof
 ```
 
 Each theorem says: *if the invariant holds before the call, it holds
@@ -190,7 +197,7 @@ library takes care of the mapping arithmetic.
 catalogues the tactics and error messages you'll meet most often.
 
 Each `-- tama: discharges=<spec>` comment claims a spec definition
-from `TipJarSpec.lean`. Two theorems can discharge the same spec
+from `TipjarProtocol/Spec/TipJarSpec.lean`. Two theorems can discharge the same spec
 (as above), one theorem can discharge several (`discharges=foo,bar`),
 and any theorem or `lemma` without a `discharges=` tag is silently
 treated as a helper and never appears in the manifest.
@@ -299,7 +306,7 @@ assumptions written down in `tama.toml`.
 
 ## Step 8 — Watch the audit catch a bug
 
-Let's break the contract on purpose. Open `verity/src/TipJar.lean` and
+Let's break the contract on purpose. Open `verity/src/TipjarProtocol/TipJar.lean` and
 introduce a leak in `withdraw`:
 
 ```lean

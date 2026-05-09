@@ -58,11 +58,11 @@ tama init my-protocol
 ```
 
 Writes `tama.toml`, `tama.lock`, `foundry.toml`, `lakefile.toml`,
-`lake-manifest.json`, `lean-toolchain`, the aggregate Lean modules,
-the commented `verity/src/`, `verity/spec/`, `verity/proof/` files,
-the `script/ERC20Lite.s.sol` deployment script, the Foundry mirror
-test, and the generated bridge paths. Installs `forge-std` as a
-pinned git submodule.
+`lake-manifest.json`, `lean-toolchain`, package-root aggregate Lean
+modules, the commented `verity/src/`, `verity/spec/`, `verity/proof/`
+files, the `script/ERC20Lite.s.sol` deployment script, the Foundry
+mirror test, and the generated bridge paths. Installs `forge-std` as
+a pinned git submodule.
 
 The starter is a real Verity project — it builds and audits cleanly
 without hand edits.
@@ -79,16 +79,19 @@ tama new TipJar
 
 Creates:
 
-- `verity/src/TipJar.lean`
-- `verity/spec/TipJarSpec.lean`
-- `verity/proof/TipJarProof.lean`
+- `verity/src/MyProtocol/TipJar.lean`
+- `verity/spec/MyProtocol/Spec/TipJarSpec.lean`
+- `verity/proof/MyProtocol/Proof/TipJarProof.lean`
 - `test/verity/TipJar.t.sol`
 
-Updates the aggregate Lean modules. Does **not** edit `lakefile.toml`
+Updates the configured aggregate Lean modules. In a project created by
+`tama init my-protocol`, those are `MyProtocol`, `MyProtocol.Spec`,
+and `MyProtocol.Proof`; customized `[modules]` roots drive the same
+layout under the configured paths. Does **not** edit `lakefile.toml`
 — the initial Lake targets must already cover new files under the
 configured paths. If `[paths]` has been customized after init, the
-user-owned Lakefile must already map the `src`, `spec`, and `proof`
-libraries to those roots; Tama refuses before writing if not.
+user-owned Lakefile must already map the configured module roots to
+those directories; Tama refuses before writing if not.
 
 The proof scaffold contains `sorry` placeholders for the public
 obligations. `tama check` passes; `tama audit trust-boundary` rejects
@@ -104,7 +107,10 @@ Fast Lean elaboration of implementation + spec aggregate modules only.
 tama check
 ```
 
-Equivalent to `lake build TamaSrc TamaSpec`. Proofs, Verity codegen,
+Equivalent to building the configured implementation and spec aggregate
+modules, for example `lake build MyProtocol MyProtocol.Spec` in a
+fresh `tama init my-protocol` project. Legacy projects without
+`[modules]` still build `TamaSrc TamaSpec`. Proofs, Verity codegen,
 `solc`, and Foundry are not run. This is the inner-loop command —
 typically completes in seconds.
 
@@ -116,7 +122,7 @@ at a different revision than `lake-manifest.json` says it should be.
 `--json` returns:
 
 ```json
-{ "status": "ok", "targets": ["TamaSrc", "TamaSpec"] }
+{ "status": "ok", "targets": ["MyProtocol", "MyProtocol.Spec"] }
 ```
 
 ---
@@ -131,7 +137,7 @@ tama build
 
 Steps:
 
-1. `lake build TamaProof` — Lean elaborates implementation, spec, and proof.
+1. `lake build MyProtocol.Proof` — Lean elaborates implementation, spec, and proof. The target is the configured proof aggregate module; legacy projects without `[modules]` use `TamaProof`.
 2. `lake exe verity-compiler` — emits Yul, ABI, storage, trust reports.
 3. Tama adapts compiler output into `tama.contract-manifest.v1` files.
 4. Lean records proof dependencies into `artifacts/trust-probe/axioms.json`.
