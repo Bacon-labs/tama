@@ -33,6 +33,17 @@ jobs:
           restore-keys: |
             tama-${{ runner.os }}-${{ runner.arch }}-
 
+      - name: Cache Lean build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            artifacts/lean
+            .lake/build
+            .lake/packages/*/.lake/build
+          key: lean-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('lean-toolchain', 'lakefile.toml', 'lake-manifest.json', 'tama.lock') }}
+          restore-keys: |
+            lean-build-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Cache elan and Foundry toolchains
         uses: actions/cache@v4
         with:
@@ -51,45 +62,6 @@ jobs:
             echo "$HOME/.tama/bin"
           } >> "$GITHUB_PATH"
 
-      - name: Install elan (Lean toolchain manager)
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3 4; do
-            if curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused \
-                https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
-                -o "$RUNNER_TEMP/elan-init.sh"; then
-              sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain none && exit 0
-            fi
-            sleep $((attempt * 5))
-          done
-          echo "elan install failed after 4 attempts" >&2
-          exit 1
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1.6.0
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Install solc 0.8.33 via solc-select
-        run: |
-          set -euo pipefail
-          venv="$RUNNER_TEMP/solc-select-venv"
-          python3 -m venv "$venv"
-          for attempt in 1 2 3 4; do
-            if "$venv/bin/pip" install --upgrade solc-select; then
-              break
-            fi
-            sleep $((attempt * 5))
-          done
-          for attempt in 1 2 3 4; do
-            if "$venv/bin/solc-select" install 0.8.33; then
-              break
-            fi
-            sleep $((attempt * 5))
-          done
-          "$venv/bin/solc-select" use 0.8.33
-          echo "$venv/bin" >> "$GITHUB_PATH"
-
       # Set TAMA_VERSION (e.g. "0.1.0") to pin a specific Tama release.
       - name: Install Tama
         env:
@@ -102,6 +74,13 @@ jobs:
             "$HOME/.tama/bin/tamaup" install "$TAMA_VERSION"
           fi
 
+      - name: Configure solc from tama.toml
+        run: |
+          set -euo pipefail
+          solc_path="$(tama toolchain solc)"
+          echo "TAMA_SOLC=$solc_path" >> "$GITHUB_ENV"
+          dirname "$solc_path" >> "$GITHUB_PATH"
+
       - name: Print toolchain versions
         run: |
           tama --version
@@ -111,7 +90,8 @@ jobs:
       - run: tama doctor --fix
       - run: git diff --exit-code -- tama.lock lakefile.toml lake-manifest.json
       - run: tama doctor
-      - run: tama check
-      - run: tama build --locked
-      - run: tama test
-      - run: tama audit
+      - name: Fetch Mathlib binary cache
+        run: env -u CI lake exe cache get
+      - run: env -u CI tama build --locked
+      - run: env -u CI tama test
+      - run: env -u CI tama audit

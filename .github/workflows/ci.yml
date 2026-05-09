@@ -144,9 +144,9 @@ jobs:
           fi
           tama new TipJar
           tama check
-          printf '%s\n' '#check this_is_not_in_scope_for_tama_check' >> verity/proof/TipJarProof.lean
+          printf '%s\n' '#check this_is_not_in_scope_for_tama_check' >> verity/proof/MyProtocol/Proof/TipJarProof.lean
           tama check
-          printf '%s\n' '#check this_breaks_tama_check' >> verity/spec/TipJarSpec.lean
+          printf '%s\n' '#check this_breaks_tama_check' >> verity/spec/MyProtocol/Spec/TipJarSpec.lean
           if tama check; then
             echo "expected tama check to fail after breaking a spec module" >&2
             exit 1
@@ -223,6 +223,7 @@ jobs:
           tama init "$tmp/base"
           tama --root "$tmp/base" build
           tama --root "$tmp/base" audit
+          rm -rf "$tmp/base/.lake"
       - name: Mutated audits fail closed
         shell: bash
         run: |
@@ -247,7 +248,7 @@ jobs:
           }
 
           project="$(copy_case deleted-source)"
-          rm "$project/verity/src/ERC20Lite.lean"
+          rm "$project/verity/src/Base/ERC20Lite.lean"
           expect_audit_failure "$project" structure
 
           project="$(copy_case corrupted-selector)"

@@ -517,6 +517,7 @@ solc = "0.8.33"
             inputs: vec![tama_manifest::Param {
                 name: "account".to_string(),
                 ty: "address".to_string(),
+                components: Vec::new(),
             }],
         });
         manifest.abi.events.push(tama_manifest::Event {

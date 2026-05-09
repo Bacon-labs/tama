@@ -24,14 +24,13 @@ forge-std as a pinned submodule, and refreshes tama.lock.
 Use --offline to write files only and do dependency setup later.";
 const NEW_AFTER_HELP: &str = "\
 Adds one Verity contract scaffold under the configured source, spec, proof, and
-mirror-test paths, then updates TamaSrc.lean, TamaSpec.lean, TamaProof.lean, and
+mirror-test paths, then updates the configured aggregate modules and
 tama.lock.
 
 The scaffold contains TODO proofs marked with `sorry`; `tama check` may pass,
 but `tama audit trust-boundary` will reject them until they are discharged.";
 const CHECK_AFTER_HELP: &str = "\
-Fast Lean check for the implementation and spec aggregate modules:
-  lake build TamaSrc TamaSpec
+Fast Lean check for the configured implementation and spec aggregate modules.
 
 Proof modules, Verity codegen, solc, bridge generation, Forge, and audit checks
 do not run here. Use `tama build` when proofs and generated artifacts should be
@@ -49,7 +48,7 @@ Aliases: `storage` for `storage-layout`, `trust` for `trust-boundary`.
 Use `--deny-warnings` to make warning-severity findings fail CI.";
 const BUILD_AFTER_HELP: &str = "\
 What gets built:
-  proof-check      Lake builds TamaProof so Lean elaborates implementation, spec, and proof modules
+  proof-check      Lake builds the configured proof aggregate so Lean elaborates implementation, spec, and proof modules
   verity-codegen   Verity emits Yul, ABI, storage, assumption, and trust reports
   manifest         Tama adapts and validates generated contract manifests
   trust-probe      Lean records proof dependencies used by `tama audit trust-boundary`
@@ -102,6 +101,13 @@ freshness.
 With --fix, Tama creates missing generated directories, repairs safe Verity
 dependency drift when possible, and refreshes tama.lock. It does not rewrite
 user-owned source, spec, proof, or test files.";
+const TOOLCHAIN_AFTER_HELP: &str = "\
+Commands:
+  solc    Resolve or install the solc binary configured by [yul].solc in tama.toml
+
+By default, network access is allowed for missing managed tool versions. With
+global --offline, Tama only resolves already-installed tools and fails if the
+configured version is unavailable.";
 const INSTALL_AFTER_HELP: &str = "\
 Adds a Tama package to lakefile.toml, runs `lake update`, and refreshes
 tama.lock. The package must contain tama.toml; pure Lake packages should be added
@@ -238,6 +244,15 @@ enum Command {
         fix: bool,
     },
     #[command(
+        about = "Resolve configured external tool binaries",
+        long_about = "Resolve configured external tool binaries for CI and shell setup.",
+        after_help = TOOLCHAIN_AFTER_HELP
+    )]
+    Toolchain {
+        #[command(subcommand)]
+        command: ToolchainCommand,
+    },
+    #[command(
         about = "Add a Tama/Lake dependency",
         long_about = "Add a Tama package dependency, run Lake update, and refresh tama.lock.",
         after_help = INSTALL_AFTER_HELP
@@ -320,6 +335,15 @@ struct InspectArgs {
     contract: String,
     #[arg(value_name = "FIELD", help = "Artifact field to print")]
     field: String,
+}
+
+#[derive(Debug, Subcommand)]
+enum ToolchainCommand {
+    #[command(
+        about = "Resolve or install the configured solc binary",
+        long_about = "Resolve or install the solc binary configured by [yul].solc in tama.toml, then print the resolved binary path."
+    )]
+    Solc,
 }
 
 fn main() -> ExitCode {
@@ -495,12 +519,14 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Check => {
             let root = project_root(cli.root)?;
             enforce_locked_if_requested(&root, cli.locked)?;
+            let config = tama_config::load_config(&root).map_err(|err| err.to_string())?;
+            let targets = config.check_targets();
             let progress = CommandProgress::new(!cli.json, palette);
             progress.scope(
                 "Check scope",
                 &[
                     ("project", root.to_string()),
-                    ("targets", "TamaSrc, TamaSpec".to_string()),
+                    ("targets", targets.join(", ")),
                     ("proofs", "not run; use `tama build`".to_string()),
                 ],
             );
@@ -512,21 +538,23 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             )?;
             progress.run(
                 "lake",
-                "build TamaSrc and TamaSpec",
+                &format!("build {} and {}", targets[0], targets[1]),
                 "implementation/spec targets accepted",
                 || {
                     tama_build::Lake::new_json(root.clone(), cli.json)
-                        .check_src_and_spec()
+                        .check_src_and_spec(&config)
                         .map_err(|err| err.to_string())
                 },
             )?;
             refresh_lake_package_cache_after_success(&root, &palette);
             if cli.json {
-                anstream::println!("{}", check_status_json()?);
+                anstream::println!("{}", check_status_json(&targets)?);
             } else {
                 anstream::println!(
-                    "{} TamaSrc and TamaSpec accepted",
+                    "{} {} and {} accepted",
                     paint(palette.ok, "Check completed:"),
+                    targets[0],
+                    targets[1],
                 );
             }
             Ok(ExitCode::SUCCESS)
@@ -699,6 +727,21 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 ExitCode::SUCCESS
             })
         }
+        Command::Toolchain { command } => match command {
+            ToolchainCommand::Solc => {
+                let root = project_root(cli.root)?;
+                let tool = resolve_configured_solc(&root, cli.offline)?;
+                if cli.json {
+                    anstream::println!(
+                        "{}",
+                        serde_json::to_string_pretty(&tool).map_err(|err| err.to_string())?
+                    );
+                } else {
+                    anstream::println!("{}", tool.path);
+                }
+                Ok(ExitCode::SUCCESS)
+            }
+        },
         Command::Install { package } => {
             let root = project_root(cli.root)?;
             let progress = CommandProgress::new(!cli.json, palette);
@@ -845,6 +888,7 @@ fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::Doctor
                 &config.yul.solc,
                 tama_toolchain::parse_solc_version,
             );
+            report_legacy_module_layout(&mut report, project_root, config);
             report_lake_build_dir(&mut report, project_root);
             report_generated_dirs(&mut report, project_root, &config.paths);
         }
@@ -871,6 +915,16 @@ fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::Doctor
         }
     }
     Ok(report)
+}
+
+fn resolve_configured_solc(root: &Utf8Path, offline: bool) -> Result<tama_toolchain::Tool, String> {
+    let config = tama_config::load_config(root).map_err(|err| err.to_string())?;
+    let result = if offline {
+        tama_toolchain::resolve_solc(&config.yul.solc, root)
+    } else {
+        tama_toolchain::resolve_or_install_solc(&config.yul.solc, root)
+    };
+    result.map_err(|err| err.to_string())
 }
 
 fn tama_status() -> tama_toolchain::ToolStatus {
@@ -1015,6 +1069,25 @@ fn concise_tool_output(raw: &str) -> String {
         }
     }
     first.to_string()
+}
+
+fn report_legacy_module_layout(
+    report: &mut tama_toolchain::DoctorReport,
+    root: &Utf8Path,
+    config: &tama_config::TamaConfig,
+) {
+    if config.modules.is_some() {
+        return;
+    }
+    if ["TamaSrc.lean", "TamaSpec.lean", "TamaProof.lean"]
+        .iter()
+        .all(|path| root.join(path).is_file())
+    {
+        report.notes.push(
+            "warning: legacy TamaSrc/TamaSpec/TamaProof module layout detected; add [modules] to use package-root modules"
+                .to_string(),
+        );
+    }
 }
 
 fn report_lake_build_dir(report: &mut tama_toolchain::DoctorReport, root: &Utf8Path) {
@@ -2216,10 +2289,10 @@ fn init_next_steps(path: &Utf8Path) -> Vec<String> {
     steps
 }
 
-fn check_status_json() -> Result<String, String> {
+fn check_status_json(targets: &[String; 2]) -> Result<String, String> {
     serde_json::to_string_pretty(&serde_json::json!({
         "status": "ok",
-        "targets": ["TamaSrc", "TamaSpec"]
+        "targets": targets
     }))
     .map_err(|err| err.to_string())
 }
@@ -2698,6 +2771,12 @@ mod tests {
             std::env::set_var(name, value.into());
             Self { name, old }
         }
+
+        fn unset(name: &'static str) -> Self {
+            let old = std::env::var_os(name);
+            std::env::remove_var(name);
+            Self { name, old }
+        }
     }
 
     impl Drop for EnvVarGuard {
@@ -2831,6 +2910,7 @@ mod tests {
         ));
         assert!(help.contains("Pass through directly to forge test"));
         assert!(help.contains("Diagnose toolchain and project drift"));
+        assert!(help.contains("Resolve configured external tool binaries"));
     }
 
     #[test]
@@ -2891,13 +2971,13 @@ mod tests {
                 [
                     "source, spec, proof",
                     "TODO proofs marked with `sorry`",
-                    "TamaProof.lean",
+                    "aggregate modules",
                 ],
             ),
             (
                 "check",
                 [
-                    "lake build TamaSrc TamaSpec",
+                    "configured implementation and spec aggregate modules",
                     "Proof modules",
                     "Use `tama build`",
                 ],
@@ -2926,6 +3006,7 @@ mod tests {
                 "doctor",
                 ["required tools", "With --fix", "user-owned source, spec"],
             ),
+            ("toolchain", ["Commands:", "solc", "global --offline"]),
             (
                 "install",
                 ["lakefile.toml", "pure Lake packages", "Add @rev"],
@@ -3064,6 +3145,39 @@ mod tests {
     }
 
     #[test]
+    fn doctor_notes_legacy_module_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        for path in ["TamaSrc.lean", "TamaSpec.lean", "TamaProof.lean"] {
+            tama_common::write_string(&root.join(path), "import src.Counter\n").unwrap();
+        }
+        let config = tama_config::TamaConfig {
+            project: tama_config::ProjectConfig {
+                name: "x".to_string(),
+                verity: "v".to_string(),
+            },
+            paths: Default::default(),
+            modules: None,
+            yul: tama_config::YulConfig {
+                solc: "0.8.33".to_string(),
+                optimizer: true,
+                optimizer_runs: 200,
+                yul_optimizer: true,
+                evm_version: "cancun".to_string(),
+                metadata_hash: "none".to_string(),
+            },
+            trust: Default::default(),
+            coverage: Default::default(),
+        };
+        let mut report = tama_toolchain::DoctorReport::default();
+
+        report_legacy_module_layout(&mut report, &root, &config);
+
+        assert!(report.notes.iter().any(|note| note
+            .contains("legacy TamaSrc/TamaSpec/TamaProof module layout detected; add [modules]")));
+    }
+
+    #[test]
     fn clean_report_summarizes_removed_and_clean_targets() {
         let report = CleanReport {
             entries: vec![
@@ -3087,9 +3201,14 @@ mod tests {
 
     #[test]
     fn check_json_status_is_machine_readable() {
-        let value: serde_json::Value = serde_json::from_str(&check_status_json().unwrap()).unwrap();
+        let targets = ["Tamago".to_string(), "Tamago.Spec".to_string()];
+        let value: serde_json::Value =
+            serde_json::from_str(&check_status_json(&targets).unwrap()).unwrap();
         assert_eq!(value["status"], "ok");
-        assert_eq!(value["targets"], serde_json::json!(["TamaSrc", "TamaSpec"]));
+        assert_eq!(
+            value["targets"],
+            serde_json::json!(["Tamago", "Tamago.Spec"])
+        );
 
         let cli = Cli::try_parse_from(["tama", "--json", "check"]).unwrap();
         assert!(cli.json);
@@ -4175,8 +4294,8 @@ mod tests {
         let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
         tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
         tama_common::write_string(
-            &root.join("TamaSrc.lean"),
-            "import src.ERC20Lite\n-- changed\n",
+            &root.join("verity/src/MyProtocol.lean"),
+            "import MyProtocol.ERC20Lite\n-- changed\n",
         )
         .unwrap();
         let stale = doctor_report(Some(&root)).unwrap();
@@ -4193,8 +4312,8 @@ mod tests {
         tama_project::init(&root, tama_project::InitOptions::default()).unwrap();
         let lock_before = tama_common::read_to_string(&root.join("tama.lock")).unwrap();
         tama_common::write_string(
-            &root.join("TamaSrc.lean"),
-            "import src.ERC20Lite\n-- changed\n",
+            &root.join("verity/src/MyProtocol.lean"),
+            "import MyProtocol.ERC20Lite\n-- changed\n",
         )
         .unwrap();
 
@@ -4211,7 +4330,7 @@ mod tests {
         .unwrap_err();
 
         assert!(err.contains("lockfile is stale"));
-        assert!(err.contains("TamaSrc.lean"));
+        assert!(err.contains("verity/src/MyProtocol.lean"));
         assert_eq!(
             tama_common::read_to_string(&root.join("tama.lock")).unwrap(),
             lock_before
@@ -4627,6 +4746,44 @@ buildDir = ""
         ));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn toolchain_solc_resolves_version_from_tama_config() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().join("project")).unwrap();
+        let home = Utf8PathBuf::from_path_buf(dir.path().join("home")).unwrap();
+        let solc = home.join(".tama/solc/0.8.34/solc");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(solc.parent().unwrap()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            "[project]\nname='x'\nverity='v'\n[yul]\nsolc='0.8.34'\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &solc,
+            "#!/bin/sh\nprintf '%s\\n' 'Version: 0.8.34+commit.test'\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&solc).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&solc, permissions).unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", home.as_str());
+        let _path_guard = EnvVarGuard::set("PATH", "");
+        let _solc_guard = EnvVarGuard::unset("TAMA_SOLC");
+
+        let tool = resolve_configured_solc(&root, true).unwrap();
+
+        assert_eq!(tool.path, solc);
+        assert!(tool
+            .version
+            .as_deref()
+            .is_some_and(|version| version.contains("0.8.34")));
+    }
+
     #[test]
     fn doctor_reports_tama_version_and_lake_build_dir() {
         let dir = tempfile::tempdir().unwrap();
@@ -4687,6 +4844,7 @@ buildDir = ""
                 verity: "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e".to_string(),
             },
             paths: Default::default(),
+            modules: None,
             yul: tama_config::YulConfig {
                 solc: "0.8.33".to_string(),
                 optimizer: true,
@@ -4737,6 +4895,7 @@ buildDir = ""
                 verity: "9b0114efcc0af589af63dd3f2eafcdf1a24dbf1e".to_string(),
             },
             paths: Default::default(),
+            modules: None,
             yul: tama_config::YulConfig {
                 solc: "0.8.33".to_string(),
                 optimizer: true,

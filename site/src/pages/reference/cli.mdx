@@ -360,6 +360,22 @@ $ tama doctor
 
 ---
 
+## `tama toolchain solc` <a id="toolchain-solc"></a>
+
+Resolve or install the `solc` binary configured by `[yul].solc` in
+`tama.toml`, then print the resolved binary path.
+
+```sh
+solc_path="$(tama toolchain solc)"
+export TAMA_SOLC="$solc_path"
+export PATH="$(dirname "$solc_path"):$PATH"
+```
+
+With global `--offline`, Tama only resolves an already-installed matching
+binary.
+
+---
+
 ## `tamaup` <a id="tamaup"></a>
 
 Version manager for `tama`.
@@ -367,8 +383,8 @@ Version manager for `tama`.
 ```text
 tamaup                    install/update latest stable
 tamaup install nightly    install nightly channel
-tamaup install 0.1.3      install specific version
-tamaup use 0.1.3          switch active version
+tamaup install 0.1.4      install specific version
+tamaup use 0.1.4          switch active version
 tamaup list               installed versions
 tamaup self update        update tamaup itself
 tamaup uninstall          remove tama (keep tamaup)

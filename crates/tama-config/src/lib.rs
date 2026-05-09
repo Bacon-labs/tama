@@ -41,6 +41,23 @@ pub enum Error {
     },
     #[error("[coverage.proof_only] entry `{key}` requires a non-empty reason")]
     EmptyProofOnlyReason { key: String },
+    #[error("configured module `{field}` must be a Lean module name: {name}")]
+    InvalidModuleName { field: &'static str, name: String },
+    #[error("Lean file `{path}` is not under configured module directory `{base_dir}`")]
+    ModulePathOutsideRoot {
+        path: Utf8PathBuf,
+        base_dir: Utf8PathBuf,
+    },
+    #[error("Lean file `{path}` is outside configured module root `{module_root}`")]
+    ModuleOutsideRoot {
+        path: Utf8PathBuf,
+        module_root: String,
+    },
+    #[error("Lean file `{path}` contains unsupported module path component `{component}`")]
+    InvalidModulePathComponent {
+        path: Utf8PathBuf,
+        component: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +66,8 @@ pub struct TamaConfig {
     pub project: ProjectConfig,
     #[serde(default)]
     pub paths: PathsConfig,
+    #[serde(default)]
+    pub modules: Option<ModulesConfig>,
     pub yul: YulConfig,
     #[serde(default)]
     pub trust: TrustConfig,
@@ -78,6 +97,27 @@ pub struct PathsConfig {
     pub out: Utf8PathBuf,
     #[serde(default = "default_generated", alias = "generated_solidity")]
     pub generated: Utf8PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModulesConfig {
+    pub src: String,
+    pub spec: String,
+    pub proof: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModuleKind {
+    Src,
+    Spec,
+    Proof,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AggregateModule {
+    pub module: String,
+    pub path: Utf8PathBuf,
 }
 
 impl Default for PathsConfig {
@@ -266,7 +306,175 @@ fn validate_tama_config(config: &TamaConfig) -> Result<()> {
             });
         }
     }
+    if let Some(modules) = &config.modules {
+        for (field, name) in [
+            ("modules.src", modules.src.as_str()),
+            ("modules.spec", modules.spec.as_str()),
+            ("modules.proof", modules.proof.as_str()),
+        ] {
+            validate_lean_module_name(field, name)?;
+        }
+    }
     Ok(())
+}
+
+impl TamaConfig {
+    pub fn module_root(&self, kind: ModuleKind) -> &str {
+        match (&self.modules, kind) {
+            (Some(modules), ModuleKind::Src) => &modules.src,
+            (Some(modules), ModuleKind::Spec) => &modules.spec,
+            (Some(modules), ModuleKind::Proof) => &modules.proof,
+            (None, ModuleKind::Src) => "src",
+            (None, ModuleKind::Spec) => "spec",
+            (None, ModuleKind::Proof) => "proof",
+        }
+    }
+
+    pub fn module_path(&self, kind: ModuleKind) -> &Utf8Path {
+        match kind {
+            ModuleKind::Src => &self.paths.src,
+            ModuleKind::Spec => &self.paths.spec,
+            ModuleKind::Proof => &self.paths.proof,
+        }
+    }
+
+    pub fn aggregate_module(&self, kind: ModuleKind) -> AggregateModule {
+        if self.modules.is_some() {
+            let module = self.module_root(kind).to_string();
+            AggregateModule {
+                path: self.module_path(kind).join(lean_module_file(&module)),
+                module,
+            }
+        } else {
+            match kind {
+                ModuleKind::Src => AggregateModule {
+                    module: "TamaSrc".to_string(),
+                    path: "TamaSrc.lean".into(),
+                },
+                ModuleKind::Spec => AggregateModule {
+                    module: "TamaSpec".to_string(),
+                    path: "TamaSpec.lean".into(),
+                },
+                ModuleKind::Proof => AggregateModule {
+                    module: "TamaProof".to_string(),
+                    path: "TamaProof.lean".into(),
+                },
+            }
+        }
+    }
+
+    pub fn check_targets(&self) -> [String; 2] {
+        [
+            self.aggregate_module(ModuleKind::Src).module,
+            self.aggregate_module(ModuleKind::Spec).module,
+        ]
+    }
+
+    pub fn proof_target(&self) -> String {
+        self.aggregate_module(ModuleKind::Proof).module
+    }
+
+    pub fn module_child_dir(&self, kind: ModuleKind) -> Utf8PathBuf {
+        if self.modules.is_some() {
+            self.module_path(kind)
+                .join(lean_module_dir(self.module_root(kind)))
+        } else {
+            self.module_path(kind).to_path_buf()
+        }
+    }
+
+    pub fn lean_module_for_path(
+        &self,
+        root: &Utf8Path,
+        kind: ModuleKind,
+        path: &Utf8Path,
+    ) -> Result<String> {
+        let base_dir = root.join(self.module_path(kind));
+        let relative = path
+            .strip_prefix(&base_dir)
+            .map_err(|_| Error::ModulePathOutsideRoot {
+                path: path.to_owned(),
+                base_dir: base_dir.clone(),
+            })?;
+        let relative = relative.with_extension("");
+        let mut parts = if self.modules.is_some() {
+            Vec::new()
+        } else {
+            vec![self.module_root(kind).to_string()]
+        };
+        for component in relative.components() {
+            match component {
+                Utf8Component::Normal(part) => parts.push(part.to_string()),
+                Utf8Component::CurDir => {}
+                other => {
+                    return Err(Error::InvalidModulePathComponent {
+                        path: path.to_owned(),
+                        component: other.as_str().to_string(),
+                    });
+                }
+            }
+        }
+        let module = parts.join(".");
+        if self.modules.is_some() {
+            let root_module = self.module_root(kind);
+            if module != root_module
+                && !module
+                    .strip_prefix(root_module)
+                    .is_some_and(|suffix| suffix.starts_with('.'))
+            {
+                return Err(Error::ModuleOutsideRoot {
+                    path: path.to_owned(),
+                    module_root: root_module.to_string(),
+                });
+            }
+        }
+        Ok(module)
+    }
+}
+
+pub fn validate_lean_module_name(field: &'static str, name: &str) -> Result<()> {
+    if is_lean_module_name(name) {
+        Ok(())
+    } else {
+        Err(Error::InvalidModuleName {
+            field,
+            name: name.to_string(),
+        })
+    }
+}
+
+pub fn is_lean_module_name(value: &str) -> bool {
+    let mut segment_count = 0;
+    for segment in value.split('.') {
+        segment_count += 1;
+        if !is_lean_identifier(segment) {
+            return false;
+        }
+    }
+    segment_count > 0
+}
+
+fn is_lean_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '\'')
+}
+
+fn lean_module_dir(module: &str) -> Utf8PathBuf {
+    let mut path = Utf8PathBuf::new();
+    for component in module.split('.') {
+        path.push(component);
+    }
+    path
+}
+
+fn lean_module_file(module: &str) -> Utf8PathBuf {
+    let mut path = lean_module_dir(module);
+    path.set_extension("lean");
+    path
 }
 
 pub fn validate_project_relative_path(field: &'static str, path: &Utf8Path) -> Result<()> {
@@ -368,19 +576,37 @@ pub fn read_lean_toolchain(root: &Utf8Path) -> Result<String> {
 
 pub fn tracked_input_hashes(root: &Utf8Path) -> Result<BTreeMap<String, String>> {
     let mut hashes = BTreeMap::new();
-    for rel in [
+    let mut tracked = vec![
         "tama.toml",
         "lakefile.toml",
         "lake-manifest.json",
         "foundry.toml",
         "lean-toolchain",
-        "TamaSrc.lean",
-        "TamaSpec.lean",
-        "TamaProof.lean",
-    ] {
-        let path = root.join(rel);
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect::<Vec<_>>();
+    if root.join("tama.toml").is_file() {
+        match load_config(root) {
+            Ok(config) if config.modules.is_some() => {
+                tracked.extend(
+                    [ModuleKind::Src, ModuleKind::Spec, ModuleKind::Proof]
+                        .into_iter()
+                        .map(|kind| config.aggregate_module(kind).path.to_string()),
+                );
+            }
+            Ok(_) | Err(_) => {
+                tracked
+                    .extend(["TamaSrc.lean", "TamaSpec.lean", "TamaProof.lean"].map(String::from));
+            }
+        }
+    } else {
+        tracked.extend(["TamaSrc.lean", "TamaSpec.lean", "TamaProof.lean"].map(String::from));
+    }
+    for rel in tracked {
+        let path = root.join(&rel);
         if path.is_file() {
-            hashes.insert(rel.to_string(), sha256_file(&path)?);
+            hashes.insert(rel, sha256_file(&path)?);
         }
     }
     Ok(hashes)
@@ -1158,6 +1384,120 @@ cache_path = "profile-cache"
                 Error::InvalidPath { field, .. } if field.starts_with("foundry.")
             ));
         }
+    }
+
+    #[test]
+    fn config_parses_package_root_modules_and_aggregate_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let path = root.join("tama.toml");
+        tama_common::write_string(
+            &path,
+            r#"[project]
+name = "tamago"
+verity = "v"
+
+[paths]
+src = "verity/src"
+spec = "verity/spec"
+proof = "verity/proof"
+
+[modules]
+src = "Tamago"
+spec = "Tamago.Spec"
+proof = "Tamago.Proof"
+
+[yul]
+solc = "0.8.33"
+"#,
+        )
+        .unwrap();
+
+        let config = parse_tama_config(&path).unwrap();
+
+        assert_eq!(config.check_targets(), ["Tamago", "Tamago.Spec"]);
+        assert_eq!(config.proof_target(), "Tamago.Proof");
+        assert_eq!(
+            config.aggregate_module(ModuleKind::Src).path,
+            Utf8PathBuf::from("verity/src/Tamago.lean")
+        );
+        assert_eq!(
+            config.aggregate_module(ModuleKind::Spec).path,
+            Utf8PathBuf::from("verity/spec/Tamago/Spec.lean")
+        );
+        assert_eq!(
+            config.module_child_dir(ModuleKind::Proof),
+            Utf8PathBuf::from("verity/proof/Tamago/Proof")
+        );
+    }
+
+    #[test]
+    fn config_rejects_invalid_module_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("tama.toml")).unwrap();
+        tama_common::write_string(
+            &path,
+            r#"[project]
+name = "x"
+verity = "v"
+
+[modules]
+src = "Tamago"
+spec = "Tamago.bad-name"
+proof = "Tamago.Proof"
+
+[yul]
+solc = "0.8.33"
+"#,
+        )
+        .unwrap();
+
+        let err = parse_tama_config(&path).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::InvalidModuleName {
+                field: "modules.spec",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn configured_lock_inputs_track_configured_aggregates() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            r#"[project]
+name = "tamago"
+verity = "v"
+
+[modules]
+src = "Tamago"
+spec = "Tamago.Spec"
+proof = "Tamago.Proof"
+
+[yul]
+solc = "0.8.33"
+"#,
+        )
+        .unwrap();
+        for path in [
+            "verity/src/Tamago.lean",
+            "verity/spec/Tamago/Spec.lean",
+            "verity/proof/Tamago/Proof.lean",
+            "TamaSrc.lean",
+        ] {
+            tama_common::write_string(&root.join(path), "tracked input\n").unwrap();
+        }
+
+        let hashes = tracked_input_hashes(&root).unwrap();
+
+        assert!(hashes.contains_key("verity/src/Tamago.lean"));
+        assert!(hashes.contains_key("verity/spec/Tamago/Spec.lean"));
+        assert!(hashes.contains_key("verity/proof/Tamago/Proof.lean"));
+        assert!(!hashes.contains_key("TamaSrc.lean"));
     }
 
     #[test]

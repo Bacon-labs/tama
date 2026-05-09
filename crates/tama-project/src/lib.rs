@@ -3,7 +3,7 @@ use std::fs;
 
 use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use tama_common::{read_to_string, write_string};
-use tama_config::{PathsConfig, TamaLock};
+use tama_config::{ModuleKind, ModulesConfig, TamaConfig, TamaLock};
 use toml_edit::Item;
 
 mod starter_deps;
@@ -74,6 +74,7 @@ pub fn init(path: &Utf8Path, opts: InitOptions) -> Result<()> {
         return Err(Error::AlreadyExists(path.to_owned()));
     }
     fs::create_dir_all(path).map_err(|source| tama_common::io_error(path.to_owned(), source))?;
+    let modules = starter_modules(&opts);
     for dir in [
         "verity/src",
         "verity/spec",
@@ -89,16 +90,23 @@ pub fn init(path: &Utf8Path, opts: InitOptions) -> Result<()> {
         "artifacts/manifest",
         "artifacts/lean",
         "artifacts/trust-probe",
-        "docs",
         ".github/workflows",
     ] {
         fs::create_dir_all(path.join(dir))
             .map_err(|source| tama_common::io_error(path.join(dir), source))?;
     }
+    for dir in [
+        module_child_dir("verity/src", &modules.src),
+        module_child_dir("verity/spec", &modules.spec),
+        module_child_dir("verity/proof", &modules.proof),
+    ] {
+        fs::create_dir_all(path.join(&dir))
+            .map_err(|source| tama_common::io_error(path.join(dir), source))?;
+    }
 
-    write_string(&path.join("tama.toml"), &tama_toml(&opts))?;
+    write_string(&path.join("tama.toml"), &tama_toml(&opts, &modules))?;
     write_string(&path.join("foundry.toml"), FOUNDRY_TOML)?;
-    write_string(&path.join("lakefile.toml"), &lakefile_toml(&opts))?;
+    write_string(&path.join("lakefile.toml"), &lakefile_toml(&opts, &modules))?;
     write_string(
         &path.join("lake-manifest.json"),
         &lake_manifest_json(&opts)?,
@@ -107,23 +115,29 @@ pub fn init(path: &Utf8Path, opts: InitOptions) -> Result<()> {
         &path.join("lean-toolchain"),
         &(opts.lean_toolchain.clone() + "\n"),
     )?;
-    write_string(&path.join("TamaSrc.lean"), "import src.ERC20Lite\n")?;
     write_string(
-        &path.join("TamaSpec.lean"),
-        "import TamaSrc\nimport spec.ERC20LiteSpec\n",
+        &path.join(aggregate_module_file("verity/src", &modules.src)),
+        &format!("import {}.ERC20Lite\n", modules.src),
     )?;
     write_string(
-        &path.join("TamaProof.lean"),
-        "import TamaSpec\nimport proof.ERC20LiteProof\n",
-    )?;
-    write_string(&path.join("verity/src/ERC20Lite.lean"), ERC20LITE_LEAN)?;
-    write_string(
-        &path.join("verity/spec/ERC20LiteSpec.lean"),
-        ERC20LITE_SPEC_LEAN,
+        &path.join(aggregate_module_file("verity/spec", &modules.spec)),
+        &format!("import {}.ERC20LiteSpec\n", modules.spec),
     )?;
     write_string(
-        &path.join("verity/proof/ERC20LiteProof.lean"),
-        ERC20LITE_PROOF_LEAN,
+        &path.join(aggregate_module_file("verity/proof", &modules.proof)),
+        &format!("import {}.ERC20LiteProof\n", modules.proof),
+    )?;
+    write_string(
+        &path.join(module_child_dir("verity/src", &modules.src).join("ERC20Lite.lean")),
+        &starter_src_lean(&modules),
+    )?;
+    write_string(
+        &path.join(module_child_dir("verity/spec", &modules.spec).join("ERC20LiteSpec.lean")),
+        &starter_spec_lean(&modules),
+    )?;
+    write_string(
+        &path.join(module_child_dir("verity/proof", &modules.proof).join("ERC20LiteProof.lean")),
+        &starter_proof_lean(&modules),
     )?;
     write_string(
         &path.join("test/verity/ERC20Lite.t.sol"),
@@ -138,7 +152,7 @@ pub fn init(path: &Utf8Path, opts: InitOptions) -> Result<()> {
         &path.join("src/generated/verity/ERC20LiteDeployer.sol"),
         ERC20LITE_DEPLOYER_SOL,
     )?;
-    write_string(&path.join("docs/README.md"), STARTER_README)?;
+    write_string(&path.join("README.md"), STARTER_README)?;
     write_string(&path.join(".github/workflows/ci.yml"), STARTER_CI_WORKFLOW)?;
     write_string(&path.join(".gitignore"), STARTER_GITIGNORE)?;
 
@@ -160,16 +174,29 @@ pub fn init(path: &Utf8Path, opts: InitOptions) -> Result<()> {
 
 pub fn scaffold_contract(root: &Utf8Path, name: &str) -> Result<()> {
     validate_contract_name(name)?;
-    let paths = tama_config::load_config(root)?.paths;
+    let config = tama_config::load_config(root)?;
+    let paths = &config.paths;
     ensure_project_relative(&paths.src)?;
     ensure_project_relative(&paths.spec)?;
     ensure_project_relative(&paths.proof)?;
     ensure_project_relative(&paths.test)?;
     ensure_project_relative(&paths.generated)?;
-    validate_lakefile_covers_paths(root, &paths)?;
-    let src = root.join(paths.src.join(format!("{name}.lean")));
-    let spec = root.join(paths.spec.join(format!("{name}Spec.lean")));
-    let proof = root.join(paths.proof.join(format!("{name}Proof.lean")));
+    validate_lakefile_covers_paths(root, &config)?;
+    let src = root.join(
+        config
+            .module_child_dir(ModuleKind::Src)
+            .join(format!("{name}.lean")),
+    );
+    let spec = root.join(
+        config
+            .module_child_dir(ModuleKind::Spec)
+            .join(format!("{name}Spec.lean")),
+    );
+    let proof = root.join(
+        config
+            .module_child_dir(ModuleKind::Proof)
+            .join(format!("{name}Proof.lean")),
+    );
     let test = root.join(paths.test.join(format!("{name}.t.sol")));
     for path in [&src, &spec, &proof, &test] {
         if path.exists() {
@@ -177,14 +204,45 @@ pub fn scaffold_contract(root: &Utf8Path, name: &str) -> Result<()> {
         }
     }
     let mut lock = tama_config::load_lock(root)?;
-    write_string(&src, &contract_template(name))?;
-    write_string(&spec, &spec_template(name))?;
-    write_string(&proof, &proof_template(name))?;
+    for dir in [
+        src.parent().map(Utf8Path::to_path_buf),
+        spec.parent().map(Utf8Path::to_path_buf),
+        proof.parent().map(Utf8Path::to_path_buf),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        fs::create_dir_all(&dir).map_err(|source| tama_common::io_error(dir, source))?;
+    }
+    let implementation_module = format!("{}.{}", config.module_root(ModuleKind::Src), name);
+    let spec_module = format!("{}.{}Spec", config.module_root(ModuleKind::Spec), name);
+    let proof_module = format!("{}.{}Proof", config.module_root(ModuleKind::Proof), name);
+    write_string(&src, &contract_template(name, &config))?;
+    write_string(
+        &spec,
+        &spec_template(name, &implementation_module, &spec_module),
+    )?;
+    write_string(
+        &proof,
+        &proof_template(name, &config, &spec_module, &proof_module),
+    )?;
     let generated_import_root = relative_project_path(&paths.test, &paths.generated);
     write_string(&test, &test_template(name, generated_import_root.as_str()))?;
-    update_aggregate(root, "TamaSrc.lean", &format!("import src.{name}"))?;
-    update_aggregate(root, "TamaSpec.lean", &format!("import spec.{name}Spec"))?;
-    update_aggregate(root, "TamaProof.lean", &format!("import proof.{name}Proof"))?;
+    update_aggregate(
+        root,
+        &config.aggregate_module(ModuleKind::Src).path,
+        &format!("import {implementation_module}"),
+    )?;
+    update_aggregate(
+        root,
+        &config.aggregate_module(ModuleKind::Spec).path,
+        &format!("import {spec_module}"),
+    )?;
+    update_aggregate(
+        root,
+        &config.aggregate_module(ModuleKind::Proof).path,
+        &format!("import {proof_module}"),
+    )?;
     tama_config::update_lock_inputs(root, &mut lock)?;
     tama_config::write_lock(root, &lock)?;
     Ok(())
@@ -241,7 +299,7 @@ fn normal_components(path: &Utf8Path) -> Vec<String> {
         .collect()
 }
 
-fn validate_lakefile_covers_paths(root: &Utf8Path, paths: &PathsConfig) -> Result<()> {
+fn validate_lakefile_covers_paths(root: &Utf8Path, config: &TamaConfig) -> Result<()> {
     let lakefile = root.join("lakefile.toml");
     if !lakefile.is_file() {
         if root.join("lakefile.lean").is_file() {
@@ -255,25 +313,52 @@ fn validate_lakefile_covers_paths(root: &Utf8Path, paths: &PathsConfig) -> Resul
     let doc = text
         .parse::<toml_edit::DocumentMut>()
         .map_err(|err| Error::UnsupportedLakefile(format!("failed to parse {lakefile}: {err}")))?;
-    for (library, path) in [
-        ("src", &paths.src),
-        ("spec", &paths.spec),
-        ("proof", &paths.proof),
-    ] {
-        let src_dir = lean_lib_src_dir(&doc, library)?;
-        let expected = expected_module_path(&src_dir, library);
-        if path != &expected {
-            return Err(Error::LakePathMismatch {
-                library,
-                path: path.clone(),
-                expected,
-            });
+    if config.modules.is_some() {
+        for kind in [ModuleKind::Src, ModuleKind::Spec, ModuleKind::Proof] {
+            let library = config.aggregate_module(kind).module;
+            let path = config.module_path(kind);
+            let src_dir = lean_lib_src_dir(&doc, &library)?;
+            if path != src_dir {
+                return Err(Error::LakePathMismatch {
+                    library: legacy_library_name(kind),
+                    path: path.to_path_buf(),
+                    expected: src_dir,
+                });
+            }
+        }
+    } else {
+        for (library, path) in [
+            ("src", &config.paths.src),
+            ("spec", &config.paths.spec),
+            ("proof", &config.paths.proof),
+        ] {
+            let src_dir = lean_lib_src_dir(&doc, library)?;
+            let expected = expected_module_path(&src_dir, library);
+            if path != &expected {
+                return Err(Error::LakePathMismatch {
+                    library: legacy_library_name(match library {
+                        "src" => ModuleKind::Src,
+                        "spec" => ModuleKind::Spec,
+                        _ => ModuleKind::Proof,
+                    }),
+                    path: path.clone(),
+                    expected,
+                });
+            }
         }
     }
     Ok(())
 }
 
-fn lean_lib_src_dir(doc: &toml_edit::DocumentMut, library: &'static str) -> Result<Utf8PathBuf> {
+fn legacy_library_name(kind: ModuleKind) -> &'static str {
+    match kind {
+        ModuleKind::Src => "src",
+        ModuleKind::Spec => "spec",
+        ModuleKind::Proof => "proof",
+    }
+}
+
+fn lean_lib_src_dir(doc: &toml_edit::DocumentMut, library: &str) -> Result<Utf8PathBuf> {
     let Some(libs) = doc.get("lean_lib").and_then(Item::as_array_of_tables) else {
         return Err(Error::UnsupportedLakefile(format!(
             "missing [[lean_lib]] entry for `{library}`"
@@ -300,7 +385,7 @@ fn expected_module_path(src_dir: &Utf8Path, library: &str) -> Utf8PathBuf {
     }
 }
 
-fn update_aggregate(root: &Utf8Path, file: &str, import: &str) -> Result<()> {
+fn update_aggregate(root: &Utf8Path, file: &Utf8Path, import: &str) -> Result<()> {
     let path = root.join(file);
     let mut text = if path.exists() {
         read_to_string(&path)?
@@ -313,12 +398,109 @@ fn update_aggregate(root: &Utf8Path, file: &str, import: &str) -> Result<()> {
         }
         text.push_str(import);
         text.push('\n');
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|source| tama_common::io_error(parent.to_path_buf(), source))?;
+        }
         write_string(&path, &text)?;
     }
     Ok(())
 }
 
-fn tama_toml(opts: &InitOptions) -> String {
+fn starter_modules(opts: &InitOptions) -> ModulesConfig {
+    let src = lean_module_root_from_project_name(&opts.name);
+    ModulesConfig {
+        spec: format!("{src}.Spec"),
+        proof: format!("{src}.Proof"),
+        src,
+    }
+}
+
+fn lean_module_root_from_project_name(name: &str) -> String {
+    let mut out = String::new();
+    let mut capitalize = true;
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if capitalize {
+                out.push(ch.to_ascii_uppercase());
+                capitalize = false;
+            } else {
+                out.push(ch);
+            }
+        } else {
+            capitalize = true;
+        }
+    }
+    if out.is_empty() {
+        out.push_str("TamaProject");
+    }
+    if out.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+        out.insert_str(0, "Tama");
+    }
+    out
+}
+
+fn module_child_dir(base: &str, module: &str) -> Utf8PathBuf {
+    let mut path = Utf8PathBuf::from(base);
+    for component in module.split('.') {
+        path.push(component);
+    }
+    path
+}
+
+fn aggregate_module_file(base: &str, module: &str) -> Utf8PathBuf {
+    let mut path = module_child_dir(base, module);
+    path.set_extension("lean");
+    path
+}
+
+fn starter_src_lean(modules: &ModulesConfig) -> String {
+    ERC20LITE_LEAN
+        .replace("namespace src", &format!("namespace {}", modules.src))
+        .replace("end src", &format!("end {}", modules.src))
+}
+
+fn starter_spec_lean(modules: &ModulesConfig) -> String {
+    ERC20LITE_SPEC_LEAN
+        .replace(
+            "import src.ERC20Lite",
+            &format!("import {}.ERC20Lite", modules.src),
+        )
+        .replace(
+            "namespace spec.ERC20LiteSpec",
+            &format!("namespace {}.ERC20LiteSpec", modules.spec),
+        )
+        .replace(
+            "end spec.ERC20LiteSpec",
+            &format!("end {}.ERC20LiteSpec", modules.spec),
+        )
+}
+
+fn starter_proof_lean(modules: &ModulesConfig) -> String {
+    ERC20LITE_PROOF_LEAN
+        .replace(
+            "import spec.ERC20LiteSpec",
+            &format!("import {}.ERC20LiteSpec", modules.spec),
+        )
+        .replace(
+            "namespace proof.ERC20LiteProof",
+            &format!("namespace {}.ERC20LiteProof", modules.proof),
+        )
+        .replace(
+            "open spec.ERC20LiteSpec",
+            &format!("open {}.ERC20LiteSpec", modules.spec),
+        )
+        .replace(
+            "open src.ERC20Lite",
+            &format!("open {}.ERC20Lite", modules.src),
+        )
+        .replace(
+            "end proof.ERC20LiteProof",
+            &format!("end {}.ERC20LiteProof", modules.proof),
+        )
+}
+
+fn tama_toml(opts: &InitOptions, modules: &ModulesConfig) -> String {
     format!(
         r#"[project]
 name = "{name}"
@@ -331,6 +513,11 @@ proof = "verity/proof"
 mirror_test = "test/verity"
 out = "artifacts"
 generated_solidity = "src/generated/verity"
+
+[modules]
+src = "{src_module}"
+spec = "{spec_module}"
+proof = "{proof_module}"
 
 [yul]
 solc = "{solc}"
@@ -347,15 +534,18 @@ metadata_bytecode_hash = "none"
 "#,
         name = opts.name,
         verity = opts.verity_version,
-        solc = opts.solc
+        solc = opts.solc,
+        src_module = modules.src,
+        spec_module = modules.spec,
+        proof_module = modules.proof
     )
 }
 
-fn lakefile_toml(opts: &InitOptions) -> String {
+fn lakefile_toml(opts: &InitOptions, modules: &ModulesConfig) -> String {
     format!(
         r#"name = "{name}"
 version = "0.1.0"
-defaultTargets = ["TamaProof"]
+defaultTargets = ["{proof_module}"]
 buildDir = "artifacts/lean"
 
 [[require]]
@@ -364,29 +554,23 @@ git = "{git}"
 rev = "{rev}"
 
 [[lean_lib]]
-name = "TamaSrc"
+name = "{src_module}"
+srcDir = "verity/src"
 
 [[lean_lib]]
-name = "TamaSpec"
+name = "{spec_module}"
+srcDir = "verity/spec"
 
 [[lean_lib]]
-name = "TamaProof"
-
-[[lean_lib]]
-name = "src"
-srcDir = "verity"
-
-[[lean_lib]]
-name = "spec"
-srcDir = "verity"
-
-[[lean_lib]]
-name = "proof"
-srcDir = "verity"
+name = "{proof_module}"
+srcDir = "verity/proof"
 "#,
         name = opts.name.replace('-', "_"),
         git = opts.verity_git,
-        rev = opts.verity_rev
+        rev = opts.verity_rev,
+        src_module = modules.src,
+        spec_module = modules.spec,
+        proof_module = modules.proof
     )
 }
 
@@ -417,11 +601,12 @@ fn lake_manifest_json(opts: &InitOptions) -> Result<String> {
     Ok(manifest + "\n")
 }
 
-fn contract_template(name: &str) -> String {
+fn contract_template(name: &str, config: &TamaConfig) -> String {
+    let src_module = config.module_root(ModuleKind::Src);
     format!(
         r#"import Contracts.Common
 
-namespace src
+namespace {src_module}
 
 open Verity hiding pure bind
 open Contracts
@@ -439,16 +624,16 @@ verity_contract {name} where
     let currentValue ← getStorage value
     return currentValue
 
-end src
+end {src_module}
 "#
     )
 }
 
-fn spec_template(name: &str) -> String {
+fn spec_template(_name: &str, implementation_module: &str, spec_module: &str) -> String {
     format!(
-        r#"import src.{name}
+        r#"import {implementation_module}
 
-namespace spec.{name}Spec
+namespace {spec_module}
 
 open Verity
 open Verity.EVM.Uint256
@@ -459,21 +644,27 @@ def setValue_spec (newValue : Uint256) (_s s' : ContractState) : Prop :=
 def getValue_spec (result : Uint256) (s : ContractState) : Prop :=
   result = s.storage 0
 
-end spec.{name}Spec
+end {spec_module}
 "#
     )
 }
 
-fn proof_template(name: &str) -> String {
+fn proof_template(
+    name: &str,
+    config: &TamaConfig,
+    spec_module: &str,
+    proof_module: &str,
+) -> String {
+    let src_module = config.module_root(ModuleKind::Src);
     format!(
-        r#"import spec.{name}Spec
+        r#"import {spec_module}
 
-namespace proof.{name}Proof
+namespace {proof_module}
 
 open Verity
 open Verity.EVM.Uint256
-open spec.{name}Spec
-open src.{name}
+open {spec_module}
+open {src_module}.{name}
 
 -- tama: discharges=setValue_spec
 theorem setValue_meets_spec (newValue : Uint256) (s : ContractState) :
@@ -487,7 +678,7 @@ theorem getValue_returns_value (s : ContractState) :
   getValue_spec result s := by
   sorry
 
-end proof.{name}Proof
+end {proof_module}
 "#
     )
 }
@@ -1194,10 +1385,11 @@ Set `ERC20LITE_OWNER=<address>` to choose an owner other than Foundry's sender.
 
 `.github/workflows/ci.yml` runs `tama doctor --fix` for checkout-only generated
 directories, verifies tracked dependency files did not change, then runs
-`tama doctor`, `tama check`, `tama build --locked`, `tama test`, and
-`tama audit` on every push and pull request. The first run installs Lean (elan),
-Foundry, solc 0.8.33, and Tama; later runs reuse caches keyed on
-`lake-manifest.json` and `tama.lock`.
+`tama doctor`, `tama build --locked`, `tama test`, and `tama audit` on every push
+and pull request. The first run installs Lean (elan), Foundry, Tama, and the solc
+version configured in `tama.toml`; later runs reuse Lake package and Lean build
+caches keyed on `lake-manifest.json`, `lakefile.toml`, `lean-toolchain`, and
+`tama.lock`.
 "#;
 
 #[cfg(test)]
@@ -1234,22 +1426,58 @@ metadata_bytecode_hash = "none"
     }
 
     fn write_custom_lakefile_roots(root: &Utf8Path) -> String {
-        let lakefile = read_to_string(&root.join("lakefile.toml"))
-            .unwrap()
-            .replace(r#"srcDir = "verity""#, r#"srcDir = "contracts""#);
+        let lakefile = legacy_lakefile("contracts");
         write_string(&root.join("lakefile.toml"), &lakefile).unwrap();
         lakefile
     }
 
+    fn write_legacy_lakefile(root: &Utf8Path, src_dir: &str) {
+        write_string(&root.join("lakefile.toml"), &legacy_lakefile(src_dir)).unwrap();
+    }
+
+    fn legacy_lakefile(src_dir: &str) -> String {
+        format!(
+            r#"name = "starter"
+version = "0.1.0"
+defaultTargets = ["TamaProof"]
+buildDir = "artifacts/lean"
+
+[[lean_lib]]
+name = "TamaSrc"
+
+[[lean_lib]]
+name = "TamaSpec"
+
+[[lean_lib]]
+name = "TamaProof"
+
+[[lean_lib]]
+name = "src"
+srcDir = "{src_dir}"
+
+[[lean_lib]]
+name = "spec"
+srcDir = "{src_dir}"
+
+[[lean_lib]]
+name = "proof"
+srcDir = "{src_dir}"
+"#
+        )
+    }
+
     fn move_starter_to_custom_paths(root: &Utf8Path) {
         for (from, to) in [
-            ("verity/src/ERC20Lite.lean", "contracts/src/ERC20Lite.lean"),
             (
-                "verity/spec/ERC20LiteSpec.lean",
+                "verity/src/MyProtocol/ERC20Lite.lean",
+                "contracts/src/ERC20Lite.lean",
+            ),
+            (
+                "verity/spec/MyProtocol/Spec/ERC20LiteSpec.lean",
                 "contracts/spec/ERC20LiteSpec.lean",
             ),
             (
-                "verity/proof/ERC20LiteProof.lean",
+                "verity/proof/MyProtocol/Proof/ERC20LiteProof.lean",
                 "contracts/proof/ERC20LiteProof.lean",
             ),
         ] {
@@ -1257,6 +1485,17 @@ metadata_bytecode_hash = "none"
             std::fs::create_dir_all(to.parent().unwrap()).unwrap();
             std::fs::rename(root.join(from), to).unwrap();
         }
+        write_string(&root.join("TamaSrc.lean"), "import src.ERC20Lite\n").unwrap();
+        write_string(
+            &root.join("TamaSpec.lean"),
+            "import TamaSrc\nimport spec.ERC20LiteSpec\n",
+        )
+        .unwrap();
+        write_string(
+            &root.join("TamaProof.lean"),
+            "import TamaSpec\nimport proof.ERC20LiteProof\n",
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1264,13 +1503,22 @@ metadata_bytecode_hash = "none"
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
         init(&root, InitOptions::default()).unwrap();
-        assert!(root.join("verity/src/ERC20Lite.lean").is_file());
+        let src_path = root.join("verity/src/MyProtocol/ERC20Lite.lean");
+        let spec_path = root.join("verity/spec/MyProtocol/Spec/ERC20LiteSpec.lean");
+        let proof_path = root.join("verity/proof/MyProtocol/Proof/ERC20LiteProof.lean");
+        assert!(src_path.is_file());
+        assert!(root.join("verity/src/MyProtocol.lean").is_file());
+        assert!(root.join("verity/spec/MyProtocol/Spec.lean").is_file());
+        assert!(root.join("verity/proof/MyProtocol/Proof.lean").is_file());
+        assert!(!root.join("TamaSrc.lean").exists());
+        assert!(!root.join("TamaSpec.lean").exists());
+        assert!(!root.join("TamaProof.lean").exists());
         assert!(root.join("test/verity/ERC20Lite.t.sol").is_file());
         assert!(root.join("script/ERC20Lite.s.sol").is_file());
         assert!(root.join("artifacts/abi").is_dir());
         assert!(!root.join("src/Counter.sol").exists());
         assert!(!root.join("test/Counter.t.sol").exists());
-        let proof = read_to_string(&root.join("verity/proof/ERC20LiteProof.lean")).unwrap();
+        let proof = read_to_string(&proof_path).unwrap();
         assert!(!proof.contains("sorry"));
         assert!(!proof.contains("Placeholder"));
         assert!(!proof.contains("kind="));
@@ -1320,13 +1568,16 @@ metadata_bytecode_hash = "none"
         assert!(script.contains("ERC20LiteDeployer.deploy(initialOwner)"));
         assert!(script.contains("ERC20LITE_OWNER"));
         assert!(script.contains("Run after `tama build`"));
-        let source = read_to_string(&root.join("verity/src/ERC20Lite.lean")).unwrap();
+        let source = read_to_string(&src_path).unwrap();
+        assert!(source.contains("namespace MyProtocol"));
         assert!(source.contains("This starter is intentionally small"));
         assert!(source.contains("Storage slots are explicit"));
         assert!(source.contains("function view balanceOf"));
         assert!(source.contains("function transferOwnership (newOwner : Address)"));
         assert!(!source.contains(r#"emit "Transfer""#));
-        let spec = read_to_string(&root.join("verity/spec/ERC20LiteSpec.lean")).unwrap();
+        let spec = read_to_string(&spec_path).unwrap();
+        assert!(spec.contains("import MyProtocol.ERC20Lite"));
+        assert!(spec.contains("namespace MyProtocol.Spec.ERC20LiteSpec"));
         assert!(spec.contains("def transfer_total_supply_preserved"));
         assert!(spec.contains("def transfer_balances_effect"));
         assert!(spec.contains("def mint_unauthorized_no_change"));
@@ -1337,15 +1588,20 @@ metadata_bytecode_hash = "none"
         assert!(!spec.contains("-- tama:"));
         let iface = read_to_string(&root.join("src/generated/verity/ERC20LiteIface.sol")).unwrap();
         assert!(iface.contains("function transferOwnership(address newOwner) external"));
-        let starter_readme = read_to_string(&root.join("docs/README.md")).unwrap();
+        let starter_readme = read_to_string(&root.join("README.md")).unwrap();
         assert!(starter_readme.contains("script/ERC20Lite.s.sol:DeployERC20Lite"));
         assert!(starter_readme.contains("ERC20LITE_OWNER"));
+        assert!(!root.join("docs/README.md").exists());
         let config = read_to_string(&root.join("tama.toml")).unwrap();
         assert!(config.contains(&format!("verity = \"{DEFAULT_VERITY_REV}\"")));
         assert!(config.contains("mirror_test = \"test/verity\""));
         assert!(config.contains("generated_solidity = \"src/generated/verity\""));
         assert!(config.contains("metadata_bytecode_hash = \"none\""));
         assert!(config.contains("yul_optimizer = true"));
+        assert!(config.contains("[modules]"));
+        assert!(config.contains("src = \"MyProtocol\""));
+        assert!(config.contains("spec = \"MyProtocol.Spec\""));
+        assert!(config.contains("proof = \"MyProtocol.Proof\""));
         let lake_manifest = read_to_string(&root.join("lake-manifest.json")).unwrap();
         assert!(lake_manifest.contains(&format!(r#""rev": "{DEFAULT_VERITY_REV}""#)));
         assert!(lake_manifest.contains(r#""name": "my_protocol""#));
@@ -1379,6 +1635,12 @@ metadata_bytecode_hash = "none"
             Some(true)
         );
         assert!(lock.inputs.contains_key("lake-manifest.json"));
+        assert!(lock.inputs.contains_key("verity/src/MyProtocol.lean"));
+        assert!(lock.inputs.contains_key("verity/spec/MyProtocol/Spec.lean"));
+        assert!(lock
+            .inputs
+            .contains_key("verity/proof/MyProtocol/Proof.lean"));
+        assert!(!lock.inputs.contains_key("TamaSrc.lean"));
         assert!(tama_config::lock_drift(&root, &lock).unwrap().is_empty());
     }
 
@@ -1396,12 +1658,16 @@ metadata_bytecode_hash = "none"
             "tama doctor --fix",
             "git diff --exit-code -- tama.lock lakefile.toml lake-manifest.json",
             "tama doctor",
-            "tama check",
             "tama build --locked",
             "tama test",
             "tama audit",
-            "foundry-rs/foundry-toolchain",
-            "solc-select",
+            "Cache Lean build artifacts",
+            "Cache elan and Foundry toolchains",
+            "lake exe cache get",
+            "env -u CI tama build --locked",
+            "env -u CI tama audit",
+            "tama toolchain solc",
+            "TAMA_SOLC",
             "https://tama.tools/install.sh",
         ] {
             assert!(
@@ -1409,7 +1675,13 @@ metadata_bytecode_hash = "none"
                 "starter workflow missing `{needle}`"
             );
         }
-        let starter_readme = read_to_string(&root.join("docs/README.md")).unwrap();
+        assert!(!workflow.contains("solc-select"));
+        assert!(!workflow.contains("foundry-rs/foundry-toolchain"));
+        assert!(!workflow.contains("elan-init.sh"));
+        assert!(!workflow.contains(".tama/solc/0.8.33"));
+        assert!(!workflow.contains("continue-on-error"));
+        assert!(!workflow.contains("tama check"));
+        let starter_readme = read_to_string(&root.join("README.md")).unwrap();
         assert!(starter_readme.contains("Continuous integration"));
         assert!(starter_readme.contains(".github/workflows/ci.yml"));
     }
@@ -1457,15 +1729,22 @@ metadata_bytecode_hash = "none"
         let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
         init(&root, InitOptions::default()).unwrap();
         scaffold_contract(&root, "TipJar").unwrap();
-        assert!(read_to_string(&root.join("TamaSrc.lean"))
+        assert!(read_to_string(&root.join("verity/src/MyProtocol.lean"))
             .unwrap()
-            .contains("import src.TipJar"));
-        let source = read_to_string(&root.join("verity/src/TipJar.lean")).unwrap();
+            .contains("import MyProtocol.TipJar"));
+        let source = read_to_string(&root.join("verity/src/MyProtocol/TipJar.lean")).unwrap();
+        assert!(source.contains("namespace MyProtocol"));
         assert!(source.contains("function view getValue"));
-        let spec = read_to_string(&root.join("verity/spec/TipJarSpec.lean")).unwrap();
+        let spec =
+            read_to_string(&root.join("verity/spec/MyProtocol/Spec/TipJarSpec.lean")).unwrap();
+        assert!(spec.contains("import MyProtocol.TipJar"));
+        assert!(spec.contains("namespace MyProtocol.Spec.TipJarSpec"));
         assert!(spec.contains("def setValue_spec"));
         assert!(spec.contains("def getValue_spec"));
-        let proof = read_to_string(&root.join("verity/proof/TipJarProof.lean")).unwrap();
+        let proof =
+            read_to_string(&root.join("verity/proof/MyProtocol/Proof/TipJarProof.lean")).unwrap();
+        assert!(proof.contains("import MyProtocol.Spec.TipJarSpec"));
+        assert!(proof.contains("namespace MyProtocol.Proof.TipJarProof"));
         assert!(proof.contains("((setValue newValue).run s).snd"));
         assert!(proof.contains("((getValue).run s).fst"));
         assert!(proof.contains("tama: discharges=setValue_spec"));
@@ -1491,17 +1770,17 @@ metadata_bytecode_hash = "none"
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
         init(&root, InitOptions::default()).unwrap();
-        let existing = root.join("verity/spec/TipJarSpec.lean");
+        let existing = root.join("verity/spec/MyProtocol/Spec/TipJarSpec.lean");
         write_string(&existing, "user spec\n").unwrap();
 
         let err = scaffold_contract(&root, "TipJar").unwrap_err();
 
         assert!(matches!(err, Error::AlreadyExists(path) if path == existing));
         assert_eq!(read_to_string(&existing).unwrap(), "user spec\n");
-        assert!(!root.join("verity/src/TipJar.lean").exists());
-        assert!(!read_to_string(&root.join("TamaSrc.lean"))
+        assert!(!root.join("verity/src/MyProtocol/TipJar.lean").exists());
+        assert!(!read_to_string(&root.join("verity/src/MyProtocol.lean"))
             .unwrap()
-            .contains("import src.TipJar"));
+            .contains("import MyProtocol.TipJar"));
     }
 
     #[test]
@@ -1509,9 +1788,10 @@ metadata_bytecode_hash = "none"
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().join("starter")).unwrap();
         init(&root, InitOptions::default()).unwrap();
-        let src_before = read_to_string(&root.join("TamaSrc.lean")).unwrap();
-        let spec_before = read_to_string(&root.join("TamaSpec.lean")).unwrap();
-        let proof_before = read_to_string(&root.join("TamaProof.lean")).unwrap();
+        let src_before = read_to_string(&root.join("verity/src/MyProtocol.lean")).unwrap();
+        let spec_before = read_to_string(&root.join("verity/spec/MyProtocol/Spec.lean")).unwrap();
+        let proof_before =
+            read_to_string(&root.join("verity/proof/MyProtocol/Proof.lean")).unwrap();
         write_string(&root.join("tama.lock"), "not = [valid").unwrap();
 
         let err = scaffold_contract(&root, "TipJar").unwrap_err();
@@ -1520,20 +1800,24 @@ metadata_bytecode_hash = "none"
             err,
             Error::Config(tama_config::Error::Toml { .. })
         ));
-        assert!(!root.join("verity/src/TipJar.lean").exists());
-        assert!(!root.join("verity/spec/TipJarSpec.lean").exists());
-        assert!(!root.join("verity/proof/TipJarProof.lean").exists());
+        assert!(!root.join("verity/src/MyProtocol/TipJar.lean").exists());
+        assert!(!root
+            .join("verity/spec/MyProtocol/Spec/TipJarSpec.lean")
+            .exists());
+        assert!(!root
+            .join("verity/proof/MyProtocol/Proof/TipJarProof.lean")
+            .exists());
         assert!(!root.join("test/verity/TipJar.t.sol").exists());
         assert_eq!(
-            read_to_string(&root.join("TamaSrc.lean")).unwrap(),
+            read_to_string(&root.join("verity/src/MyProtocol.lean")).unwrap(),
             src_before
         );
         assert_eq!(
-            read_to_string(&root.join("TamaSpec.lean")).unwrap(),
+            read_to_string(&root.join("verity/spec/MyProtocol/Spec.lean")).unwrap(),
             spec_before
         );
         assert_eq!(
-            read_to_string(&root.join("TamaProof.lean")).unwrap(),
+            read_to_string(&root.join("verity/proof/MyProtocol/Proof.lean")).unwrap(),
             proof_before
         );
     }
@@ -1545,6 +1829,7 @@ metadata_bytecode_hash = "none"
         init(&root, InitOptions::default()).unwrap();
         let lakefile_before = read_to_string(&root.join("lakefile.toml")).unwrap();
         write_custom_paths_config(&root);
+        write_legacy_lakefile(&root, "verity");
 
         let err = scaffold_contract(&root, "TipJar").unwrap_err();
 
@@ -1560,13 +1845,11 @@ metadata_bytecode_hash = "none"
         assert!(!root.join("contracts/spec/TipJarSpec.lean").exists());
         assert!(!root.join("contracts/proof/TipJarProof.lean").exists());
         assert!(!root.join("tests/verity/TipJar.t.sol").exists());
-        assert!(!read_to_string(&root.join("TamaSrc.lean"))
-            .unwrap()
-            .contains("import src.TipJar"));
         assert_eq!(
             read_to_string(&root.join("lakefile.toml")).unwrap(),
-            lakefile_before
+            legacy_lakefile("verity")
         );
+        assert_ne!(lakefile_before, legacy_lakefile("verity"));
     }
 
     #[test]
