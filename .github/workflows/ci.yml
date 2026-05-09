@@ -223,6 +223,7 @@ jobs:
           tama init "$tmp/base"
           tama --root "$tmp/base" build
           tama --root "$tmp/base" audit
+          rm -rf "$tmp/base/.lake"
       - name: Mutated audits fail closed
         shell: bash
         run: |
