@@ -45,9 +45,9 @@ my-protocol/
 ├── lake-manifest.json           # Lake dependency manifest; checked into source control
 ├── lean-toolchain               # Pinned Lean toolchain
 ├── verity/
-│   ├── src/                     # Flat EDSL implementations: ERC20Lite.lean, TipJar.lean, …
-│   ├── spec/                    # Flat specs/invariants: ERC20LiteSpec.lean, TipJarSpec.lean, …
-│   └── proof/                   # Flat proofs: ERC20LiteProof.lean, TipJarProof.lean, …
+│   ├── src/                     # Package-root EDSL modules, e.g. MyProtocol/ERC20Lite.lean
+│   ├── spec/                    # Package-root specs, e.g. MyProtocol/Spec/ERC20LiteSpec.lean
+│   └── proof/                   # Package-root proofs, e.g. MyProtocol/Proof/ERC20LiteProof.lean
 ├── src/
 │   └── generated/verity/        # Generated Solidity interfaces/deployers for Verity contracts
 ├── script/                      # Foundry deployment scripts
@@ -67,7 +67,11 @@ my-protocol/
     └── manifest/                # Contract manifests, selector maps, coverage reports, audit reports
 ```
 
-The layout is flat per layer. There are no per-contract directories and no forced `Basic`/`Correctness` split. Large contracts may be split using normal Lean imports, but Tama does not impose that structure.
+New projects use Lake-standard package-root modules configured by `[modules]`.
+Legacy projects without `[modules]` keep the original flat `src.*`, `spec.*`,
+`proof.*`, `TamaSrc`, `TamaSpec`, and `TamaProof` layout.
+Large contracts may be split using normal Lean imports, but Tama does not
+impose a `Basic`/`Correctness` directory split.
 
 ### 3.1 Per-contract file convention
 
@@ -75,9 +79,9 @@ For a contract `Foo`:
 
 | Path                                   | Role                                                  |
 | -------------------------------------- | ----------------------------------------------------- |
-| `verity/src/Foo.lean`                  | EDSL implementation using `verity_contract`           |
-| `verity/spec/FooSpec.lean`             | Specs, postconditions, invariants, frame helpers      |
-| `verity/proof/FooProof.lean`           | Theorems proving implementation satisfies the spec    |
+| `verity/src/MyProtocol/Foo.lean`       | EDSL implementation using `verity_contract`           |
+| `verity/spec/MyProtocol/Spec/FooSpec.lean` | Specs, postconditions, invariants, frame helpers  |
+| `verity/proof/MyProtocol/Proof/FooProof.lean` | Theorems proving implementation satisfies the spec |
 | `test/verity/Foo.t.sol`                | Foundry mirror/property tests                         |
 | `src/generated/verity/FooIface.sol`    | Generated Solidity interface                          |
 | `src/generated/verity/FooDeployer.sol` | Generated deployer embedding compiled Verity bytecode |
@@ -87,18 +91,18 @@ The Lean filenames intentionally avoid dotted suffixes like `Foo.spec.lean`. Dot
 
 `FooSpec.lean` is **pure Lean**. The build rejects the file if it contains any top-level form besides `import`, `namespace`, `open`, `def`, `#gen_spec`, and `end`; it also rejects any `-- tama:` comment in the file. Every top-level `def` and every `#gen_spec` invocation in the spec module is automatically an obligation tracked in the manifest. Helpers (`lemma`, auxiliary `def`s) must live outside the spec file.
 
-Example shape:
+Example shape with `src = "MyProtocol"` and `spec = "MyProtocol.Spec"`:
 
 ```lean
-import Foo
+import MyProtocol.Foo
 
-namespace FooSpec
+namespace MyProtocol.Spec.FooSpec
 
 def totalSupply_nonnegative := ...
 
 def transfer_preserves_totalSupply := ...
 
-end FooSpec
+end MyProtocol.Spec.FooSpec
 ```
 
 `FooProof.lean` imports `FooSpec.lean` and contains the theorems that discharge those obligations. Each discharging theorem carries a `-- tama: discharges=<spec_name>` comment directly above it (multiple comma-separated spec names are allowed, with no whitespace after commas). Multiple theorems may discharge one spec; one theorem may discharge several. Theorems and `lemma`s without a `discharges=` tag are silently treated as helpers and never appear in the manifest.
@@ -129,6 +133,11 @@ mirror_test = "test/verity"              # Foundry mirror tests; normally under 
 generated_solidity = "src/generated/verity"
 out = "artifacts"                        # Tama artifacts root
 
+[modules]
+src = "MyProtocol"                       # builds with `lake build MyProtocol`
+spec = "MyProtocol.Spec"                 # builds with `lake build MyProtocol.Spec`
+proof = "MyProtocol.Proof"               # builds with `lake build MyProtocol.Proof`
+
 [yul]
 solc = "0.8.33"                          # solc version Tama uses for generated Yul only
 evm_version = "cancun"
@@ -151,6 +160,19 @@ metadata_bytecode_hash = "none"          # reproducible bytecode by default
 Tama-owned path must be a non-empty relative path inside the project. Absolute
 paths, `..` components, and root-collapsing values such as `.` are rejected
 before Tama writes or removes files.
+
+`[modules]` is optional for compatibility. When present, each value must be a
+Lean module name and must correspond to an aggregate file under the matching
+path:
+
+- `modules.src = "MyProtocol"` -> `verity/src/MyProtocol.lean`
+- `modules.spec = "MyProtocol.Spec"` -> `verity/spec/MyProtocol/Spec.lean`
+- `modules.proof = "MyProtocol.Proof"` -> `verity/proof/MyProtocol/Proof.lean`
+
+Those aggregate files import the per-contract modules. `tama check` builds the
+configured source and spec aggregates, for example `lake build MyProtocol
+MyProtocol.Spec`. `tama build` builds the configured proof aggregate, for
+example `lake build MyProtocol.Proof`.
 
 `tama.toml` and `foundry.toml` are intentionally non-overlapping:
 
@@ -233,7 +255,7 @@ Illustrative shape:
 ```toml
 name = "my_protocol"
 version = "0.1.0"
-defaultTargets = ["TamaProof"]
+defaultTargets = ["MyProtocol.Proof"]
 buildDir = "artifacts/lean"
 
 [[require]]
@@ -241,11 +263,17 @@ name = "verity"
 git = "https://github.com/lfglabs-dev/verity"
 rev = "v0.5.0"
 
-# Tama generates concrete Lake library/target entries using Lake's supported
-# srcDir/root/glob configuration. The goal is:
-# - TamaSrc:   verity/src/**/*.lean
-# - TamaSpec:  verity/src/**/*.lean + verity/spec/**/*.lean
-# - TamaProof: verity/src/**/*.lean + verity/spec/**/*.lean + verity/proof/**/*.lean
+[[lean_lib]]
+name = "MyProtocol"
+srcDir = "verity/src"
+
+[[lean_lib]]
+name = "MyProtocol.Spec"
+srcDir = "verity/spec"
+
+[[lean_lib]]
+name = "MyProtocol.Proof"
+srcDir = "verity/proof"
 ```
 
 If a project replaces `lakefile.toml` with `lakefile.lean`, Tama still runs `lake` normally, but automatic `tama install` / `remove` / `doctor --fix` edits are not guaranteed. Tama should error with explicit manual instructions rather than silently rewriting a Lean lakefile.
@@ -263,14 +291,14 @@ Example:
   "schema": "tama.contract-manifest.v1",
   "contract": "ERC20Lite",
   "source": {
-    "implementation": "verity/src/ERC20Lite.lean",
-    "spec": "verity/spec/ERC20LiteSpec.lean",
-    "proof": "verity/proof/ERC20LiteProof.lean"
+    "implementation": "verity/src/MyProtocol/ERC20Lite.lean",
+    "spec": "verity/spec/MyProtocol/Spec/ERC20LiteSpec.lean",
+    "proof": "verity/proof/MyProtocol/Proof/ERC20LiteProof.lean"
   },
   "lean": {
-    "implementation_module": "src.ERC20Lite",
-    "spec_module": "spec.ERC20LiteSpec",
-    "proof_module": "proof.ERC20LiteProof"
+    "implementation_module": "MyProtocol.ERC20Lite",
+    "spec_module": "MyProtocol.Spec.ERC20LiteSpec",
+    "proof_module": "MyProtocol.Proof.ERC20LiteProof"
   },
   "abi": {
     "constructor": null,
@@ -324,10 +352,10 @@ Example:
     {
       "id": "ERC20Lite.transfer_preserves_total_supply",
       "name": "transfer_preserves_total_supply",
-      "lean_decl": "spec.ERC20LiteSpec.transfer_preserves_total_supply",
+      "lean_decl": "MyProtocol.Spec.ERC20LiteSpec.transfer_preserves_total_supply",
       "contract": "ERC20Lite",
       "dischargers": [
-        "proof.ERC20LiteProof.transfer_total_supply_preserved_after_run"
+        "MyProtocol.Proof.ERC20LiteProof.transfer_total_supply_preserved_after_run"
       ],
       "mirrors": [
         "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply"
@@ -494,9 +522,14 @@ Proof skeletons may contain explicit `sorry` TODOs tied to spec dischargers
 and fuzz-shaped Foundry mirrors. They are acceptable for local scaffolding,
 but `tama audit trust-boundary` must reject them before release.
 
-`tama new` should not rewrite `lakefile.toml`; the initial Lake targets/globs must already cover new flat files under the configured source/spec/proof paths.
+`tama new` should not rewrite `lakefile.toml`; the initial Lake libraries must
+already cover new modules under the configured source/spec/proof paths.
 
-If `tama.toml` paths are changed after init, the user-owned Lakefile must already map the `src`, `spec`, and `proof` libraries to those roots. `tama new` should refuse before writing files when the configured paths and Lakefile module roots disagree.
+If `tama.toml` paths are changed after init, the user-owned Lakefile must
+already map the configured module libraries to those roots. Legacy projects
+without `[modules]` still use the `src`, `spec`, and `proof` libraries. `tama
+new` refuses before writing files when the configured paths and Lakefile module
+roots disagree.
 
 ### `tama check`
 
@@ -504,8 +537,8 @@ Fast Lean check for implementation and spec modules only.
 
 Equivalent behavior:
 
-1. Build the implementation target.
-2. Build the spec target.
+1. Build the configured implementation aggregate target.
+2. Build the configured spec aggregate target.
 3. Do not import proof modules.
 4. Do not run Verity Yul codegen.
 5. Do not run `solc`.

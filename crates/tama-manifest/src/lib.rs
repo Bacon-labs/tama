@@ -104,6 +104,8 @@ pub struct Param {
     pub name: String,
     #[serde(rename = "type")]
     pub ty: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<Param>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -626,17 +628,11 @@ fn is_identifier(value: &str) -> bool {
 }
 
 fn function_signature(function: &Function) -> String {
-    signature_from_types(
-        &function.name,
-        function.inputs.iter().map(|param| param.ty.as_str()),
-    )
+    signature_from_params(&function.name, function.inputs.iter())
 }
 
 fn error_signature(error: &ErrorEntry) -> String {
-    signature_from_types(
-        &error.name,
-        error.inputs.iter().map(|param| param.ty.as_str()),
-    )
+    signature_from_params(&error.name, error.inputs.iter())
 }
 
 fn event_signature(event: &Event) -> String {
@@ -648,6 +644,32 @@ fn event_signature(event: &Event) -> String {
 
 fn signature_from_types<'a>(name: &str, types: impl Iterator<Item = &'a str>) -> String {
     format!("{}({})", name, types.collect::<Vec<_>>().join(","))
+}
+
+fn signature_from_params<'a>(name: &str, params: impl Iterator<Item = &'a Param>) -> String {
+    format!(
+        "{}({})",
+        name,
+        params.map(param_abi_type).collect::<Vec<_>>().join(",")
+    )
+}
+
+fn param_abi_type(param: &Param) -> String {
+    if param.components.is_empty() {
+        param.ty.clone()
+    } else {
+        let suffix = param.ty.strip_prefix("tuple").unwrap_or("");
+        format!(
+            "({}){}",
+            param
+                .components
+                .iter()
+                .map(param_abi_type)
+                .collect::<Vec<_>>()
+                .join(","),
+            suffix
+        )
+    }
 }
 
 fn validate_hex_slot(slot: &str) -> std::result::Result<(), &'static str> {
@@ -668,7 +690,7 @@ fn validate_params(params: &[Param], label: &str, owner: &str) -> std::result::R
                 "{label} {index} for `{owner}` type cannot be empty"
             ));
         }
-        if !is_supported_abi_type(&param.ty) {
+        if !is_supported_param(param) {
             return Err(format!(
                 "{label} {index} for `{owner}` has unsupported ABI type `{}`",
                 param.ty
@@ -708,7 +730,112 @@ fn validate_event_fields(fields: &[EventField], event: &str) -> std::result::Res
 }
 
 pub fn is_supported_abi_type(ty: &str) -> bool {
-    matches!(ty, "address" | "bool" | "uint256")
+    is_supported_abi_type_inner(ty.trim())
+}
+
+fn is_supported_param(param: &Param) -> bool {
+    if param.components.is_empty() {
+        return is_supported_abi_type(&param.ty);
+    }
+    let Some(suffix) = param.ty.strip_prefix("tuple") else {
+        return false;
+    };
+    (suffix.is_empty() || is_supported_array_suffix(suffix))
+        && param.components.iter().all(is_supported_param)
+}
+
+fn is_supported_abi_type_inner(ty: &str) -> bool {
+    if let Some((base, suffix)) = split_array_suffix(ty) {
+        return !base.is_empty()
+            && is_supported_array_suffix(suffix)
+            && is_supported_abi_type_inner(base);
+    }
+    if ty.starts_with('(') {
+        return tuple_components(ty)
+            .map(|components| components.into_iter().all(is_supported_abi_type_inner))
+            .unwrap_or(false);
+    }
+    matches!(ty, "address" | "bool" | "uint256" | "bytes" | "bytes32")
+}
+
+fn split_array_suffix(ty: &str) -> Option<(&str, &str)> {
+    if !ty.ends_with(']') {
+        return None;
+    }
+    let start = ty.rfind('[')?;
+    Some((&ty[..start], &ty[start..]))
+}
+
+fn is_supported_array_suffix(suffix: &str) -> bool {
+    let mut rest = suffix;
+    while let Some(after_open) = rest.strip_prefix('[') {
+        let Some(close) = after_open.find(']') else {
+            return false;
+        };
+        let len = &after_open[..close];
+        if !len.is_empty() && !len.chars().all(|ch| ch.is_ascii_digit()) {
+            return false;
+        }
+        rest = &after_open[close + 1..];
+    }
+    rest.is_empty()
+}
+
+fn tuple_components(ty: &str) -> Option<Vec<&str>> {
+    let mut depth = 0usize;
+    let mut end = None;
+    for (index, ch) in ty.char_indices() {
+        match ch {
+            '(' => depth = depth.checked_add(1)?,
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    end = Some(index);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end?;
+    if !ty[end + 1..].is_empty() {
+        return None;
+    }
+    let body = &ty[1..end];
+    if body.trim().is_empty() {
+        return None;
+    }
+    split_top_level(body)
+}
+
+fn split_top_level(body: &str) -> Option<Vec<&str>> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, ch) in body.char_indices() {
+        match ch {
+            '(' => depth = depth.checked_add(1)?,
+            ')' => depth = depth.checked_sub(1)?,
+            ',' if depth == 0 => {
+                let part = body[start..index].trim();
+                if part.is_empty() {
+                    return None;
+                }
+                parts.push(part);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+    let part = body[start..].trim();
+    if part.is_empty() {
+        return None;
+    }
+    parts.push(part);
+    Some(parts)
 }
 
 #[cfg(test)]
@@ -741,10 +868,12 @@ mod tests {
                         Param {
                             name: "to".to_string(),
                             ty: "address".to_string(),
+                            components: Vec::new(),
                         },
                         Param {
                             name: "amount".to_string(),
                             ty: "uint256".to_string(),
+                            components: Vec::new(),
                         },
                     ],
                     outputs: vec![],
@@ -902,11 +1031,11 @@ mod tests {
         ));
 
         let mut unsupported_function_param = manifest();
-        unsupported_function_param.abi.functions[0].inputs[0].ty = "bytes32".to_string();
+        unsupported_function_param.abi.functions[0].inputs[0].ty = "bytes4".to_string();
         assert!(matches!(
             unsupported_function_param.validate(),
             Err(Error::Invalid { message, .. }) if message.contains("function input")
-                && message.contains("unsupported ABI type `bytes32`")
+                && message.contains("unsupported ABI type `bytes4`")
         ));
 
         let mut unsupported_event_field = manifest();
@@ -948,6 +1077,7 @@ mod tests {
             inputs: vec![Param {
                 name: "owner".to_string(),
                 ty: " ".to_string(),
+                components: Vec::new(),
             }],
         });
 

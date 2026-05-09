@@ -3,11 +3,13 @@ use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
+#[cfg(test)]
+use camino::Utf8Component;
+use camino::{Utf8Path, Utf8PathBuf};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tama_config::{TamaConfig, TamaLock};
+use tama_config::{ModuleKind, TamaConfig, TamaLock};
 use tama_manifest::{
     Abi, ArtifactPaths, Constructor, ContractManifest, ErrorEntry, Event, Function, LeanModules,
     Obligation, Param, SourcePaths, StorageEntry, SCHEMA,
@@ -78,19 +80,21 @@ impl Lake {
         }
     }
 
-    pub fn check_src_and_spec(&self) -> Result<()> {
+    pub fn check_src_and_spec(&self, config: &TamaConfig) -> Result<()> {
+        let targets = config.check_targets();
         run_owned(
             "lake",
-            &lake_build_args(&["TamaSrc", "TamaSpec"]),
+            &lake_build_args(&[targets[0].as_str(), targets[1].as_str()]),
             &self.root,
             self.json_output,
         )
     }
 
-    pub fn build_proofs(&self) -> Result<()> {
+    pub fn build_proofs(&self, config: &TamaConfig) -> Result<()> {
+        let target = config.proof_target();
         run_owned(
             "lake",
-            &lake_build_args(&["TamaProof"]),
+            &lake_build_args(&[target.as_str()]),
             &self.root,
             self.json_output,
         )
@@ -112,7 +116,7 @@ impl Lake {
             )
         } else {
             let mut modules =
-                discover_modules(&self.root.join(&config.paths.src), "src")?.join("\n");
+                discover_configured_modules(&self.root, config, ModuleKind::Src)?.join("\n");
             if !modules.is_empty() {
                 modules.push('\n');
             }
@@ -168,7 +172,7 @@ impl Pipeline {
             "proof-check",
             "Lean elaborates implementations, specs, and proofs",
             "proof modules accepted by Lake",
-            || lake.build_proofs(),
+            || lake.build_proofs(&config),
         )?;
         progress.run(
             "verity-codegen",
@@ -694,11 +698,7 @@ fn discover_contract_module(
         contract,
         &format!("{contract}.lean"),
     )?;
-    module_name_from_lean_path(
-        "src",
-        &root.join(&config.paths.src),
-        &root.join(implementation),
-    )
+    Ok(config.lean_module_for_path(root, ModuleKind::Src, &root.join(implementation))?)
 }
 
 fn discover_contract_sources(
@@ -725,21 +725,13 @@ fn discover_contract_sources(
         &format!("{contract}Proof.lean"),
     )?;
     let modules = LeanModules {
-        implementation_module: module_name_from_lean_path(
-            "src",
-            &root.join(&config.paths.src),
+        implementation_module: config.lean_module_for_path(
+            root,
+            ModuleKind::Src,
             &root.join(&implementation),
         )?,
-        spec_module: module_name_from_lean_path(
-            "spec",
-            &root.join(&config.paths.spec),
-            &root.join(&spec),
-        )?,
-        proof_module: module_name_from_lean_path(
-            "proof",
-            &root.join(&config.paths.proof),
-            &root.join(&proof),
-        )?,
+        spec_module: config.lean_module_for_path(root, ModuleKind::Spec, &root.join(&spec))?,
+        proof_module: config.lean_module_for_path(root, ModuleKind::Proof, &root.join(&proof))?,
     };
     let paths = SourcePaths {
         implementation,
@@ -1041,6 +1033,17 @@ fn remove_generated_file_if_exists(path: &Utf8Path) -> Result<()> {
 fn interface_sol(manifest: &ContractManifest) -> String {
     let mut out = String::from("// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n\n");
     out.push_str(&format!("interface {}Iface {{\n", manifest.contract));
+    for decl in tuple_structs(manifest) {
+        out.push_str(&format!("    struct {} {{\n", decl.name));
+        for (index, field) in decl.fields.iter().enumerate() {
+            out.push_str(&format!(
+                "        {} {};\n",
+                field.ty,
+                solidity_field_name(&field.name, index)
+            ));
+        }
+        out.push_str("    }\n");
+    }
     for event in &manifest.abi.events {
         out.push_str("    event ");
         out.push_str(&event.name);
@@ -1066,14 +1069,17 @@ fn interface_sol(manifest: &ContractManifest) -> String {
         out.push_str(&format!(
             "    error {}({});\n",
             error.name,
-            solidity_params(&error.inputs)
+            solidity_params(&error.inputs, SolidityParamContext::Error)
         ));
     }
     for function in &manifest.abi.functions {
         let returns = if function.outputs.is_empty() {
             String::new()
         } else {
-            format!(" returns ({})", solidity_params(&function.outputs))
+            format!(
+                " returns ({})",
+                solidity_params(&function.outputs, SolidityParamContext::Return)
+            )
         };
         let mutability = match function.mutability.as_str() {
             "view" | "pure" | "payable" => format!(" {}", function.mutability),
@@ -1082,7 +1088,7 @@ fn interface_sol(manifest: &ContractManifest) -> String {
         out.push_str(&format!(
             "    function {}({}) external{}{};\n",
             function.name,
-            solidity_params(&function.inputs),
+            solidity_function_params(function),
             mutability,
             returns
         ));
@@ -1130,7 +1136,12 @@ fn constructor_params(manifest: &ContractManifest) -> (String, String) {
         .enumerate()
         .map(|(index, param)| {
             let name = constructor_param_name(param, index);
-            format!("{} {}", param.ty, name)
+            format!(
+                "{}{} {}",
+                param.ty,
+                solidity_data_location(param, SolidityParamContext::Constructor),
+                name
+            )
         })
         .collect::<Vec<_>>();
     let args = constructor
@@ -1150,18 +1161,128 @@ fn constructor_param_name(param: &Param, index: usize) -> String {
     }
 }
 
-fn solidity_params(params: &[Param]) -> String {
-    params
+#[derive(Clone, Copy)]
+enum SolidityParamContext {
+    Constructor,
+    Error,
+    FunctionInput,
+    Return,
+}
+
+struct TupleStruct {
+    name: String,
+    fields: Vec<Param>,
+}
+
+fn tuple_structs(manifest: &ContractManifest) -> Vec<TupleStruct> {
+    let mut structs = Vec::new();
+    for function in &manifest.abi.functions {
+        for (index, param) in function.inputs.iter().enumerate() {
+            if !param.components.is_empty() {
+                structs.push(TupleStruct {
+                    name: tuple_struct_name(function, param, index),
+                    fields: param.components.clone(),
+                });
+            }
+        }
+    }
+    structs
+}
+
+fn tuple_struct_name(function: &Function, param: &Param, index: usize) -> String {
+    let suffix = if param.name.is_empty() {
+        format!("Arg{index}")
+    } else {
+        pascal_case_identifier(&param.name)
+    };
+    format!("{}{}", pascal_case_identifier(&function.name), suffix)
+}
+
+fn pascal_case_identifier(value: &str) -> String {
+    let mut out = String::new();
+    let mut capitalize = true;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if capitalize {
+                out.push(ch.to_ascii_uppercase());
+                capitalize = false;
+            } else {
+                out.push(ch);
+            }
+        } else {
+            capitalize = true;
+        }
+    }
+    if out.is_empty() {
+        "Arg".to_string()
+    } else {
+        out
+    }
+}
+
+fn solidity_field_name(name: &str, index: usize) -> String {
+    if name.is_empty() {
+        format!("field{index}")
+    } else {
+        name.to_string()
+    }
+}
+
+fn solidity_function_params(function: &Function) -> String {
+    function
+        .inputs
         .iter()
-        .map(|param| {
-            if param.name.is_empty() {
+        .enumerate()
+        .map(|(index, param)| {
+            let ty = if param.components.is_empty() {
                 param.ty.clone()
             } else {
-                format!("{} {}", param.ty, param.name)
-            }
+                tuple_struct_name(function, param, index)
+            };
+            solidity_param_decl(&ty, param, SolidityParamContext::FunctionInput)
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn solidity_params(params: &[Param], context: SolidityParamContext) -> String {
+    params
+        .iter()
+        .map(|param| solidity_param_decl(&param.ty, param, context))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn solidity_param_decl(ty: &str, param: &Param, context: SolidityParamContext) -> String {
+    let location = solidity_data_location(param, context);
+    if param.name.is_empty() {
+        format!("{ty}{location}")
+    } else {
+        format!("{ty}{location} {}", param.name)
+    }
+}
+
+fn solidity_data_location(param: &Param, context: SolidityParamContext) -> &'static str {
+    let needs_location = param
+        .components
+        .iter()
+        .any(solidity_type_needs_data_location)
+        || solidity_type_needs_data_location(param);
+    if !needs_location {
+        return "";
+    }
+    match context {
+        SolidityParamContext::FunctionInput => " calldata",
+        SolidityParamContext::Constructor | SolidityParamContext::Return => " memory",
+        SolidityParamContext::Error => "",
+    }
+}
+
+fn solidity_type_needs_data_location(param: &Param) -> bool {
+    param.ty == "bytes"
+        || param.ty == "string"
+        || param.ty.ends_with(']')
+        || !param.components.is_empty()
 }
 
 fn run_owned(program: &str, args: &[String], cwd: &Utf8Path, json_output: bool) -> Result<()> {
@@ -1313,6 +1434,7 @@ impl Drop for EvmyulConformanceGuard {
     }
 }
 
+#[cfg(test)]
 fn discover_modules(src: &Utf8Path, module_root: &str) -> Result<Vec<String>> {
     let mut modules = Vec::new();
     walk_files(src, &mut |path| {
@@ -1325,6 +1447,29 @@ fn discover_modules(src: &Utf8Path, module_root: &str) -> Result<Vec<String>> {
     Ok(modules)
 }
 
+fn discover_configured_modules(
+    root: &Utf8Path,
+    config: &TamaConfig,
+    kind: ModuleKind,
+) -> Result<Vec<String>> {
+    let dir = root.join(config.module_path(kind));
+    let aggregate = config.aggregate_module(kind).module;
+    let mut modules = Vec::new();
+    walk_files(&dir, &mut |path| {
+        if path.extension() == Some("lean") {
+            let module = config.lean_module_for_path(root, kind, path)?;
+            if config.modules.is_some() && module == aggregate {
+                return Ok(());
+            }
+            modules.push(module);
+        }
+        Ok(())
+    })?;
+    modules.sort();
+    Ok(modules)
+}
+
+#[cfg(test)]
 fn module_name_from_lean_path(
     module_root: &str,
     base_dir: &Utf8Path,
@@ -1444,7 +1589,7 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
                     entry
                         .inputs
                         .iter()
-                        .map(|param| param.ty.as_str())
+                        .map(abi_param_type)
                         .collect::<Vec<_>>()
                         .join(",")
                 );
@@ -1475,7 +1620,7 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
                     entry
                         .inputs
                         .iter()
-                        .map(|param| param.ty.as_str())
+                        .map(abi_param_type)
                         .collect::<Vec<_>>()
                         .join(",")
                 );
@@ -1503,7 +1648,7 @@ fn parse_abi(path: &Utf8Path) -> Result<Abi> {
                     entry
                         .inputs
                         .iter()
-                        .map(|param| param.ty.as_str())
+                        .map(abi_param_type)
                         .collect::<Vec<_>>()
                         .join(",")
                 );
@@ -1531,7 +1676,7 @@ fn validate_abi_params(path: &Utf8Path, label: &str, params: &[AbiParam]) -> Res
                 "{label} {index} type cannot be empty in {path}"
             )));
         }
-        if !tama_manifest::is_supported_abi_type(&param.ty) {
+        if !is_supported_abi_param(param) {
             return Err(Error::Adapter(format!(
                 "{label} {index} has unsupported ABI type `{}` in {path}",
                 param.ty
@@ -1539,6 +1684,35 @@ fn validate_abi_params(path: &Utf8Path, label: &str, params: &[AbiParam]) -> Res
         }
     }
     Ok(())
+}
+
+fn is_supported_abi_param(param: &AbiParam) -> bool {
+    if param.components.is_empty() {
+        return tama_manifest::is_supported_abi_type(&param.ty);
+    }
+    let Some(suffix) = param.ty.strip_prefix("tuple") else {
+        return false;
+    };
+    (suffix.is_empty() || tama_manifest::is_supported_abi_type(&format!("uint256{suffix}")))
+        && param.components.iter().all(is_supported_abi_param)
+}
+
+fn abi_param_type(param: &AbiParam) -> String {
+    if param.components.is_empty() {
+        param.ty.clone()
+    } else {
+        let suffix = param.ty.strip_prefix("tuple").unwrap_or("");
+        format!(
+            "({}){}",
+            param
+                .components
+                .iter()
+                .map(abi_param_type)
+                .collect::<Vec<_>>()
+                .join(","),
+            suffix
+        )
+    }
 }
 
 fn abi_entry_name(path: &Utf8Path, kind: &str, name: Option<String>) -> Result<String> {
@@ -1587,14 +1761,7 @@ fn parse_storage(report: &Value, contract: &str) -> Result<Vec<StorageEntry>> {
                     ))
                 })?
                 .to_string();
-            let slot = field
-                .get("canonicalSlot")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| {
-                    Error::Adapter(format!(
-                        "{contract}.{name} layout report field is missing `canonicalSlot`"
-                    ))
-                })?;
+            let slot = canonical_slot_hex(field.get("canonicalSlot"), contract, &name)?;
             let ty_value = field.get("type").ok_or_else(|| {
                 Error::Adapter(format!(
                     "{contract}.{name} layout report field is missing `type`"
@@ -1604,13 +1771,88 @@ fn parse_storage(report: &Value, contract: &str) -> Result<Vec<StorageEntry>> {
             Ok(StorageEntry {
                 name,
                 ty,
-                slot: format!("0x{slot:02x}"),
+                slot,
                 offset: 0,
                 width_bytes: 32,
                 encoding,
             })
         })
         .collect()
+}
+
+fn canonical_slot_hex(value: Option<&Value>, contract: &str, field: &str) -> Result<String> {
+    let Some(value) = value else {
+        return Err(Error::Adapter(format!(
+            "{contract}.{field} layout report field is missing `canonicalSlot`"
+        )));
+    };
+    let raw = match value {
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => text.trim().to_string(),
+        _ => {
+            return Err(Error::Adapter(format!(
+                "{contract}.{field} layout report field has non-numeric `canonicalSlot`"
+            )))
+        }
+    };
+    slot_literal_to_hex(&raw).ok_or_else(|| {
+        Error::Adapter(format!(
+            "{contract}.{field} layout report field has invalid `canonicalSlot`"
+        ))
+    })
+}
+
+fn slot_literal_to_hex(raw: &str) -> Option<String> {
+    let body = if let Some(hex) = raw.strip_prefix("0x") {
+        if hex.is_empty() || hex.len() > 64 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return None;
+        }
+        hex.to_ascii_lowercase()
+    } else {
+        decimal_to_hex(raw)?
+    };
+    let trimmed = body.trim_start_matches('0');
+    let normalized = if trimmed.is_empty() { "0" } else { trimmed };
+    if normalized.len() > 64 {
+        return None;
+    }
+    let padded = if normalized.len() == 1 {
+        format!("0{normalized}")
+    } else {
+        normalized.to_string()
+    };
+    Some(format!("0x{padded}"))
+}
+
+fn decimal_to_hex(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || !trimmed.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let mut digits = trimmed.bytes().map(|byte| byte - b'0').collect::<Vec<_>>();
+    while digits.len() > 1 && digits.first() == Some(&0) {
+        digits.remove(0);
+    }
+    if digits.iter().all(|digit| *digit == 0) {
+        return Some("0".to_string());
+    }
+    let mut out = Vec::new();
+    while !digits.is_empty() && digits.iter().any(|digit| *digit != 0) {
+        let mut carry = 0u16;
+        let mut quotient = Vec::with_capacity(digits.len());
+        for digit in digits {
+            let value = carry * 10 + digit as u16;
+            let next = value / 16;
+            carry = value % 16;
+            if !quotient.is_empty() || next != 0 {
+                quotient.push(next as u8);
+            }
+        }
+        out.push(std::char::from_digit(carry as u32, 16)?);
+        digits = quotient;
+    }
+    out.reverse();
+    Some(out.into_iter().collect())
 }
 
 fn storage_type(value: &Value, contract: &str, field: &str) -> Result<(String, String)> {
@@ -2357,13 +2599,22 @@ struct AbiParam {
     ty: String,
     #[serde(default)]
     indexed: bool,
+    #[serde(default)]
+    components: Vec<AbiParam>,
 }
 
 impl From<AbiParam> for Param {
     fn from(value: AbiParam) -> Self {
+        let ty = if value.components.is_empty() {
+            value.ty
+        } else {
+            let suffix = value.ty.strip_prefix("tuple").unwrap_or("").to_string();
+            format!("tuple{suffix}")
+        };
         Self {
             name: value.name,
-            ty: value.ty,
+            ty,
+            components: value.components.into_iter().map(Param::from).collect(),
         }
     }
 }
@@ -2521,7 +2772,7 @@ mod tests {
 
     #[test]
     fn bridge_generation_contains_header_sensitive_body() {
-        let manifest = ContractManifest {
+        let mut manifest = ContractManifest {
             schema: SCHEMA.to_string(),
             contract: "Counter".to_string(),
             source: SourcePaths {
@@ -2546,6 +2797,7 @@ mod tests {
                     outputs: vec![Param {
                         name: "".to_string(),
                         ty: "uint256".to_string(),
+                        components: Vec::new(),
                     }],
                 }],
                 events: vec![],
@@ -2564,8 +2816,72 @@ mod tests {
                 deployer: "src/generated/verity/CounterDeployer.sol".into(),
             },
         };
+        manifest.abi.functions.push(Function {
+            name: "setProof".to_string(),
+            signature: "setProof(bytes,bytes32[])".to_string(),
+            selector: tama_common::function_selector("setProof(bytes,bytes32[])"),
+            visibility: "external".to_string(),
+            mutability: "nonpayable".to_string(),
+            inputs: vec![
+                Param {
+                    name: "proof".to_string(),
+                    ty: "bytes".to_string(),
+                    components: Vec::new(),
+                },
+                Param {
+                    name: "publicInputs".to_string(),
+                    ty: "bytes32[]".to_string(),
+                    components: Vec::new(),
+                },
+            ],
+            outputs: vec![],
+        });
+        manifest.abi.functions.push(Function {
+            name: "validateUserOp".to_string(),
+            signature: "validateUserOp((address,uint256,bytes),bytes32)".to_string(),
+            selector: tama_common::function_selector(
+                "validateUserOp((address,uint256,bytes),bytes32)",
+            ),
+            visibility: "external".to_string(),
+            mutability: "nonpayable".to_string(),
+            inputs: vec![
+                Param {
+                    name: "userOp".to_string(),
+                    ty: "tuple".to_string(),
+                    components: vec![
+                        Param {
+                            name: "sender".to_string(),
+                            ty: "address".to_string(),
+                            components: Vec::new(),
+                        },
+                        Param {
+                            name: "nonce".to_string(),
+                            ty: "uint256".to_string(),
+                            components: Vec::new(),
+                        },
+                        Param {
+                            name: "callData".to_string(),
+                            ty: "bytes".to_string(),
+                            components: Vec::new(),
+                        },
+                    ],
+                },
+                Param {
+                    name: "opHash".to_string(),
+                    ty: "bytes32".to_string(),
+                    components: Vec::new(),
+                },
+            ],
+            outputs: vec![],
+        });
+        let interface = interface_sol(&manifest);
         assert!(interface_sol(&manifest)
             .contains("function getCount() external view returns (uint256);"));
+        assert!(interface.contains(
+            "function setProof(bytes calldata proof, bytes32[] calldata publicInputs) external;"
+        ));
+        assert!(interface.contains("struct ValidateUserOpUserOp"));
+        assert!(interface.contains("function validateUserOp(ValidateUserOpUserOp calldata userOp, bytes32 opHash) external;"));
     }
 
     #[test]
@@ -3233,6 +3549,49 @@ contract ConcreteFooTest is FooTestBase {
     }
 
     #[test]
+    fn configured_modules_drive_discovery_and_contract_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("verity/src/Tamago.lean"),
+            "import Tamago.Counter\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("verity/src/Tamago/Tokens/ERC20.lean"),
+            "namespace Tamago.Tokens.ERC20\nend Tamago.Tokens.ERC20\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("verity/spec/Tamago/Spec/Tokens/ERC20Spec.lean"),
+            "namespace Tamago.Spec.Tokens.ERC20Spec\ndef total_spec : Prop := True\nend Tamago.Spec.Tokens.ERC20Spec\n",
+        )
+        .unwrap();
+        tama_common::write_string(
+            &root.join("verity/proof/Tamago/Proof/Tokens/ERC20Proof.lean"),
+            "namespace Tamago.Proof.Tokens.ERC20Proof\n-- tama: discharges=total_spec\ntheorem total_ok : True := by trivial\nend Tamago.Proof.Tokens.ERC20Proof\n",
+        )
+        .unwrap();
+        let mut config = test_config();
+        config.modules = Some(tama_config::ModulesConfig {
+            src: "Tamago".to_string(),
+            spec: "Tamago.Spec".to_string(),
+            proof: "Tamago.Proof".to_string(),
+        });
+
+        let modules = discover_configured_modules(&root, &config, ModuleKind::Src).unwrap();
+        let sources = discover_contract_sources(&root, &config, "ERC20").unwrap();
+
+        assert_eq!(modules, vec!["Tamago.Tokens.ERC20".to_string()]);
+        assert_eq!(sources.modules.implementation_module, "Tamago.Tokens.ERC20");
+        assert_eq!(sources.modules.spec_module, "Tamago.Spec.Tokens.ERC20Spec");
+        assert_eq!(
+            sources.modules.proof_module,
+            "Tamago.Proof.Tokens.ERC20Proof"
+        );
+    }
+
+    #[test]
     fn counter_fixture_obligations_cover_behavior_with_properties() {
         let root =
             Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/counter");
@@ -3488,6 +3847,28 @@ contract ConcreteFooTest is FooTestBase {
     }
 
     #[test]
+    fn storage_adapter_accepts_evm_width_layout_slots() {
+        let raw = r#"{
+            "contracts": [{
+                "contract": "Counter",
+                "fields": [{
+                    "name": "namespaced",
+                    "canonicalSlot": 22039680842170583354350930991353191463384557302403149490292931171046229157014,
+                    "type": {"kind": "mapping"}
+                }]
+            }]
+        }"#;
+        let report: Value = serde_json::from_str(raw).unwrap();
+
+        let storage = parse_storage(&report, "Counter").unwrap();
+
+        assert_eq!(
+            storage[0].slot,
+            "0x30ba046d63c15171a67a112aa5a7e2a54fc7d421edcb74b73172db9284ee2496"
+        );
+    }
+
+    #[test]
     fn storage_adapter_rejects_malformed_layout_fields() {
         let missing_contracts = json!({});
         assert!(matches!(
@@ -3563,6 +3944,47 @@ contract ConcreteFooTest is FooTestBase {
     }
 
     #[test]
+    fn abi_parser_expands_tuple_types_for_signatures() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("Pool.abi.json")).unwrap();
+        tama_common::write_string(
+            &path,
+            r#"[
+  {
+    "type": "function",
+    "name": "validateUserOp",
+    "inputs": [
+      {
+        "name": "userOp",
+        "type": "tuple",
+        "components": [
+          {"name": "", "type": "address"},
+          {"name": "", "type": "uint256"},
+          {"name": "", "type": "bytes"},
+          {"name": "", "type": "bytes32"}
+        ]
+      },
+      {"name": "proof", "type": "bytes32[]"}
+    ],
+    "outputs": [{"name": "", "type": "uint256"}],
+    "stateMutability": "nonpayable"
+  }
+]
+"#,
+        )
+        .unwrap();
+
+        let abi = parse_abi(&path).unwrap();
+
+        assert_eq!(
+            abi.functions[0].signature,
+            "validateUserOp((address,uint256,bytes,bytes32),bytes32[])"
+        );
+        assert_eq!(abi.functions[0].inputs[0].ty, "tuple");
+        assert_eq!(abi.functions[0].inputs[0].components.len(), 4);
+    }
+
+    #[test]
     fn abi_parser_rejects_missing_names_and_unsupported_entries() {
         let dir = tempfile::tempdir().unwrap();
         let path = Utf8PathBuf::from_path_buf(dir.path().join("Counter.abi.json")).unwrap();
@@ -3591,13 +4013,13 @@ contract ConcreteFooTest is FooTestBase {
 
         tama_common::write_string(
             &path,
-            r#"[{"type":"function","name":"setHash","inputs":[{"name":"hash","type":"bytes32"}],"outputs":[]}]"#,
+            r#"[{"type":"function","name":"setHash","inputs":[{"name":"hash","type":"bytes4"}],"outputs":[]}]"#,
         )
         .unwrap();
         let err = parse_abi(&path).unwrap_err();
         assert!(matches!(
             err,
-            Error::Adapter(message) if message.contains("unsupported ABI type `bytes32`")
+            Error::Adapter(message) if message.contains("unsupported ABI type `bytes4`")
         ));
     }
 
@@ -3679,6 +4101,23 @@ TAMA_AXIOMS_END proof.CounterProof.increment_meets_spec
             2
         );
         assert!(!source.contains("#print axioms"));
+    }
+
+    #[test]
+    fn collect_axioms_probe_imports_configured_proof_modules_from_manifest() {
+        let mut obligation = fixture_obligation();
+        obligation.lean_decl = "Tamago.Spec.CounterSpec.increment_spec".to_string();
+        obligation.dischargers = vec!["Tamago.Proof.CounterProof.increment_meets_spec".to_string()];
+        let mut manifest = test_manifest("Counter");
+        manifest.lean.proof_module = "Tamago.Proof.CounterProof".to_string();
+        manifest.obligations.push(obligation.clone());
+
+        let source = collect_axioms_probe_source(&[manifest], &[&obligation]).unwrap();
+
+        assert!(source.contains("import Tamago.Proof.CounterProof"));
+        assert!(source.contains(
+            "#eval show CoreM Unit from tamaEmitAxioms \"Tamago.Proof.CounterProof.increment_meets_spec\" `Tamago.Proof.CounterProof.increment_meets_spec"
+        ));
     }
 
     #[test]
@@ -3861,10 +4300,12 @@ TAMA_AXIOMS_JSON {"lean_decl":"proof.CounterProof.increment_meets_spec","axioms"
                 Param {
                     name: "owner".to_string(),
                     ty: "address".to_string(),
+                    components: Vec::new(),
                 },
                 Param {
                     name: "".to_string(),
                     ty: "uint256".to_string(),
+                    components: Vec::new(),
                 },
             ],
         });
@@ -3972,6 +4413,7 @@ TAMA_AXIOMS_JSON {"lean_decl":"proof.CounterProof.increment_meets_spec","axioms"
                 verity: "0.1.0".to_string(),
             },
             paths: tama_config::PathsConfig::default(),
+            modules: None,
             yul: tama_config::YulConfig {
                 solc: "0.8.33".to_string(),
                 optimizer: true,

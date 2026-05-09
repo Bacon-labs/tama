@@ -4,6 +4,7 @@ use std::fs;
 use camino::{Utf8Path, Utf8PathBuf};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use tama_config::ModuleKind;
 use tama_manifest::{parse_mirror_path, ContractManifest, MirrorPathError, SCHEMA};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -341,12 +342,15 @@ fn structure(
         check_bytecode_hash(root, manifest, issues);
         check_deployer_bytecode(root, manifest, issues);
         check_mirror_test_files(root, manifest, issues);
-        for (aggregate, import) in [
-            ("TamaSrc.lean", manifest.lean.implementation_module.as_str()),
-            ("TamaSpec.lean", manifest.lean.spec_module.as_str()),
-            ("TamaProof.lean", manifest.lean.proof_module.as_str()),
+        for (kind, import) in [
+            (
+                ModuleKind::Src,
+                manifest.lean.implementation_module.as_str(),
+            ),
+            (ModuleKind::Spec, manifest.lean.spec_module.as_str()),
+            (ModuleKind::Proof, manifest.lean.proof_module.as_str()),
         ] {
-            check_aggregate_import(root, manifest, aggregate, import, issues);
+            check_aggregate_import(root, config, manifest, kind, import, issues);
         }
         for path in [&manifest.artifacts.interface, &manifest.artifacts.deployer] {
             if path_escapes_project(path) {
@@ -513,19 +517,21 @@ fn path_escapes_project(path: &Utf8Path) -> bool {
 
 fn check_aggregate_import(
     root: &Utf8Path,
+    config: &tama_config::TamaConfig,
     manifest: &ContractManifest,
-    aggregate: &str,
+    kind: ModuleKind,
     import: &str,
     issues: &mut Vec<Issue>,
 ) {
-    let path = root.join(aggregate);
+    let aggregate = config.aggregate_module(kind);
+    let path = root.join(&aggregate.path);
     let Ok(text) = tama_common::read_to_string(&path) else {
         issues.push(issue(
             "structure",
             Some(&manifest.contract),
             "TAMA_STRUCTURE_MISSING_AGGREGATE",
-            format!("aggregate module is missing: {aggregate}"),
-            Some(aggregate.into()),
+            format!("aggregate module is missing: {}", aggregate.path),
+            Some(aggregate.path),
         ));
         return;
     };
@@ -535,8 +541,8 @@ fn check_aggregate_import(
             "structure",
             Some(&manifest.contract),
             "TAMA_STRUCTURE_AGGREGATE_IMPORT",
-            format!("{aggregate} does not import {import}"),
-            Some(aggregate.into()),
+            format!("{} does not import {import}", aggregate.path),
+            Some(aggregate.path),
         ));
     }
 }
@@ -715,6 +721,7 @@ fn yul_dispatch_cases(code: &str) -> BTreeSet<String> {
 
 fn solidity_declarations(text: &str, kind: &str) -> BTreeSet<String> {
     let text = strip_solidity_non_code(text);
+    let structs = solidity_struct_types(&text);
     let re = Regex::new(&format!(
         r"\b{}\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)",
         regex::escape(kind)
@@ -725,9 +732,36 @@ fn solidity_declarations(text: &str, kind: &str) -> BTreeSet<String> {
             let name = captures.get(1).map(|m| m.as_str()).unwrap_or("");
             let params = captures
                 .get(2)
-                .map(|m| canonical_solidity_param_types(m.as_str()))
+                .map(|m| canonical_solidity_param_types(m.as_str(), &structs))
                 .unwrap_or_default();
             format!("{name}({params})")
+        })
+        .collect()
+}
+
+fn solidity_struct_types(text: &str) -> BTreeMap<String, String> {
+    let re = Regex::new(r"\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{([^}]*)\}").expect("valid regex");
+    re.captures_iter(text)
+        .filter_map(|captures| {
+            let name = captures.get(1)?.as_str().to_string();
+            let body = captures.get(2)?.as_str();
+            let fields = body
+                .split(';')
+                .map(str::trim)
+                .filter(|field| !field.is_empty())
+                .filter_map(|field| {
+                    field
+                        .split_whitespace()
+                        .filter(|part| !matches!(*part, "memory" | "calldata" | "storage"))
+                        .next()
+                })
+                .map(|ty| ty.to_string())
+                .collect::<Vec<_>>();
+            if fields.is_empty() {
+                None
+            } else {
+                Some((name, format!("({})", fields.join(","))))
+            }
         })
         .collect()
 }
@@ -836,7 +870,7 @@ fn strip_solidity_non_code(text: &str) -> String {
     out
 }
 
-fn canonical_solidity_param_types(params: &str) -> String {
+fn canonical_solidity_param_types(params: &str, structs: &BTreeMap<String, String>) -> String {
     params
         .split(',')
         .map(str::trim)
@@ -846,7 +880,8 @@ fn canonical_solidity_param_types(params: &str) -> String {
                 .split_whitespace()
                 .filter(|part| !matches!(*part, "indexed" | "memory" | "calldata" | "storage"))
                 .collect::<Vec<_>>();
-            parts.first().copied()
+            let ty = parts.first().copied()?;
+            Some(structs.get(ty).map_or(ty, String::as_str))
         })
         .collect::<Vec<_>>()
         .join(",")
@@ -1065,11 +1100,8 @@ fn check_layout_report(
             ));
             continue;
         };
-        if let Some(expected) = parse_hex_slot_u64(&entry.slot) {
-            match field
-                .get("canonicalSlot")
-                .and_then(serde_json::Value::as_u64)
-            {
+        if let Some(expected) = normalize_hex_slot(&entry.slot) {
+            match canonical_slot_hex(field.get("canonicalSlot")) {
                 Some(actual) if expected == actual => {}
                 Some(actual) => issues.push(issue(
                     "storage-layout",
@@ -1121,8 +1153,65 @@ fn check_layout_report(
     }
 }
 
-fn parse_hex_slot_u64(slot: &str) -> Option<u64> {
-    u64::from_str_radix(slot.strip_prefix("0x")?, 16).ok()
+fn canonical_slot_hex(value: Option<&serde_json::Value>) -> Option<String> {
+    let value = value?;
+    let raw = match value {
+        serde_json::Value::Number(number) => number.to_string(),
+        serde_json::Value::String(text) => text.trim().to_string(),
+        _ => return None,
+    };
+    if raw.starts_with("0x") {
+        normalize_hex_slot(&raw)
+    } else {
+        decimal_to_hex(&raw).and_then(|hex| normalize_hex_slot(&format!("0x{hex}")))
+    }
+}
+
+fn normalize_hex_slot(slot: &str) -> Option<String> {
+    let body = slot.strip_prefix("0x")?;
+    if body.is_empty() || body.len() > 64 || !body.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+    let lower = body.to_ascii_lowercase();
+    let trimmed = lower.trim_start_matches('0');
+    let normalized = if trimmed.is_empty() { "0" } else { trimmed };
+    let padded = if normalized.len() == 1 {
+        format!("0{normalized}")
+    } else {
+        normalized.to_string()
+    };
+    Some(format!("0x{padded}"))
+}
+
+fn decimal_to_hex(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || !trimmed.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let mut digits = trimmed.bytes().map(|byte| byte - b'0').collect::<Vec<_>>();
+    while digits.len() > 1 && digits.first() == Some(&0) {
+        digits.remove(0);
+    }
+    if digits.iter().all(|digit| *digit == 0) {
+        return Some("0".to_string());
+    }
+    let mut out = Vec::new();
+    while !digits.is_empty() && digits.iter().any(|digit| *digit != 0) {
+        let mut carry = 0u16;
+        let mut quotient = Vec::with_capacity(digits.len());
+        for digit in digits {
+            let value = carry * 10 + digit as u16;
+            let next = value / 16;
+            carry = value % 16;
+            if !quotient.is_empty() || next != 0 {
+                quotient.push(next as u8);
+            }
+        }
+        out.push(std::char::from_digit(carry as u32, 16)?);
+        digits = quotient;
+    }
+    out.reverse();
+    Some(out.into_iter().collect())
 }
 
 fn layout_field_shape(value: Option<&serde_json::Value>) -> Option<(&str, &str)> {
@@ -2323,6 +2412,45 @@ mod tests {
     }
 
     #[test]
+    fn structure_uses_configured_aggregate_modules() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        tama_common::write_string(
+            &root.join("tama.toml"),
+            r#"[project]
+name = "tamago"
+verity = "v"
+
+[modules]
+src = "Tamago"
+spec = "Tamago.Spec"
+proof = "Tamago.Proof"
+
+[yul]
+solc = "0.8.33"
+"#,
+        )
+        .unwrap();
+        let config = tama_config::load_config(&root).unwrap();
+        let mut manifest = counter_manifest();
+        manifest.source.implementation = "verity/src/Tamago/Tokens/Counter.lean".into();
+        manifest.source.spec = "verity/spec/Tamago/Spec/Tokens/CounterSpec.lean".into();
+        manifest.source.proof = "verity/proof/Tamago/Proof/Tokens/CounterProof.lean".into();
+        manifest.lean.implementation_module = "Tamago.Tokens.Counter".to_string();
+        manifest.lean.spec_module = "Tamago.Spec.Tokens.CounterSpec".to_string();
+        manifest.lean.proof_module = "Tamago.Proof.Tokens.CounterProof".to_string();
+        write_complete_structure_fixture(&root, &config, &mut manifest);
+
+        let mut issues = Vec::new();
+        structure(&root, &config, &[manifest], &mut issues);
+
+        assert!(
+            issues.is_empty(),
+            "configured aggregate imports should satisfy structure checks, got {issues:?}"
+        );
+    }
+
+    #[test]
     fn structure_accepts_nested_mirror_test_paths_from_manifest() {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -2773,6 +2901,7 @@ interface CounterIface {
             outputs: vec![tama_manifest::Param {
                 name: "".to_string(),
                 ty: "uint256".to_string(),
+                components: Vec::new(),
             }],
         });
         let mut issues = Vec::new();
@@ -2963,12 +3092,20 @@ interface Example {
     // function ignored(uint256 amount) external;
     /* event Ignored(address indexed from); */
     string constant S = "function alsoIgnored(bytes32) external";
+    struct UserOp {
+        address sender;
+        uint256 nonce;
+        bytes callData;
+    }
     function set(uint256 amount, bytes32[] calldata proof) external;
+    function validateUserOp(UserOp calldata userOp, bytes32 opHash) external;
     event Transfer(address indexed from, address indexed to, uint256 amount);
     error Bad(address account);
 }
 "#;
         assert!(solidity_declarations(text, "function").contains("set(uint256,bytes32[])"));
+        assert!(solidity_declarations(text, "function")
+            .contains("validateUserOp((address,uint256,bytes),bytes32)"));
         assert!(!solidity_declarations(text, "function").contains("ignored(uint256)"));
         assert!(!solidity_declarations(text, "function").contains("alsoIgnored(bytes32)"));
         assert!(solidity_declarations(text, "event").contains("Transfer(address,address,uint256)"));
@@ -3235,6 +3372,7 @@ interface CounterIface {
             outputs: vec![tama_manifest::Param {
                 name: "".to_string(),
                 ty: "uint256".to_string(),
+                components: Vec::new(),
             }],
         });
         let text = serde_json::to_string_pretty(&manifest).unwrap();
@@ -3383,6 +3521,34 @@ interface CounterIface {
         let mut clean_issues = Vec::new();
         storage(&root, &config, &[manifest], &mut clean_issues);
         assert!(!clean_issues
+            .iter()
+            .any(|issue| issue.code.starts_with("TAMA_STORAGE_LAYOUT_REPORT_")));
+    }
+
+    #[test]
+    fn storage_compares_evm_width_layout_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        let mut manifest = counter_manifest();
+        manifest.storage = vec![tama_manifest::StorageEntry {
+            name: "commitments".to_string(),
+            ty: "mapping(address => uint256)".to_string(),
+            slot: "0x30ba046d63c15171a67a112aa5a7e2a54fc7d421edcb74b73172db9284ee2496".to_string(),
+            offset: 0,
+            width_bytes: 32,
+            encoding: "mapping".to_string(),
+        }];
+        tama_common::write_string(
+            &root.join("artifacts/layout-report.json"),
+            r#"{"contracts":[{"contract":"Counter","fields":[{"name":"commitments","canonicalSlot":22039680842170583354350930991353191463384557302403149490292931171046229157014,"type":{"kind":"mapping"}}]}]}"#,
+        )
+        .unwrap();
+
+        let mut issues = Vec::new();
+        storage(&root, &config, &[manifest], &mut issues);
+
+        assert!(!issues
             .iter()
             .any(|issue| issue.code.starts_with("TAMA_STORAGE_LAYOUT_REPORT_")));
     }
@@ -3566,6 +3732,7 @@ solc = "0.8.33"
                 verity: "0.1.0".to_string(),
             },
             paths: tama_config::PathsConfig::default(),
+            modules: None,
             yul: tama_config::YulConfig {
                 solc: "0.8.33".to_string(),
                 optimizer: true,
@@ -3668,18 +3835,18 @@ solc = "0.8.33"
         )
         .unwrap();
         tama_common::write_string(
-            &root.join("TamaSrc.lean"),
+            &root.join(config.aggregate_module(ModuleKind::Src).path),
             &format!("import {}\n", manifest.lean.implementation_module),
         )
         .unwrap();
         tama_common::write_string(
-            &root.join("TamaSpec.lean"),
-            &format!("import TamaSrc\nimport {}\n", manifest.lean.spec_module),
+            &root.join(config.aggregate_module(ModuleKind::Spec).path),
+            &format!("import {}\n", manifest.lean.spec_module),
         )
         .unwrap();
         tama_common::write_string(
-            &root.join("TamaProof.lean"),
-            &format!("import TamaSpec\nimport {}\n", manifest.lean.proof_module),
+            &root.join(config.aggregate_module(ModuleKind::Proof).path),
+            &format!("import {}\n", manifest.lean.proof_module),
         )
         .unwrap();
         manifest.artifacts.bytecode_hash = Some(
