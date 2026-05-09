@@ -181,11 +181,12 @@ that discharges a spec and refuses any reliance on:
 - `sorryAx` (the marker Lean uses for incomplete proofs — always denied),
 - axioms not listed in `tama.toml` under `[trust.allow_axioms]`,
 - unresolved Lean declarations,
-- compiler trust-surface flags reported by the Verity framework.
+- compiler trust-surface flags not listed under `[trust.allow_surfaces]`.
 
 The point is to make every assumption *named* and *visible*, not to
 eliminate them entirely. `Classical.choice` and `Quot.sound` are
-typically allowlisted; project-specific ones get a one-line reason.
+typically allowlisted; project-specific axioms and compiler surfaces get
+a one-line reason.
 
 ### `tama.toml`
 

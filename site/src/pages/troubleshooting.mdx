@@ -146,9 +146,18 @@ non-empty reason:
 "Classical.choice" = "accepted Lean classical reasoning"
 ```
 
+Compiler-reported trust surfaces use a separate allowlist. Copy the
+exact identifier from `artifacts/trust-report.json`:
+
+```toml
+[trust.allow_surfaces]
+"contractAddress" = "address introspection is reviewed and intentional"
+"tload/tstore" = "transient storage is reviewed and intentional"
+```
+
 <Callout kind="warning" title="Read before allowlisting">
-Don't allowlist compiler assumptions or axioms until you understand the
-generated <code>artifacts/trust-report.json</code>,
+Don't allowlist compiler assumptions, compiler trust surfaces, or axioms
+until you understand the generated <code>artifacts/trust-report.json</code>,
 <code>artifacts/assumption-report.json</code>, and
 <code>artifacts/trust-probe/axioms.json</code>. The whole point of the
 gate is to make every assumption named and visible.

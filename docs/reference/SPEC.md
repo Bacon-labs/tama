@@ -150,6 +150,10 @@ metadata_bytecode_hash = "none"          # reproducible bytecode by default
 "Classical.choice" = "accepted Lean classical reasoning"
 "Quot.sound" = "accepted Lean quotient axiom"
 
+[trust.allow_surfaces]
+"contractAddress" = "address introspection is reviewed and intentional"
+"tload/tstore" = "transient storage is reviewed and intentional"
+
 [coverage.proof_only]
 "Foo.mapping_collision_free" = "quantifies over all key pairs; no concrete fuzz schedule covers it"
 ```
@@ -703,12 +707,12 @@ For each spec, Tama queries or extracts the Lean environment dependency set of e
 - an unsafe declaration;
 - a new trusted declaration outside the approved framework boundary.
 
-The allowlist lives in `tama.toml` under `[trust.allow_axioms]`. `sorryAx` is hard-denied and is not allowlistable for `tama audit`.
+The axiom allowlist lives in `tama.toml` under `[trust.allow_axioms]`. `sorryAx` is hard-denied and is not allowlistable for `tama audit`. Compiler-reported trust surfaces live under `[trust.allow_surfaces]` and use the exact identifier reported in `artifacts/trust-report.json`.
 
 The generated trust probe uses Lean's `collectAxioms` API and writes
 `artifacts/trust-probe/axioms.json` with schema `tama.trust-probe.v1`.
 
-Tama also consumes Verity compiler trust-surface artifacts when present. `artifacts/trust-report.json` localizes unsupported or partially modeled mechanics, unsafe blocks, and unchecked dependency buckets; `artifacts/assumption-report.json` flattens undischarged compiler assumptions. Undischarged assumptions must be explicitly allowlisted by their stable assumption or axiom identifier.
+Tama also consumes Verity compiler trust-surface artifacts when present. `artifacts/trust-report.json` localizes unsupported or partially modeled mechanics, unsafe blocks, and unchecked dependency buckets; `artifacts/assumption-report.json` flattens undischarged compiler assumptions. Trust surfaces must be explicitly allowlisted by their stable surface identifier. Undischarged assumptions must be explicitly allowlisted by their stable assumption or axiom identifier.
 
 ### `tama inspect <Contract> <field>`
 

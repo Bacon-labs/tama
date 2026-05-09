@@ -86,6 +86,14 @@ struct TrustContext<'a> {
     allow: &'a BTreeMap<String, String>,
 }
 
+struct VerityTrustContext<'a> {
+    root: &'a Utf8Path,
+    path: &'a Utf8Path,
+    deny: &'a BTreeSet<String>,
+    allow: &'a BTreeMap<String, String>,
+    allow_surfaces: &'a BTreeMap<String, String>,
+}
+
 struct LoadedManifests {
     manifests: Vec<ContractManifest>,
     invalid: Vec<ManifestLoadIssue>,
@@ -1376,8 +1384,9 @@ fn trust(
     issues: &mut Vec<Issue>,
 ) {
     let deny = BTreeSet::from(["sorryAx".to_string()]);
-    let allow = &config.trust.allow_axioms;
-    audit_trust_allowlist(root, &deny, allow, issues);
+    let allow_axioms = &config.trust.allow_axioms;
+    let allow_surfaces = &config.trust.allow_surfaces;
+    audit_trust_allowlist(root, &deny, allow_axioms, allow_surfaces, issues);
     let probe = root.join(config.paths.out.join("trust-probe").join("axioms.json"));
     let trust_report = root.join(config.paths.out.join("trust-report.json"));
     let assumption_report = root.join(config.paths.out.join("assumption-report.json"));
@@ -1399,7 +1408,15 @@ fn trust(
             "trust probe",
             issues,
         ) {
-            audit_axiom_probe(root, &probe, &value, &deny, allow, &mut seen_decls, issues);
+            audit_axiom_probe(
+                root,
+                &probe,
+                &value,
+                &deny,
+                allow_axioms,
+                &mut seen_decls,
+                issues,
+            );
         }
     } else if !public_obligations.is_empty() {
         issues.push(issue(
@@ -1422,7 +1439,14 @@ fn trust(
             issues,
         )
         .map(|value| {
-            audit_assumption_report(root, &assumption_report, &value, &deny, allow, issues);
+            audit_assumption_report(
+                root,
+                &assumption_report,
+                &value,
+                &deny,
+                allow_axioms,
+                issues,
+            );
         })
         .is_some()
     } else {
@@ -1437,12 +1461,15 @@ fn trust(
             issues,
         ) {
             audit_verity_trust_report(
-                root,
-                &trust_report,
+                &VerityTrustContext {
+                    root,
+                    path: &trust_report,
+                    deny: &deny,
+                    allow: allow_axioms,
+                    allow_surfaces,
+                },
                 &value,
                 !assumption_report_is_valid,
-                &deny,
-                allow,
                 issues,
             );
         }
@@ -1494,10 +1521,11 @@ fn trust(
 fn audit_trust_allowlist(
     root: &Utf8Path,
     deny: &BTreeSet<String>,
-    allow: &BTreeMap<String, String>,
+    allow_axioms: &BTreeMap<String, String>,
+    allow_surfaces: &BTreeMap<String, String>,
     issues: &mut Vec<Issue>,
 ) {
-    for (axiom, reason) in allow {
+    for (axiom, reason) in allow_axioms {
         if reason.trim().is_empty() {
             issues.push(issue(
                 "trust-boundary",
@@ -1513,6 +1541,17 @@ fn audit_trust_allowlist(
                 None,
                 "TAMA_TRUST_ALLOWLIST_DENY",
                 format!("trust allowlist entry `{axiom}` is hard-denied"),
+                Some(relative_path(root, &root.join("tama.toml"))),
+            ));
+        }
+    }
+    for (surface, reason) in allow_surfaces {
+        if reason.trim().is_empty() {
+            issues.push(issue(
+                "trust-boundary",
+                None,
+                "TAMA_TRUST_ALLOWLIST_REASON",
+                format!("trust surface allowlist entry `{surface}` requires a non-empty reason"),
                 Some(relative_path(root, &root.join("tama.toml"))),
             ));
         }
@@ -1616,12 +1655,9 @@ fn audit_axiom_probe(
 }
 
 fn audit_verity_trust_report(
-    root: &Utf8Path,
-    path: &Utf8Path,
+    ctx: &VerityTrustContext<'_>,
     value: &serde_json::Value,
     audit_assumptions: bool,
-    deny: &BTreeSet<String>,
-    allow: &BTreeMap<String, String>,
     issues: &mut Vec<Issue>,
 ) {
     let Some(contracts) = value.get("contracts").and_then(|value| value.as_array()) else {
@@ -1630,7 +1666,7 @@ fn audit_verity_trust_report(
             None,
             "TAMA_TRUST_REPORT_INVALID",
             "trust report is missing `contracts[]`",
-            Some(relative_path(root, path)),
+            Some(relative_path(ctx.root, ctx.path)),
         ));
         return;
     };
@@ -1641,21 +1677,22 @@ fn audit_verity_trust_report(
                 None,
                 "TAMA_TRUST_REPORT_INVALID",
                 "trust report contract entry is missing `contract`",
-                Some(relative_path(root, path)),
+                Some(relative_path(ctx.root, ctx.path)),
             ));
             continue;
         };
-        audit_contract_trust_surfaces(root, path, contract, name, issues);
-        audit_contract_unchecked_dependencies(root, path, contract, name, issues);
+        audit_contract_trust_surfaces(ctx, contract, name, issues);
+        audit_contract_unchecked_dependencies(ctx.root, ctx.path, contract, name, issues);
         if audit_assumptions {
-            audit_contract_external_assumptions(root, path, contract, name, deny, allow, issues);
+            audit_contract_external_assumptions(
+                ctx.root, ctx.path, contract, name, ctx.deny, ctx.allow, issues,
+            );
         }
     }
 }
 
 fn audit_contract_trust_surfaces(
-    root: &Utf8Path,
-    path: &Utf8Path,
+    ctx: &VerityTrustContext<'_>,
     contract: &serde_json::Value,
     contract_name: &str,
     issues: &mut Vec<Issue>,
@@ -1685,7 +1722,7 @@ fn audit_contract_trust_surfaces(
                 Some(contract_name),
                 "TAMA_TRUST_REPORT_INVALID",
                 format!("{contract_name} trust report is missing `{field}[]`"),
-                Some(relative_path(root, path)),
+                Some(relative_path(ctx.root, ctx.path)),
             ));
             continue;
         };
@@ -1695,7 +1732,7 @@ fn audit_contract_trust_surfaces(
                 Some(contract_name),
                 "TAMA_TRUST_REPORT_INVALID",
                 format!("{contract_name} trust report `{field}[]` contains a non-string value"),
-                Some(relative_path(root, path)),
+                Some(relative_path(ctx.root, ctx.path)),
             ));
             continue;
         }
@@ -1703,9 +1740,7 @@ fn audit_contract_trust_surfaces(
             .iter()
             .filter_map(|value| value.as_str())
             .collect::<Vec<_>>();
-        if !values.is_empty() {
-            contract_surfaces.push((label, values.join(", ")));
-        }
+        contract_surfaces.push((label, values));
     }
     let Some(sites) = contract
         .get("usageSites")
@@ -1716,19 +1751,13 @@ fn audit_contract_trust_surfaces(
             Some(contract_name),
             "TAMA_TRUST_REPORT_INVALID",
             format!("{contract_name} trust report is missing `usageSites[]`"),
-            Some(relative_path(root, path)),
+            Some(relative_path(ctx.root, ctx.path)),
         ));
         return;
     };
     if sites.is_empty() {
         for (label, values) in contract_surfaces {
-            issues.push(issue(
-                "trust-boundary",
-                Some(contract_name),
-                "TAMA_TRUST_SURFACE",
-                format!("{contract_name} uses {label}: {values}"),
-                Some(relative_path(root, path)),
-            ));
+            audit_surface_values(ctx, contract_name, None, label, &values, issues);
         }
     }
     for site in sites {
@@ -1747,7 +1776,7 @@ fn audit_contract_trust_surfaces(
                     Some(contract_name),
                     "TAMA_TRUST_REPORT_INVALID",
                     format!("{contract_name} [{kind}:{name}] trust site is missing `{field}[]`"),
-                    Some(relative_path(root, path)),
+                    Some(relative_path(ctx.root, ctx.path)),
                 ));
                 continue;
             };
@@ -1759,7 +1788,7 @@ fn audit_contract_trust_surfaces(
                     format!(
                         "{contract_name} [{kind}:{name}] trust site `{field}[]` contains a non-string value"
                     ),
-                    Some(relative_path(root, path)),
+                    Some(relative_path(ctx.root, ctx.path)),
                 ));
                 continue;
             }
@@ -1767,19 +1796,43 @@ fn audit_contract_trust_surfaces(
                 .iter()
                 .filter_map(|value| value.as_str())
                 .collect::<Vec<_>>();
-            if !values.is_empty() {
-                issues.push(issue(
-                    "trust-boundary",
-                    Some(contract_name),
-                    "TAMA_TRUST_SURFACE",
-                    format!(
-                        "{contract_name} [{kind}:{name}] uses {label}: {}",
-                        values.join(", ")
-                    ),
-                    Some(relative_path(root, path)),
-                ));
-            }
+            audit_surface_values(
+                ctx,
+                contract_name,
+                Some((kind, name)),
+                label,
+                &values,
+                issues,
+            );
         }
+    }
+}
+
+fn audit_surface_values(
+    ctx: &VerityTrustContext<'_>,
+    contract_name: &str,
+    site: Option<(&str, &str)>,
+    label: &str,
+    values: &[&str],
+    issues: &mut Vec<Issue>,
+) {
+    for value in values {
+        if ctx.allow_surfaces.contains_key(*value) {
+            continue;
+        }
+        let location = site.map_or_else(
+            || contract_name.to_string(),
+            |(kind, name)| format!("{contract_name} [{kind}:{name}]"),
+        );
+        issues.push(issue(
+            "trust-boundary",
+            Some(contract_name),
+            "TAMA_TRUST_SURFACE",
+            format!(
+                "{location} uses {label} trust surface `{value}` (not in [trust.allow_surfaces])"
+            ),
+            Some(relative_path(ctx.root, ctx.path)),
+        ));
     }
 }
 
@@ -2783,6 +2836,10 @@ solc = "0.8.33"
             .trust
             .allow_axioms
             .insert("sorryAx".to_string(), "never allowed".to_string());
+        config
+            .trust
+            .allow_surfaces
+            .insert("contractAddress".to_string(), "  ".to_string());
 
         let mut issues = Vec::new();
         trust(&root, &config, &[], &mut issues);
@@ -2793,6 +2850,10 @@ solc = "0.8.33"
         assert!(issues
             .iter()
             .any(|issue| issue.code == "TAMA_TRUST_ALLOWLIST_DENY"));
+        assert!(issues.iter().any(|issue| {
+            issue.code == "TAMA_TRUST_ALLOWLIST_REASON"
+                && issue.message.contains("trust surface allowlist entry")
+        }));
     }
 
     #[test]
@@ -2856,6 +2917,43 @@ solc = "0.8.33"
         assert!(issues
             .iter()
             .any(|issue| issue.code == "TAMA_TRUST_SURFACE"));
+    }
+
+    #[test]
+    fn trust_report_accepts_allowlisted_compiler_surface() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut config = test_config();
+        config.trust.allow_axioms.insert(
+            "keccak256_memory_slice_matches_evm".to_string(),
+            "Accepted pinned Verity keccak primitive assumption".to_string(),
+        );
+        config.trust.allow_surfaces.insert(
+            "contractAddress".to_string(),
+            "Contract address introspection is part of the reviewed design".to_string(),
+        );
+        config.trust.allow_surfaces.insert(
+            "tload/tstore".to_string(),
+            "Transient storage use is intentional and covered by review".to_string(),
+        );
+        let report = verity_trust_report_json()
+            .replace(
+                r#""partiallyModeledRuntimeIntrospection": []"#,
+                r#""partiallyModeledRuntimeIntrospection": ["contractAddress"]"#,
+            )
+            .replace(
+                r#""partiallyModeledLinearMemoryMechanics": []"#,
+                r#""partiallyModeledLinearMemoryMechanics": ["tload/tstore"]"#,
+            );
+        write_trust_report(&root, &report);
+        let mut issues = Vec::new();
+        trust(&root, &config, &[counter_manifest()], &mut issues);
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.code == "TAMA_TRUST_SURFACE"),
+            "allowlisted trust surfaces should not fail audit, got {issues:?}"
+        );
     }
 
     #[test]

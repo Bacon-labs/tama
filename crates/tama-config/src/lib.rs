@@ -154,6 +154,8 @@ pub struct YulConfig {
 pub struct TrustConfig {
     #[serde(default)]
     pub allow_axioms: BTreeMap<String, String>,
+    #[serde(default)]
+    pub allow_surfaces: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1133,6 +1135,9 @@ solc = "0.8.33"
 [trust.allow_axioms]
 "Classical.choice" = "Lean classical reasoning"
 
+[trust.allow_surfaces]
+"contractAddress" = "Contract address introspection is part of the reviewed design"
+
 [coverage.proof_only]
 "Foo.symbolic_only" = "quantifies over all key pairs"
 "#,
@@ -1143,6 +1148,13 @@ solc = "0.8.33"
         assert_eq!(cfg.yul.optimizer_runs, 200);
         assert!(cfg.yul.yul_optimizer);
         assert!(cfg.trust.allow_axioms.contains_key("Classical.choice"));
+        assert_eq!(
+            cfg.trust
+                .allow_surfaces
+                .get("contractAddress")
+                .map(String::as_str),
+            Some("Contract address introspection is part of the reviewed design")
+        );
         assert_eq!(
             cfg.coverage
                 .proof_only
