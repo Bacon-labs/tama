@@ -31,6 +31,11 @@ mirror_test = "test/verity"
 generated_solidity = "src/generated/verity"
 out = "artifacts"
 
+[modules]
+src = "MyProtocol"
+spec = "MyProtocol.Spec"
+proof = "MyProtocol.Proof"
+
 [yul]
 solc = "0.8.33"
 evm_version = "cancun"
@@ -69,6 +74,25 @@ are rejected before Tama writes or removes anything.
 When Tama also consumes Foundry paths (`src`, `test`, `out`,
 `cache_path` in `foundry.toml`) for audit and clean behavior, the
 same project-relative rule applies.
+
+### `[modules]`
+
+Optional for existing projects. New projects created by `tama init`
+include this table so Lean modules live under the package root instead
+of the legacy `TamaSrc`/`TamaSpec`/`TamaProof` aggregate modules.
+
+| Key      | Description                                            |
+| -------- | ------------------------------------------------------ |
+| `src`    | Lean module root for files under `[paths].src`.        |
+| `spec`   | Lean module root for files under `[paths].spec`.       |
+| `proof`  | Lean module root for files under `[paths].proof`.      |
+
+For the example above, an implementation file at
+`verity/src/MyProtocol/ERC20Lite.lean` is module
+`MyProtocol.ERC20Lite`, and the aggregate source module is
+`verity/src/MyProtocol.lean`. `tama init my-protocol` derives these
+roots from the package name: `MyProtocol`, `MyProtocol.Spec`, and
+`MyProtocol.Proof`.
 
 ### `[yul]`
 

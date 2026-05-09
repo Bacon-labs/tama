@@ -30,16 +30,16 @@ Schema string: `"schema": "tama.contract-manifest.v1"`.
 
   // Where the source files live in the project.
   "source": {
-    "implementation": "verity/src/ERC20Lite.lean",
-    "spec":           "verity/spec/ERC20LiteSpec.lean",
-    "proof":          "verity/proof/ERC20LiteProof.lean"
+    "implementation": "verity/src/MyProtocol/ERC20Lite.lean",
+    "spec":           "verity/spec/MyProtocol/Spec/ERC20LiteSpec.lean",
+    "proof":          "verity/proof/MyProtocol/Proof/ERC20LiteProof.lean"
   },
 
   // Lean module names (path -> module).
   "lean": {
-    "implementation_module": "src.ERC20Lite",
-    "spec_module":           "spec.ERC20LiteSpec",
-    "proof_module":          "proof.ERC20LiteProof"
+    "implementation_module": "MyProtocol.ERC20Lite",
+    "spec_module":           "MyProtocol.Spec.ERC20LiteSpec",
+    "proof_module":          "MyProtocol.Proof.ERC20LiteProof"
   },
 
   // ABI surface, including computed selectors.
@@ -101,10 +101,10 @@ Schema string: `"schema": "tama.contract-manifest.v1"`.
     {
       "id":          "ERC20Lite.transfer_preserves_total_supply",
       "name":        "transfer_preserves_total_supply",
-      "lean_decl":   "spec.ERC20LiteSpec.transfer_preserves_total_supply",
+      "lean_decl":   "MyProtocol.Spec.ERC20LiteSpec.transfer_preserves_total_supply",
       "contract":    "ERC20Lite",
       "dischargers": [
-        "proof.ERC20LiteProof.transfer_total_supply_preserved_after_run"
+        "MyProtocol.Proof.ERC20LiteProof.transfer_total_supply_preserved_after_run"
       ],
       "mirrors": [
         "test/verity/ERC20Lite.t.sol:ERC20LiteTest.testFuzzTransferPreservesTotalSupply"
