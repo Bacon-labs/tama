@@ -172,13 +172,23 @@ trust-boundary: warning
 
     [trust.allow_axioms]
     "Classical.choice" = "accepted Lean classical reasoning"
+
+trust-boundary: error
+  TipJar [function:withdraw]
+    uses: contractAddress (not in [trust.allow_surfaces])
+
+  Add to tama.toml only after reviewing the generated trust report:
+
+    [trust.allow_surfaces]
+    "contractAddress" = "address introspection is reviewed and intentional"
 ```
 
 <Callout kind="proof" title="The seal">
 A green <code>trust-boundary</code> is the strongest claim Tama can make
 about your contract: every spec is discharged by a proof that walks
-only to allowlisted axioms — a small explicit list of named assumptions
-you have signed off on in <code>tama.toml</code>.
+only to allowlisted axioms and reviewed compiler trust surfaces — a
+small explicit list of named assumptions you have signed off on in
+<code>tama.toml</code>.
 </Callout>
 
 ## CI patterns

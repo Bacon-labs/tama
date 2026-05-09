@@ -43,6 +43,10 @@ metadata_bytecode_hash = "none"
 "Classical.choice" = "accepted Lean classical reasoning"
 "Quot.sound"       = "accepted Lean quotient axiom"
 
+[trust.allow_surfaces]
+"contractAddress" = "address introspection is reviewed and intentional"
+"tload/tstore"    = "transient storage is reviewed and intentional"
+
 [coverage.proof_only]
 "Foo.mapping_collision_free" = "quantifies over all key pairs; no concrete fuzz schedule covers it"
 ```
@@ -87,6 +91,16 @@ A map of `axiom-name -> reason`. Each reason must be a non-empty string.
 
 `sorryAx` cannot be allowlisted. `tama audit trust-boundary` denies it
 unconditionally.
+
+### `[trust.allow_surfaces]`
+
+A map of Verity compiler-reported trust surface identifier to reason.
+Each reason must be a non-empty string.
+
+Use the exact identifier reported by `artifacts/trust-report.json`, for
+example `contractAddress`, `tload`, `tstore`, or `tload/tstore`.
+These entries acknowledge compiler-modeled or partially modeled EVM
+features; they do not allow Lean axioms or `sorryAx`.
 
 ### `[coverage.proof_only]`
 
