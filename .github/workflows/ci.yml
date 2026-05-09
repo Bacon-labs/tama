@@ -247,7 +247,7 @@ jobs:
           }
 
           project="$(copy_case deleted-source)"
-          rm "$project/verity/src/MyProtocol/ERC20Lite.lean"
+          rm "$project/verity/src/Base/ERC20Lite.lean"
           expect_audit_failure "$project" structure
 
           project="$(copy_case corrupted-selector)"
