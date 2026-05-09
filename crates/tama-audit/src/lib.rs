@@ -752,8 +752,7 @@ fn solidity_struct_types(text: &str) -> BTreeMap<String, String> {
                 .filter_map(|field| {
                     field
                         .split_whitespace()
-                        .filter(|part| !matches!(*part, "memory" | "calldata" | "storage"))
-                        .next()
+                        .find(|part| !matches!(*part, "memory" | "calldata" | "storage"))
                 })
                 .map(|ty| ty.to_string())
                 .collect::<Vec<_>>();

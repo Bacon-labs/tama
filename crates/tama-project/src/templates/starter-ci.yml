@@ -79,7 +79,7 @@ jobs:
           set -euo pipefail
           solc_path="$(tama toolchain solc)"
           echo "TAMA_SOLC=$solc_path" >> "$GITHUB_ENV"
-          echo "$(dirname "$solc_path")" >> "$GITHUB_PATH"
+          dirname "$solc_path" >> "$GITHUB_PATH"
 
       - name: Print toolchain versions
         run: |
