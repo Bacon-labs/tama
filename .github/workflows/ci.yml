@@ -38,6 +38,8 @@ jobs:
           toolchain: ${{ matrix.toolchain }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
@@ -58,6 +60,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
       - name: Restore Lake package cache
         id: tama-lake-cache
         uses: actions/cache/restore@v4
@@ -177,6 +181,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
       - name: Restore Lake package cache
         id: tama-lake-cache
         uses: actions/cache/restore@v4
@@ -413,6 +419,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
       - name: Install installer test tools
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - run: shellcheck installer/install.sh
