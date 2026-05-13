@@ -277,7 +277,8 @@ by hand.)
 The model is symmetric. The spec file declares an obligation by
 defining `transfer_total_supply_preserved`; the proof claims it with
 `-- tama: discharges=transfer_total_supply_preserved` directly above
-the theorem; the Foundry test mirrors it with a matching
+the theorem, and Lean checks that the theorem target is that spec
+application; the Foundry test mirrors it with a matching
 `// tama: mirrors=transfer_total_supply_preserved` (next section).
 Theorems and `lemma`s without a `discharges=` tag are silently treated
 as helpers; the ten other obligations each carry their own

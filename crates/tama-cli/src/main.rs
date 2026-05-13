@@ -51,7 +51,7 @@ What gets built:
   proof-check      Lake builds the configured proof aggregate so Lean elaborates implementation, spec, and proof modules
   verity-codegen   Verity emits Yul, ABI, storage, assumption, and trust reports
   manifest         Tama adapts and validates generated contract manifests
-  trust-probe      Lean records proof dependencies used by `tama audit trust-boundary`
+  trust-probe      Lean validates dischargers and records proof dependencies
   solc             solc compiles generated Yul through standard JSON and records bytecode hashes
   bridge           Tama generates Solidity interfaces and deployers from the validated manifest
   forge            Foundry compiles generated Solidity and project tests

@@ -75,6 +75,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         if: steps.tama-lake-cache.outputs.cache-hit != 'true'
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
         if: steps.tama-lake-cache.outputs.cache-hit != 'true'
       - uses: ./.github/actions/install-toolchain
         if: steps.tama-lake-cache.outputs.cache-hit != 'true'

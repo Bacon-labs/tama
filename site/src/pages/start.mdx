@@ -171,26 +171,23 @@ open TipjarProtocol.TipJar
 
 -- tama: discharges=total_tracks_balances
 theorem deposit_preserves_invariant
-    (pre : TipJar.State) (call : TipJar.Call)
-    (h : TipJarSpec.total_tracks_balances pre) :
+    (pre : TipJar.State) (call : TipJar.Call) :
     TipJarSpec.total_tracks_balances (TipJar.deposit pre call) := by
   simp [TipJarSpec.total_tracks_balances, TipJar.deposit,
-        Mapping.sumValues_update_add]
+         Mapping.sumValues_update_add]
 
 -- tama: discharges=total_tracks_balances
 theorem withdraw_preserves_invariant
-    (pre : TipJar.State) (amount : UInt256)
-    (h : TipJarSpec.total_tracks_balances pre)
-    (k : pre.balances[msg.sender] ≥ amount) :
+    (pre : TipJar.State) (amount : UInt256) :
     TipJarSpec.total_tracks_balances (TipJar.withdraw pre amount) := by
   simp [TipJarSpec.total_tracks_balances, TipJar.withdraw,
-        Mapping.sumValues_update_sub k]
+         Mapping.sumValues_update_sub]
 
 end TipjarProtocol.Proof.TipJarProof
 ```
 
-Each theorem says: *if the invariant holds before the call, it holds
-after the call.* The `by simp [...]` is the proof — Lean's simplifier
+Each theorem targets the spec application named by `discharges=`. The
+`by simp [...]` is the proof — Lean's simplifier
 unfolds the definitions and the lemmas listed, and Verity's standard
 library takes care of the mapping arithmetic.
 [Verity's debugging-proofs guide](https://veritylang.com/guides/debugging-proofs)
@@ -201,6 +198,9 @@ from `TipjarProtocol/Spec/TipJarSpec.lean`. Two theorems can discharge the same 
 (as above), one theorem can discharge several (`discharges=foo,bar`),
 and any theorem or `lemma` without a `discharges=` tag is silently
 treated as a helper and never appears in the manifest.
+If a proof needs preconditions, put them inside the spec definition;
+after the theorem target is the spec application, unfold the spec and
+introduce those assumptions in the proof.
 
 ## Step 5 — Write the mirror test
 
@@ -265,7 +265,7 @@ Build steps:
   ok   verity-codegen  compiler artifacts generated
   run  manifest        Tama adapts Verity outputs into contract manifests
   ok   manifest        2 manifests: ERC20Lite, TipJar
-  run  trust-probe     Lean records proof dependencies for audit
+  run  trust-probe     Lean validates dischargers and records proof dependencies
   ok   trust-probe     trust-boundary inputs written
   run  solc            TipJar Yul through solc 0.8.33 standard JSON
   ok   solc            TipJar bytecode and hash written

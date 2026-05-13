@@ -204,7 +204,7 @@ impl Pipeline {
             };
         progress.run(
             "trust-probe",
-            "Lean records proof dependencies for audit",
+            "Lean validates dischargers and records proof dependencies",
             "trust-boundary inputs written",
             || generate_trust_probe(&self.root, &config, &manifests),
         )?;
@@ -1358,15 +1358,20 @@ fn run_capture(program: &str, args: &[&str], cwd: &Utf8Path) -> Result<CommandOu
     if output.status.success() {
         Ok(CommandOutput { stdout })
     } else {
+        let details = [stderr.trim(), stdout.trim()]
+            .into_iter()
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
         Err(Error::Process {
             program: program.to_string(),
             message: format!(
                 "exited with status {}{}",
                 output.status,
-                if stderr.trim().is_empty() {
+                if details.is_empty() {
                     String::new()
                 } else {
-                    format!(": {}", stderr.trim())
+                    format!(": {details}")
                 }
             ),
         })
@@ -2321,7 +2326,16 @@ fn generate_trust_probe(
     let source_path = probe_dir.join("CollectAxioms.lean");
     let source = collect_axioms_probe_source(manifests, &obligations)?;
     tama_common::write_string(&source_path, &source)?;
-    let output = run_capture("lake", &["env", "lean", source_path.as_str()], root)?;
+    let output = match run_capture("lake", &["env", "lean", source_path.as_str()], root) {
+        Ok(output) => output,
+        Err(Error::Process { program, message }) => {
+            if let Some(message) = parse_discharge_probe_error(&message) {
+                return Err(Error::Adapter(message));
+            }
+            return Err(Error::Process { program, message });
+        }
+        Err(err) => return Err(err),
+    };
     let report = parse_collect_axioms_output(&output.stdout, &obligations)?;
     let report_text = serde_json::to_string_pretty(&report)
         .map_err(|err| Error::Adapter(format!("failed to serialize trust report: {err}")))?;
@@ -2330,6 +2344,7 @@ fn generate_trust_probe(
 }
 
 const COLLECT_AXIOMS_MARKER: &str = "TAMA_AXIOMS_JSON ";
+const DISCHARGE_ERROR_MARKER: &str = "TAMA_DISCHARGE_ERROR ";
 
 fn collect_axioms_probe_source(
     manifests: &[ContractManifest],
@@ -2350,6 +2365,63 @@ fn collect_axioms_probe_source(
     out.push_str(
         r#"
 open Lean
+open Lean.Meta
+
+def tamaSpecType (specDecl : String) (specName : Name) (dischargerDecl : String) : CoreM Expr := do
+  let env ← getEnv
+  match env.find? specName with
+  | some info => pure info.type
+  | none => throwError m!"TAMA_DISCHARGE_ERROR spec={specDecl} discharger={dischargerDecl}: missing spec declaration"
+
+def tamaDischargerType (specDecl : String) (dischargerDecl : String) (dischargerName : Name) : CoreM Expr := do
+  let env ← getEnv
+  match env.find? dischargerName with
+  | some info => pure info.type
+  | none => throwError m!"TAMA_DISCHARGE_ERROR spec={specDecl} discharger={dischargerDecl}: missing discharger declaration"
+
+partial def tamaZetaHead (e : Expr) : MetaM Expr := do
+  let e := e.consumeMData
+  match e with
+  | .letE _ _ value body _ => tamaZetaHead (body.instantiate1 value)
+  | _ => pure e
+
+partial def tamaFinalTheoremTarget (e : Expr) : MetaM Expr := do
+  let e ← tamaZetaHead e
+  match e with
+  | .forallE name domain body info =>
+      if (← isProp domain) then
+        pure e
+      else
+        withLocalDecl name info domain fun x =>
+          tamaFinalTheoremTarget (body.instantiate1 x)
+  | _ => pure e
+
+partial def tamaTargetContainsSpec (specName : Name) (target : Expr) : MetaM Bool := do
+  let target ← tamaZetaHead target
+  if target.isAppOf specName then
+    return true
+  let (head, args) := target.getAppFnArgs
+  if head == ``And && args.size == 2 then
+    return (← tamaTargetContainsSpec specName args[0]!) || (← tamaTargetContainsSpec specName args[1]!)
+  return false
+
+def tamaSpecIsPropValued (specDecl : String) (specName : Name) (dischargerDecl : String) : CoreM Unit := do
+  let specType ← tamaSpecType specDecl specName dischargerDecl
+  let ok ← MetaM.run'
+    (forallTelescopeReducing specType (cleanupAnnotations := true) (whnfType := true) fun _ target =>
+      pure target.consumeMData.isProp)
+  unless ok do
+    throwError m!"TAMA_DISCHARGE_ERROR spec={specDecl} discharger={dischargerDecl}: spec declaration is not Prop-valued"
+
+def tamaCheckDischarges (specDecl : String) (specName : Name) (dischargerDecl : String) (dischargerName : Name) : CoreM Unit := do
+  tamaSpecIsPropValued specDecl specName dischargerDecl
+  let theoremType ← tamaDischargerType specDecl dischargerDecl dischargerName
+  let ok ← MetaM.run'
+    (do
+      let target ← tamaFinalTheoremTarget theoremType
+      tamaTargetContainsSpec specName target)
+  unless ok do
+    throwError m!"TAMA_DISCHARGE_ERROR spec={specDecl} discharger={dischargerDecl}: theorem target is not the spec application or a positive conjunction containing it"
 
 def tamaAxiomJson (decl : String) (constName : Name) : CoreM Json := do
   let env ← getEnv
@@ -2367,6 +2439,16 @@ def tamaEmitAxioms (decl : String) (constName : Name) : CoreM Unit := do
   IO.println ("TAMA_AXIOMS_JSON " ++ entry.compress)
 "#,
     );
+    for obligation in obligations {
+        let spec_name = lean_name_literal(&obligation.lean_decl)?;
+        for discharger in &obligation.dischargers {
+            let discharger_name = lean_name_literal(discharger)?;
+            out.push_str(&format!(
+                "\n#eval show CoreM Unit from tamaCheckDischarges \"{}\" {} \"{}\" {}\n",
+                obligation.lean_decl, spec_name, discharger, discharger_name
+            ));
+        }
+    }
     let dischargers = obligations
         .iter()
         .flat_map(|obligation| obligation.dischargers.iter().map(String::as_str))
@@ -2378,6 +2460,15 @@ def tamaEmitAxioms (decl : String) (constName : Name) : CoreM Unit := do
         ));
     }
     Ok(out)
+}
+
+fn parse_discharge_probe_error(message: &str) -> Option<String> {
+    let (_, tail) = message.split_once(DISCHARGE_ERROR_MARKER)?;
+    let reason = tail.lines().next()?.trim();
+    if reason.is_empty() {
+        return None;
+    }
+    Some(format!("trust probe discharge validation failed: {reason}"))
 }
 
 fn parse_collect_axioms_output(output: &str, obligations: &[&Obligation]) -> Result<Value> {
@@ -4091,9 +4182,16 @@ TAMA_AXIOMS_END proof.CounterProof.increment_meets_spec
         let source = collect_axioms_probe_source(&[manifest], &[&obligation]).unwrap();
 
         assert!(source.contains("collectAxioms constName"));
+        assert!(source.contains("tamaCheckDischarges"));
         assert!(source.contains("tamaEmitAxioms"));
         assert!(!source.contains("Json.arr obligations"));
         assert!(!source.contains("let obligations :="));
+        assert_eq!(
+            source
+                .matches("#eval show CoreM Unit from tamaCheckDischarges")
+                .count(),
+            2
+        );
         assert_eq!(
             source
                 .matches("#eval show CoreM Unit from tamaEmitAxioms")
@@ -4116,7 +4214,40 @@ TAMA_AXIOMS_END proof.CounterProof.increment_meets_spec
 
         assert!(source.contains("import Tamago.Proof.CounterProof"));
         assert!(source.contains(
+            "#eval show CoreM Unit from tamaCheckDischarges \"Tamago.Spec.CounterSpec.increment_spec\" `Tamago.Spec.CounterSpec.increment_spec \"Tamago.Proof.CounterProof.increment_meets_spec\" `Tamago.Proof.CounterProof.increment_meets_spec"
+        ));
+        assert!(source.contains(
             "#eval show CoreM Unit from tamaEmitAxioms \"Tamago.Proof.CounterProof.increment_meets_spec\" `Tamago.Proof.CounterProof.increment_meets_spec"
+        ));
+    }
+
+    #[test]
+    fn collect_axioms_probe_checks_every_spec_discharger_pair() {
+        let obligation = fixture_obligation();
+        let mut second = fixture_decrement_obligation();
+        second.lean_decl = "spec.CounterSpec.bounds_spec".to_string();
+        second.dischargers = obligation.dischargers.clone();
+        let manifest = test_manifest("Counter");
+
+        let source = collect_axioms_probe_source(&[manifest], &[&obligation, &second]).unwrap();
+
+        assert_eq!(
+            source
+                .matches("#eval show CoreM Unit from tamaCheckDischarges")
+                .count(),
+            2
+        );
+        assert_eq!(
+            source
+                .matches("#eval show CoreM Unit from tamaEmitAxioms")
+                .count(),
+            1
+        );
+        assert!(source.contains(
+            "#eval show CoreM Unit from tamaCheckDischarges \"spec.CounterSpec.increment_spec\" `spec.CounterSpec.increment_spec \"proof.CounterProof.increment_meets_spec\" `proof.CounterProof.increment_meets_spec"
+        ));
+        assert!(source.contains(
+            "#eval show CoreM Unit from tamaCheckDischarges \"spec.CounterSpec.bounds_spec\" `spec.CounterSpec.bounds_spec \"proof.CounterProof.increment_meets_spec\" `proof.CounterProof.increment_meets_spec"
         ));
     }
 
@@ -4194,6 +4325,12 @@ lake noise after probe output
                 .count(),
             400
         );
+        assert_eq!(
+            source
+                .matches("#eval show CoreM Unit from tamaCheckDischarges")
+                .count(),
+            400
+        );
 
         let output = obligations
             .iter()
@@ -4255,6 +4392,17 @@ TAMA_AXIOMS_JSON {"lean_decl":"proof.CounterProof.increment_meets_spec","axioms"
         assert!(
             matches!(err, Error::Adapter(message) if message.contains("malformed axiom marker JSON"))
         );
+    }
+
+    #[test]
+    fn discharge_probe_errors_are_adapted() {
+        let message = "exited with status 1: CollectAxioms.lean:91:0: error: TAMA_DISCHARGE_ERROR spec=spec.CounterSpec.increment_spec discharger=proof.CounterProof.increment_meets_spec: theorem target is not the spec application or a positive conjunction containing it";
+
+        let adapted = parse_discharge_probe_error(message).unwrap();
+
+        assert!(adapted.contains("spec=spec.CounterSpec.increment_spec"));
+        assert!(adapted.contains("discharger=proof.CounterProof.increment_meets_spec"));
+        assert!(adapted.contains("theorem target is not the spec application"));
     }
 
     #[test]
