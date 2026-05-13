@@ -50,13 +50,13 @@ each theorem that discharges an obligation carries a
 ```lean
 namespace FooProof
 
--- tama: discharges=total_in_range
+-- tama: discharges=total_in_range_after_mint
 theorem mint_preserves_total_in_range
-    (pre : Foo.State) (call : Foo.Call)
-    (h : FooSpec.total_in_range pre)
-    (k : pre.total + call.amount ≤ pre.cap) :
-    FooSpec.total_in_range (Foo.mint pre call) := by
-  simp [FooSpec.total_in_range, Foo.mint]
+    (pre : Foo.State) (call : Foo.Call) :
+    FooSpec.total_in_range_after_mint pre call := by
+  unfold FooSpec.total_in_range_after_mint
+  intro h k
+  simp [Foo.mint, h, k]
   omega
 
 end FooProof
@@ -74,6 +74,13 @@ Multiple theorems may discharge the same spec (cover one branch each,
 for instance), and one theorem may discharge several specs. Every name
 on the right of `discharges=` must be a real top-level def in the
 contract's spec file; an unknown name is a build error.
+
+Tama checks the elaborated theorem target in Lean. A tagged theorem must
+target the named spec application directly, or a positive conjunction
+containing it. `True`, unrelated specs, `P -> spec ...`, disjunctions,
+existentials, and helper-position mentions do not discharge the spec.
+Put preconditions inside the spec definition, then unfold the spec in
+the proof and introduce those assumptions there.
 
 Theorems and `lemma`s without a `discharges=` tag are silently treated
 as helpers — Tama never reads them and the manifest never mentions
@@ -182,5 +189,6 @@ anything you allowlist is a project-level choice, not a framework one.
   Verity side — start here before reaching for `sorry`.
 - Read [the audit guide](/guides/audits) — many "proof failures" are
   actually structural mistakes (e.g. a `discharges=` tag pointing at a
-  spec name that doesn't exist) that the audit reports more clearly
-  than the build does.
+  spec name that doesn't exist, or a theorem target that does not
+  actually contain the spec application) that the build reports before
+  audit inputs are written.

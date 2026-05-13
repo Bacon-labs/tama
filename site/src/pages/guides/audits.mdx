@@ -116,7 +116,9 @@ What it inspects:
   Foundry mirror or a [`[coverage.proof_only]`](/reference/config)
   entry in `tama.toml`.
 - Every `-- tama: discharges=<spec>` tag in the proof file names a
-  real top-level def in the same contract's spec file.
+  real top-level def in the same contract's spec file, and `tama build`
+  has checked that the tagged theorem target is the spec application or
+  a positive conjunction containing it.
 - Every `// tama: mirrors=<spec>` tag sits directly above a function
   named `testFuzz*` or `invariant_*`, and names a real spec in some
   contract.

@@ -140,7 +140,7 @@ Steps:
 1. `lake build MyProtocol.Proof` — Lean elaborates implementation, spec, and proof. The target is the configured proof aggregate module; legacy projects without `[modules]` use `TamaProof`.
 2. `lake exe verity-compiler` — emits Yul, ABI, storage, trust reports.
 3. Tama adapts compiler output into `tama.contract-manifest.v1` files.
-4. Lean records proof dependencies into `artifacts/trust-probe/axioms.json`.
+4. Lean validates `discharges=` claims and records proof dependencies into `artifacts/trust-probe/axioms.json`.
 5. Tama validates each manifest's schema and artifact paths.
 6. `solc --standard-json` compiles each Yul into bytecode per `[yul]`.
 7. Tama generates Solidity interfaces and deployers from the manifests.
@@ -389,8 +389,8 @@ Version manager for `tama`.
 ```text
 tamaup                    install/update latest stable
 tamaup install nightly    install nightly channel
-tamaup install 0.1.4      install specific version
-tamaup use 0.1.4          switch active version
+tamaup install 0.1.5      install specific version
+tamaup use 0.1.5          switch active version
 tamaup list               installed versions
 tamaup self update        update tamaup itself
 tamaup uninstall          remove tama (keep tamaup)

@@ -119,11 +119,13 @@ file; they are internal scaffolding and never appear in the manifest.
 A theorem in the proof file
 [`verity/proof/<Contract>Proof.lean`](verity/proof) marked with a
 `-- tama: discharges=<spec>` comment on the line above. The tag claims
-the spec definition named on the right. Multiple comma-separated names
-are allowed (no whitespace after commas), one theorem can discharge
-several specs, and several theorems can discharge one spec. Theorems
-and `lemma`s without a `discharges=` tag are silently treated as
-helpers and never appear in the manifest.
+the spec definition named on the right, and Tama asks Lean to verify the
+elaborated theorem target is that spec application directly or a
+positive conjunction containing it. Multiple comma-separated names are
+allowed (no whitespace after commas), one theorem can discharge several
+specs, and several theorems can discharge one spec. Theorems and
+`lemma`s without a `discharges=` tag are silently treated as helpers and
+never appear in the manifest.
 
 ### Mirror test
 
