@@ -3,259 +3,245 @@ layout: ../layouts/MarkLayout.astro
 title: Your first contract
 eyebrow: Tutorial
 kanji: 始
-description: A guided walk from "I've never written Verity" to "I've shipped a smart contract whose key property is mathematically proven." We'll build a tiny TipJar, prove that it never loses anyone's money, and watch the audit confirm it.
+description: A guided walk from a fresh Tama project to a proved, compiled, tested, and audited ERC20Lite contract.
 ---
 
 import Callout from "../components/Callout.astro";
 
 ## What we're going to build
 
-A `TipJar` contract: people send ETH, the contract records who paid in
-and how much, and only those people can withdraw what they put in.
-The property we want to prove is the obvious one and the one every
-real exploit violates:
+This tutorial starts from the contract Tama actually scaffolds today:
+`ERC20Lite`. It is a small token contract with an owner, balances, a total
+supply, transfers, ownership transfer, specifications, Lean proofs, generated
+Solidity bridge files, and Foundry mirror tests.
 
-> **The sum of recorded balances is exactly the amount of ETH the contract holds.**
-> Nothing is created. Nothing disappears.
+By the end you will have:
 
-By the end of this tutorial you will have:
-
-- a working Tama project with the `TipJar` contract,
-- a Lean proof of that invariant, machine-checked,
-- a Foundry mirror test that exercises the same property as a fuzz test,
-- a green `tama audit` report you could attach to a release.
+- a fresh Tama project with a Verity contract,
+- machine-checked Lean proofs for the starter obligations,
+- Foundry fuzz tests and an invariant that mirror those obligations,
+- generated Yul, bytecode, ABI, manifests, and Solidity deployer files,
+- a green `tama audit` report you can attach to a release.
 
 <Callout kind="note" title="What you need">
-- `tama` installed (see [Install](/install)).
-- Comfort reading Solidity. You do **not** need prior Lean or Verity experience.
+- `tama` installed. See [Install](/install).
+- `forge`, `lean`, `lake`, and `solc` available through the installer or your own toolchain.
+- Comfort reading Solidity. You do not need prior Lean or Verity experience.
 
-The [Verity EDSL reference](https://veritylang.com/core) explains the
-language we'll be writing in if you'd like a deeper look at any line
-along the way.
+The [Verity EDSL reference](https://veritylang.com/core) explains the language
+used in the starter if you want a deeper reference while reading the generated
+files.
 </Callout>
 
-## Step 1 — Scaffold a project
+## Step 1: Scaffold the project
 
 ```sh
-tama init tipjar-protocol
-cd tipjar-protocol
+tama init my-protocol
+cd my-protocol
 ```
 
-`tama init` writes a Foundry-shaped project plus the Verity layers:
+`tama init` creates a Foundry-shaped project and fills in a complete Verity
+starter:
 
 ```text
-tipjar-protocol/
-├── tama.toml          # project marker, Verity pin, audit policy
-├── tama.lock          # resolved versions
-├── foundry.toml       # standard Foundry config
-├── lakefile.toml      # Lake build config (yours to edit)
-├── lean-toolchain     # pinned Lean version
+my-protocol/
+├── tama.toml
+├── tama.lock
+├── foundry.toml
+├── lakefile.toml
+├── lean-toolchain
 ├── verity/
-│   ├── src/           # Verity contracts
-│   ├── spec/          # specifications and invariants
-│   └── proof/         # machine-checked proofs
-├── src/generated/     # generated Solidity bridges (do not edit)
-├── test/verity/       # Foundry mirror tests
-└── artifacts/         # build outputs
+│   ├── src/MyProtocol/ERC20Lite.lean
+│   ├── spec/MyProtocol/Spec/ERC20LiteSpec.lean
+│   └── proof/MyProtocol/Proof/ERC20LiteProof.lean
+├── src/generated/verity/
+│   ├── ERC20LiteIface.sol
+│   └── ERC20LiteDeployer.sol
+├── test/verity/ERC20Lite.t.sol
+├── script/ERC20Lite.s.sol
+└── artifacts/
 ```
 
-The starter ships with a real `ERC20Lite` example that already builds and
-audits. [Reading the starter](/guides/starter) walks through it
-line-by-line if you want to see a finished Verity contract before writing
-your own; otherwise, verify your toolchain by running:
+The generated project is intentionally complete. You can build it before you
+write any new contract, and every file in the starter participates in the
+proof, build, test, and audit loop.
+
+## Step 2: Check the local toolchain
 
 ```sh
 tama doctor
+```
+
+`doctor` verifies the local CLI, Lean/Lake, Foundry, `solc`, Git, the project
+lockfile, and the resolved Verity revision. A healthy project prints checks
+like:
+
+```text
+Checks:
+  ok   tama            0.1.5
+  ok   lean            4.22.0
+  ok   lake            5.0.0-src+ba2cbbf (Lean version 4.22.0)
+  ok   forge           1.6.0-v1.6.0-rc1
+  ok   solc            0.8.33
+  ok   git             2.43.0
+  ok   lake buildDir   artifacts/lean
+  ok   verity          requested <rev>, resolved <rev>
+  ok   lock            current
+```
+
+If generated directories or lock inputs drift, run:
+
+```sh
+tama doctor --fix
+```
+
+`--fix` only applies safe repairs: it creates missing generated directories,
+repairs safe dependency drift where possible, and refreshes `tama.lock`. It
+does not rewrite your contract, spec, proof, or test sources.
+
+## Step 3: Read the implementation
+
+Open `verity/src/MyProtocol/ERC20Lite.lean`. The starter uses the current
+Verity surface, which is Lean code that describes EVM storage and callable
+functions:
+
+```lean
+import Contracts.Common
+
+namespace MyProtocol
+
+verity_contract ERC20Lite where
+  storage
+    ownerSlot       : Address           := slot 0
+    balancesSlot    : Address -> Uint256 := slot 1
+    totalSupplySlot : Uint256           := slot 2
+
+  constructor (initialOwner : Address) := do
+    setStorageAddr ownerSlot initialOwner
+    setStorage totalSupplySlot 0
+
+  function mint (toAddr : Address, amount : Uint256) : Bool := do
+    let sender <- msgSender
+    let currentOwner <- getStorageAddr ownerSlot
+    require (sender == currentOwner) "Caller is not the owner"
+    let currentBalance <- getMapping balancesSlot toAddr
+    let newBalance <- requireSomeUint (safeAdd currentBalance amount) "Balance overflow"
+    let currentSupply <- getStorage totalSupplySlot
+    let newSupply <- requireSomeUint (safeAdd currentSupply amount) "Supply overflow"
+    setMapping balancesSlot toAddr newBalance
+    setStorage totalSupplySlot newSupply
+    return true
+
+  function transfer (toAddr : Address, amount : Uint256) : Bool := do
+    let sender <- msgSender
+    let senderBalance <- getMapping balancesSlot sender
+    require (senderBalance >= amount) "Insufficient balance"
+    if sender == toAddr then
+      pure ()
+    else
+      let recipientBalance <- getMapping balancesSlot toAddr
+      let newRecipientBalance <- requireSomeUint
+        (safeAdd recipientBalance amount)
+        "Recipient balance overflow"
+      setMapping balancesSlot sender (sub senderBalance amount)
+      setMapping balancesSlot toAddr newRecipientBalance
+    return true
+```
+
+Three details are worth noticing before moving on.
+
+The storage slots are explicit. `slot 0`, `slot 1`, and `slot 2` become part
+of the generated manifest and are checked by `tama audit storage-layout`.
+
+Arithmetic is checked. `safeAdd` returns an optional value, and
+`requireSomeUint` turns overflow into a revert rather than a wrapped integer.
+
+The self-transfer branch is deliberate. Without it, reading and writing the
+same mapping key twice can accidentally double-count a transfer to yourself.
+
+## Step 4: Read the specification
+
+Open `verity/spec/MyProtocol/Spec/ERC20LiteSpec.lean`. This file is pure Lean:
+every top-level `def` is an obligation Tama tracks.
+
+```lean
+import MyProtocol.ERC20Lite
+
+namespace MyProtocol.Spec.ERC20LiteSpec
+
+def transfer_total_supply_preserved (s s' : ContractState) : Prop :=
+  s'.storage 2 = s.storage 2
+
+def mint_owner_preserved (s s' : ContractState) : Prop :=
+  s'.storageAddr 0 = s.storageAddr 0
+
+def balanceOf_spec (account : Address) (result : Uint256) (s : ContractState) : Prop :=
+  result = s.storageMap 1 account
+
+def owner_spec (result : Address) (s : ContractState) : Prop :=
+  result = s.storageAddr 0
+
+end MyProtocol.Spec.ERC20LiteSpec
+```
+
+The real starter contains eleven obligations. They cover frame conditions,
+read-only views, authorized effects, and unauthorized no-change behavior.
+Helpers belong outside this spec file, because Tama treats the spec module as
+the source of public proof obligations.
+
+## Step 5: Read the proof links
+
+Open `verity/proof/MyProtocol/Proof/ERC20LiteProof.lean`. Proof theorems are
+ordinary Lean declarations with a Tama comment directly above the theorem:
+
+```lean
+-- tama: discharges=balanceOf_spec
+theorem balanceOf_returns_storage_balance (account : Address) (s : ContractState) :
+  let result := ((balanceOf account).run s).fst
+  balanceOf_spec account result s := by
+  simp [balanceOf_spec, balanceOf, balancesSlot, Bind.bind, Pure.pure]
+```
+
+The generated file also contains larger state-transition proofs with case
+splits for `mint`, `transfer`, and `transferOwnership`. The important contract
+with Tama is the comment: `-- tama: discharges=balanceOf_spec` tells the audit
+which spec obligation this theorem proves.
+
+Theorems and lemmas without `discharges=` are helper facts. They can make the
+proof easier to read, but they do not appear as release obligations.
+
+## Step 6: Check implementation and spec
+
+```sh
 tama check
 ```
 
-`tama check` runs the fast Lean elaboration of implementation + spec — proofs
-come later in `tama build`. This should finish in seconds.
-
-## Step 2 — Add the TipJar
-
-```sh
-tama new TipJar
-```
-
-This creates four files:
+`check` builds the implementation and spec targets, but it skips proof modules
+so the feedback loop stays fast:
 
 ```text
-verity/src/TipjarProtocol/TipJar.lean               # implementation
-verity/spec/TipjarProtocol/Spec/TipJarSpec.lean     # specification
-verity/proof/TipjarProtocol/Proof/TipJarProof.lean  # proof
-test/verity/TipJar.t.sol                            # Foundry mirror test
+Check scope:
+  targets: MyProtocol, MyProtocol.Spec
+  proofs: not run; use `tama build`
+
+Steps:
+  run  cache        prepare Lake package checkouts
+  ok   cache        Lake packages ready
+  run  lake         build MyProtocol and MyProtocol.Spec
+  ok   lake         implementation/spec targets accepted
+Check completed: MyProtocol and MyProtocol.Spec accepted
 ```
 
-Open `verity/src/TipjarProtocol/TipJar.lean` and replace the scaffold body with:
+Use this command while editing implementation or spec files. Move to
+`tama build` when you need proof checking and generated artifacts.
 
-```lean
-import Verity
-
-namespace TipjarProtocol
-
-verity_contract TipJar where
-
-  storage
-    balances : mapping(address, uint256)
-    total    : uint256
-
-  function deposit() external payable do
-    let me  := msg.sender
-    let amt := msg.value
-    balances[me] := balances[me] + amt
-    total        := total + amt
-
-  function withdraw(amount : uint256) external do
-    let me := msg.sender
-    require balances[me] >= amount
-    balances[me] := balances[me] - amount
-    total        := total - amount
-    transfer me amount
-
-end TipjarProtocol
-```
-
-This is the entire implementation. It looks like Solidity because that's the
-register Verity reaches for — `storage`, `function`, `require`, `transfer`.
-Underneath, every line is an expression in a Lean type theory that the
-compiler can reason about.
-
-## Step 3 — Write the specification
-
-Open `verity/spec/TipjarProtocol/Spec/TipJarSpec.lean` and replace its body with:
-
-```lean
-import TipjarProtocol.TipJar
-
-namespace TipjarProtocol.Spec.TipJarSpec
-
-/-- The recorded `total` is always the sum of every balance. -/
-def total_tracks_balances (s : TipJar.State) : Prop :=
-  s.total = s.balances.sumValues
-
-end TipjarProtocol.Spec.TipJarSpec
-```
-
-One statement: an **invariant** — a property the contract must preserve
-through every call. Postconditions for individual functions (e.g. "after
-`deposit`, total grows by exactly `msg.value`") would be additional
-top-level `def`s in the same file; we'll keep this tutorial focused on
-the invariant.
-
-The spec file is **pure Lean**. There are no `-- tama:` comments — every
-top-level `def` (and every `#gen_spec` invocation) is automatically an
-obligation Tama tracks. Helpers like auxiliary `lemma`s or scratch `def`s
-must live outside the spec file; the build rejects anything other than
-`import`, `namespace`, `open`, `def`, `#gen_spec`, and `end` here. The
-proof file (next step) is where each obligation gets discharged, and a
-Foundry test (step 5) is where each one gets mirrored.
-
-<Callout kind="proof" title="Why bother writing this down?">
-This is the contract's *intent* in the strongest possible form. Every test
-you ever write is a finger pointing at one example of correct behavior.
-A specification points at every possible behavior at once.
-</Callout>
-
-## Step 4 — Discharge the proofs
-
-Open `verity/proof/TipjarProtocol/Proof/TipJarProof.lean`:
-
-```lean
-import TipjarProtocol.Spec.TipJarSpec
-
-namespace TipjarProtocol.Proof.TipJarProof
-
-open TipjarProtocol.Spec.TipJarSpec
-open TipjarProtocol.TipJar
-
--- tama: discharges=total_tracks_balances
-theorem deposit_preserves_invariant
-    (pre : TipJar.State) (call : TipJar.Call) :
-    TipJarSpec.total_tracks_balances (TipJar.deposit pre call) := by
-  simp [TipJarSpec.total_tracks_balances, TipJar.deposit,
-         Mapping.sumValues_update_add]
-
--- tama: discharges=total_tracks_balances
-theorem withdraw_preserves_invariant
-    (pre : TipJar.State) (amount : UInt256) :
-    TipJarSpec.total_tracks_balances (TipJar.withdraw pre amount) := by
-  simp [TipJarSpec.total_tracks_balances, TipJar.withdraw,
-         Mapping.sumValues_update_sub]
-
-end TipjarProtocol.Proof.TipJarProof
-```
-
-Each theorem targets the spec application named by `discharges=`. The
-`by simp [...]` is the proof — Lean's simplifier
-unfolds the definitions and the lemmas listed, and Verity's standard
-library takes care of the mapping arithmetic.
-[Verity's debugging-proofs guide](https://veritylang.com/guides/debugging-proofs)
-catalogues the tactics and error messages you'll meet most often.
-
-Each `-- tama: discharges=<spec>` comment claims a spec definition
-from `TipjarProtocol/Spec/TipJarSpec.lean`. Two theorems can discharge the same spec
-(as above), one theorem can discharge several (`discharges=foo,bar`),
-and any theorem or `lemma` without a `discharges=` tag is silently
-treated as a helper and never appears in the manifest.
-If a proof needs preconditions, put them inside the spec definition;
-after the theorem target is the spec application, unfold the spec and
-introduce those assumptions in the proof.
-
-## Step 5 — Write the mirror test
-
-Open `test/verity/TipJar.t.sol` and replace the body:
-
-```solidity
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
-
-import {Test} from "forge-std/Test.sol";
-import {TipJarIface} from "src/generated/verity/TipJarIface.sol";
-import {TipJarDeployer} from "src/generated/verity/TipJarDeployer.sol";
-
-contract TipJarTest is Test {
-    TipJarIface jar;
-
-    function setUp() public {
-        jar = TipJarDeployer.deploy();
-    }
-
-    // tama: mirrors=total_tracks_balances
-    function invariant_totalTracksBalances() public view {
-        assertEq(address(jar).balance, jar.total());
-    }
-
-    // tama: mirrors=total_tracks_balances
-    function testFuzz_deposit(address who, uint96 amount) public {
-        vm.assume(who != address(0));
-        vm.deal(who, amount);
-        vm.prank(who);
-        jar.deposit{value: amount}();
-        assertEq(address(jar).balance, jar.total());
-    }
-}
-```
-
-The test imports `TipJarDeployer`, which Tama will generate in step 6.
-The deployer embeds the *exact bytecode* the Verity compiler produced for
-your contract — the same bytes you'd put on-chain. The fuzz test and the
-invariant check are the executable shadow of the proof you just wrote.
-
-Each `// tama: mirrors=<spec>` comment must sit directly above a
-`testFuzz*` or `invariant_*` function — putting a `mirrors=` tag on a
-plain `test_*` function is a build error. Tests without a `mirrors=`
-tag are ordinary Foundry tests and not tracked. The model is
-symmetric with the proof side: a spec is "covered" when at least one
-proof theorem discharges it and at least one Foundry test mirrors it.
-
-## Step 6 — Build everything
+## Step 7: Build the proved bytecode
 
 ```sh
 tama build
 ```
 
-You'll see something like:
+`build` runs the full path:
 
 ```text
 Build steps:
@@ -264,97 +250,148 @@ Build steps:
   run  verity-codegen  Verity emits Yul, ABI, storage, and trust reports
   ok   verity-codegen  compiler artifacts generated
   run  manifest        Tama adapts Verity outputs into contract manifests
-  ok   manifest        2 manifests: ERC20Lite, TipJar
+  ok   manifest        1 manifest: ERC20Lite
   run  trust-probe     Lean validates dischargers and records proof dependencies
   ok   trust-probe     trust-boundary inputs written
-  run  solc            TipJar Yul through solc 0.8.33 standard JSON
-  ok   solc            TipJar bytecode and hash written
-  run  bridge          TipJar Solidity interface and deployer
-  ok   bridge          TipJar bridge files generated
-  run  forge           Foundry compiles generated bridges and tests
+  run  validate        ERC20Lite manifest schema and artifact paths
+  ok   validate        ERC20Lite manifest validated
+  run  solc            ERC20Lite Yul through solc standard JSON
+  ok   solc            ERC20Lite bytecode and hash written
+  run  bridge          ERC20Lite Solidity interface and deployer
+  ok   bridge          ERC20Lite bridge files generated
+  run  forge           Foundry compiles generated Solidity bridges and project tests
   ok   forge           forge build completed
-Build completed: 2 manifests
+Build completed: 1 manifest
 ```
 
-If `proof-check` fails with `unsolved goals`, your proof script needs more
-help — Lean is telling you exactly where. Almost always the fix is to add a
-lemma name to the `simp [...]` list, or `omega` for arithmetic, or
-to do a case split on a hypothesis.
+After this finishes, generated files under `src/generated/verity/` contain the
+actual interface and deployer for the compiled Verity bytecode. The manifest
+under `artifacts/manifest/ERC20Lite.json` records the source paths, ABI,
+selectors, storage layout, bytecode hash, obligations, mirrors, and trust
+inputs.
 
-## Step 7 — Run the audit
+## Step 8: Run the mirror tests
+
+```sh
+tama test
+```
+
+The starter has ten Foundry tests:
+
+```text
+Ran 10 tests for test/verity/ERC20Lite.t.sol:ERC20LiteTest
+[PASS] invariant_totalSupplyTracksMinted()
+[PASS] testFuzzBalanceOfMirrorsGeneratedBytecode(address,uint256)
+[PASS] testFuzzDeploymentSetsOwner(address)
+[PASS] testFuzzMintRevertsForNonOwner(address,address,uint256)
+[PASS] testFuzzMintUpdatesBalanceAndSupply(address,uint256)
+[PASS] testFuzzTransferDebitAndCredit(address,uint256,uint256)
+[PASS] testFuzzTransferOwnershipChangesOwner(address)
+[PASS] testFuzzTransferOwnershipPreservesTokenState(address,address,uint256)
+[PASS] testFuzzTransferOwnershipRevertsForNonOwner(address,address)
+[PASS] testFuzzTransferPreservesTotalSupply(address,uint256,uint256)
+Suite result: ok. 10 passed; 0 failed; 0 skipped
+```
+
+Open `test/verity/ERC20Lite.t.sol` and look for comments like:
+
+```solidity
+// tama: mirrors=transfer_total_supply_preserved
+function testFuzzTransferPreservesTotalSupply(
+    address recipient, uint256 rawMint, uint256 rawTransfer
+) public {
+    ERC20LiteIface token = deployToken();
+    uint256 minted = rawMint % 1e36;
+    uint256 amount = minted == 0 ? 0 : rawTransfer % (minted + 1);
+    require(token.mint(address(this), minted), "mint");
+    require(token.transfer(recipient, amount), "transfer");
+    require(token.totalSupply() == minted, "supply preserved");
+}
+```
+
+`// tama: mirrors=<spec>` binds a Foundry fuzz test or invariant to the same
+spec definition a Lean theorem discharges. A spec is covered when Tama can see
+both sides: at least one Lean discharger and at least one executable mirror,
+unless the spec is explicitly listed as proof-only in `tama.toml`.
+
+## Step 9: Audit the release boundary
 
 ```sh
 tama audit
 ```
 
-You should see the five checks pass:
+The audit checks that the proof, generated artifacts, bytecode, mirrors, and
+trust boundary still agree:
 
 ```text
-audit:
-  ✓ structure       all files present, bytecode hashes match
-  ✓ selectors       8 functions agree across Verity / manifest / Yul / Solidity
-  ✓ storage-layout  no overlap, all encodings recognized
-  ✓ coverage        every spec has a discharger and a mirror
-  ✓ trust-boundary  no sorry, axioms allowlisted
+Checks:
+  ok   structure       Required files, generated paths, and bytecode hashes
+  ok   selectors       ABI selectors/topics, Solidity declarations, and Yul dispatch
+  ok   storage-layout  Storage slots, overlap, encodings, and compiler layout drift
+  ok   coverage        Public obligations have Foundry mirrors or proof-only reasons
+  ok   trust-boundary  Lean axioms, sorryAx, unresolved declarations, and trust reports
+
+Audit passed: 5 checks, 1 contract, 0 issues
 ```
 
-The line that matters most is the last one. `trust-boundary` walks the
-Lean dependency graph of every theorem that discharges a spec and
-refuses any reliance on `sorry` or unallowlisted axioms. That's the
-seal: the proofs are real, and they rest on a small set of named
-assumptions written down in `tama.toml`.
+The `trust-boundary` check is the one to read carefully before a release. It
+walks proof dependencies for every theorem that discharges a spec and rejects
+`sorry` or unallowlisted axioms. The starter allowlist lives in `tama.toml`
+and is intentionally small.
 
-## Step 8 — Watch the audit catch a bug
+## Step 10: Inspect the artifacts
 
-Let's break the contract on purpose. Open `verity/src/TipjarProtocol/TipJar.lean` and
-introduce a leak in `withdraw`:
-
-```lean
-function withdraw(amount : uint256) external do
-  let me := msg.sender
-  require balances[me] >= amount
-  balances[me] := balances[me] - amount
-  -- forgot to subtract from total!
-  transfer me amount
-```
-
-Now run:
+Use `tama inspect` to read one contract artifact at a time:
 
 ```sh
-tama build
+tama inspect ERC20Lite manifest
+tama inspect ERC20Lite selectors
+tama inspect ERC20Lite abi
+tama inspect ERC20Lite storage-layout
+tama inspect ERC20Lite obligations
+tama inspect ERC20Lite mirrors
+tama inspect ERC20Lite trust
 ```
 
-You'll see:
+Every inspector also supports JSON output:
 
-```text
-proof-check failed:
-  TipJarProof.withdraw_preserves_invariant: unsolved goals
-
-  pre.total - amount = (pre.total - amount).succ
+```sh
+tama --json inspect ERC20Lite manifest
 ```
 
-Lean caught the inconsistency before any bytecode came out. The proof
-that the invariant survived `withdraw` is no longer true, because the
-implementation no longer matches the spec. Put the `total := total - amount`
-line back, rerun, and watch the build go green again.
+These commands are useful in CI and release notes because they expose the same
+contract data the audit uses: selectors, ABI, storage slots, Yul and bytecode
+paths, obligations, Foundry mirrors, and trusted Lean assumptions.
 
-This is the loop. Implementation and spec are kept honest by the proof.
-The proof is kept honest by Lean. The bytecode is kept honest by the
-manifest hash. The audit ties all three to a Foundry test you can run
-with one keystroke.
+## Step 11: Deploy from the generated bridge
+
+After `tama build`, the script in `script/ERC20Lite.s.sol` can deploy the
+generated bytecode:
+
+```sh
+forge script script/ERC20Lite.s.sol:DeployERC20Lite
+```
+
+Set `ERC20LITE_OWNER` to choose the initial owner:
+
+```sh
+ERC20LITE_OWNER=0x0000000000000000000000000000000000000001 \
+  forge script script/ERC20Lite.s.sol:DeployERC20Lite
+```
+
+The script imports `ERC20LiteDeployer`, so it deploys the bytecode generated
+from the Verity source you just proved and audited.
 
 ## Where to go next
 
-- **[Starter project walkthrough](/guides/starter)** - walkthrough of a more advanced
-  project ERC20Lite that implements & proves a subset of a ERC20 token.
-- **[Concepts](/concepts)** — every term used above (obligation, mirror,
-  manifest, trust boundary), defined plainly with examples.
-- **[Reading audit output](/guides/audits)** — what each check actually
-  inspects, what its failures look like, and how to fix them.
-- **[Writing proof obligations](/guides/proofs)** — patterns for spec
-  decomposition, frame conditions, and helper lemmas.
-- **[CLI reference](/reference/cli)** — every flag for every command.
-- **[Verity EDSL reference](https://veritylang.com/core)** — the language
-  we wrote the contract in, in detail.
-- **[Verity examples](https://veritylang.com/examples)** — the upstream
-  contracts, each one introducing a new pattern.
+- **[Reading the starter](/guides/starter)**: a line-by-line walkthrough of
+  the implementation, specs, proofs, and mirror tests.
+- **[Concepts](/concepts)**: obligations, mirrors, manifests, and trust
+  boundaries.
+- **[Reading audit output](/guides/audits)**: what each audit check inspects
+  and how failures are reported.
+- **[Writing proof obligations](/guides/proofs)**: patterns for adding your
+  own specifications and dischargers.
+- **[CLI reference](/reference/cli)**: every Tama command and flag.
+- **[Verity EDSL reference](https://veritylang.com/core)**: the Verity
+  language surface used by the starter.
