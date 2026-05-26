@@ -205,10 +205,9 @@ the source of public proof obligations.
 ## Step 5: Read the proof links
 
 Open `verity/proof/MyProtocol/Proof/ERC20LiteProof.lean`. Proof theorems are
-ordinary Lean declarations with a Tama comment directly above the theorem:
+ordinary Lean declarations — no Tama annotation is needed:
 
 ```lean
--- tama: discharges=balanceOf_spec
 theorem balanceOf_returns_storage_balance (account : Address) (s : ContractState) :
   let result := ((balanceOf account).run s).fst
   balanceOf_spec account result s := by
@@ -216,11 +215,14 @@ theorem balanceOf_returns_storage_balance (account : Address) (s : ContractState
 ```
 
 The generated file also contains larger state-transition proofs with case
-splits for `mint`, `transfer`, and `transferOwnership`. The important contract
-with Tama is the comment: `-- tama: discharges=balanceOf_spec` tells the audit
-which spec obligation this theorem proves.
+splits for `mint`, `transfer`, and `transferOwnership`. Tama discovers which
+obligation each theorem proves from the elaborated environment: a theorem
+discharges a spec when its conclusion — after stripping the data inputs — is
+that spec applied (or a positive conjunction containing it).
+`balanceOf_returns_storage_balance` concludes `balanceOf_spec …`, so it
+discharges `balanceOf_spec`.
 
-Theorems and lemmas without `discharges=` are helper facts. They can make the
+Theorems whose conclusion is anything else are helper facts. They can make the
 proof easier to read, but they do not appear as release obligations.
 
 ## Step 6: Check implementation and spec
@@ -264,6 +266,8 @@ Build steps:
   ok   verity-codegen  compiler artifacts generated
   run  manifest        Tama adapts Verity outputs into contract manifests
   ok   manifest        1 manifest: ERC20Lite
+  run  dischargers     Lean discovers proof dischargers by spec type
+  ok   dischargers     dischargers resolved
   run  trust-probe     Lean validates dischargers and records proof dependencies
   ok   trust-probe     trust-boundary inputs written
   run  validate        ERC20Lite manifest schema and artifact paths

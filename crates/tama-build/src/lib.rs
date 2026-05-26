@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -202,6 +202,12 @@ impl Pipeline {
                     return Err(err);
                 }
             };
+        progress.run(
+            "dischargers",
+            "Lean discovers proof dischargers by spec type",
+            "dischargers resolved",
+            || discover_dischargers(&self.root, &config, &mut manifests),
+        )?;
         progress.run(
             "trust-probe",
             "Lean validates dischargers and records proof dependencies",
@@ -598,16 +604,10 @@ pub fn adapt_verity_outputs(
             .get(&contract)
             .cloned()
             .unwrap_or_default();
-        let dischargers = extract_dischargers(
-            &root.join(&source.paths.proof),
-            &source.modules.proof_module,
-            &specs,
-        )?;
         let obligations = merge_obligations(
             &contract,
             &source.modules.spec_module,
             &specs,
-            &dischargers,
             &mirrors_index,
             &config.coverage.proof_only,
         );
@@ -649,8 +649,9 @@ pub fn adapt_verity_outputs(
                     .join(format!("{contract}Deployer.sol")),
             },
         };
-        let out = manifest_dir.join(format!("{contract}.json"));
-        manifest.write_pretty(&out)?;
+        // The manifest is incomplete here (dischargers are still empty). It is
+        // first persisted — validated — by the `discover_dischargers` step, so
+        // a failed build never leaves an invalid manifest on disk.
         manifests.push(manifest);
     }
     if manifests.is_empty() {
@@ -1931,63 +1932,6 @@ fn top_level_keyword(line: &str, keyword: &str) -> bool {
     }
 }
 
-fn extract_dischargers(
-    proof_path: &Utf8Path,
-    proof_module: &str,
-    known_specs: &[String],
-) -> Result<HashMap<String, Vec<String>>> {
-    let mut map: HashMap<String, Vec<String>> = HashMap::new();
-    if !proof_path.is_file() {
-        return Ok(map);
-    }
-    let text = tama_common::read_to_string(proof_path)?;
-    let theorem_re = Regex::new(
-        r"^\s*(?:@\[[^\]]*\]\s*)*(?:(?:private|protected)\s+)*(?:theorem|lemma)\s+([A-Za-z_][A-Za-z0-9_.']*)",
-    )
-    .expect("valid theorem regex");
-    let stripped = strip_lean_block_comments(&text);
-    let known: BTreeSet<&str> = known_specs.iter().map(String::as_str).collect();
-    let mut pending: Vec<String> = Vec::new();
-    for line in stripped.lines() {
-        let trimmed = line.trim();
-        if let Some(raw) = trimmed.strip_prefix("-- tama:") {
-            let values = parse_key_values(raw);
-            for key in values.keys() {
-                if key.as_str() != "discharges" {
-                    return Err(Error::Adapter(format!(
-                        "{proof_path}: unsupported Tama metadata key `{key}` (proof tags accept only `discharges=`)"
-                    )));
-                }
-            }
-            if let Some(value) = values.get("discharges") {
-                for spec in value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                    if !known.contains(spec) {
-                        return Err(Error::Adapter(format!(
-                            "{proof_path}: discharges=`{spec}` does not match any spec in this contract"
-                        )));
-                    }
-                    pending.push(spec.to_string());
-                }
-            }
-            continue;
-        }
-        if let Some(captures) = theorem_re.captures(trimmed) {
-            if !pending.is_empty() {
-                let name = captures.get(1).unwrap().as_str();
-                let decl = format!("{proof_module}.{name}");
-                for spec in pending.drain(..) {
-                    map.entry(spec).or_default().push(decl.clone());
-                }
-            }
-            continue;
-        }
-        if !trimmed.is_empty() && !trimmed.starts_with("--") && !trimmed.starts_with("@[") {
-            pending.clear();
-        }
-    }
-    Ok(map)
-}
-
 fn extract_mirrors(
     root: &Utf8Path,
     test_dir: &Utf8Path,
@@ -2186,14 +2130,12 @@ fn merge_obligations(
     contract: &str,
     spec_module: &str,
     specs: &[String],
-    dischargers: &HashMap<String, Vec<String>>,
     mirrors: &BTreeMap<(String, String), Vec<String>>,
     proof_only: &BTreeMap<String, String>,
 ) -> Vec<Obligation> {
     let mut out = Vec::with_capacity(specs.len());
     for name in specs {
         let id = format!("{contract}.{name}");
-        let dischargers_for_spec = dischargers.get(name).cloned().unwrap_or_default();
         let mirrors_for_spec = mirrors
             .get(&(contract.to_string(), name.clone()))
             .cloned()
@@ -2204,7 +2146,7 @@ fn merge_obligations(
             name: name.clone(),
             lean_decl: format!("{spec_module}.{name}"),
             contract: contract.to_string(),
-            dischargers: dischargers_for_spec,
+            dischargers: Vec::new(),
             mirrors: mirrors_for_spec,
             proof_only_reason,
         });
@@ -2345,6 +2287,39 @@ fn generate_trust_probe(
 
 const COLLECT_AXIOMS_MARKER: &str = "TAMA_AXIOMS_JSON ";
 const DISCHARGE_ERROR_MARKER: &str = "TAMA_DISCHARGE_ERROR ";
+const DISCHARGER_MARKER: &str = "TAMA_DISCHARGER_JSON ";
+
+/// Lean meta-helpers that define the discharge criterion: strip non-`Prop`
+/// binders to the theorem's final target, then accept only the spec applied or
+/// a positive conjunction containing it. Shared verbatim by discharger
+/// discovery and the trust probe so both judge dischargers identically.
+const TAMA_TARGET_HELPERS: &str = r#"
+partial def tamaZetaHead (e : Expr) : MetaM Expr := do
+  let e := e.consumeMData
+  match e with
+  | .letE _ _ value body _ => tamaZetaHead (body.instantiate1 value)
+  | _ => pure e
+
+partial def tamaFinalTheoremTarget (e : Expr) : MetaM Expr := do
+  let e ← tamaZetaHead e
+  match e with
+  | .forallE name domain body info =>
+      if (← isProp domain) then
+        pure e
+      else
+        withLocalDecl name info domain fun x =>
+          tamaFinalTheoremTarget (body.instantiate1 x)
+  | _ => pure e
+
+partial def tamaTargetContainsSpec (specName : Name) (target : Expr) : MetaM Bool := do
+  let target ← tamaZetaHead target
+  if target.isAppOf specName then
+    return true
+  let (head, args) := target.getAppFnArgs
+  if head == ``And && args.size == 2 then
+    return (← tamaTargetContainsSpec specName args[0]!) || (← tamaTargetContainsSpec specName args[1]!)
+  return false
+"#;
 
 fn collect_axioms_probe_source(
     manifests: &[ContractManifest],
@@ -2378,33 +2353,11 @@ def tamaDischargerType (specDecl : String) (dischargerDecl : String) (discharger
   match env.find? dischargerName with
   | some info => pure info.type
   | none => throwError m!"TAMA_DISCHARGE_ERROR spec={specDecl} discharger={dischargerDecl}: missing discharger declaration"
-
-partial def tamaZetaHead (e : Expr) : MetaM Expr := do
-  let e := e.consumeMData
-  match e with
-  | .letE _ _ value body _ => tamaZetaHead (body.instantiate1 value)
-  | _ => pure e
-
-partial def tamaFinalTheoremTarget (e : Expr) : MetaM Expr := do
-  let e ← tamaZetaHead e
-  match e with
-  | .forallE name domain body info =>
-      if (← isProp domain) then
-        pure e
-      else
-        withLocalDecl name info domain fun x =>
-          tamaFinalTheoremTarget (body.instantiate1 x)
-  | _ => pure e
-
-partial def tamaTargetContainsSpec (specName : Name) (target : Expr) : MetaM Bool := do
-  let target ← tamaZetaHead target
-  if target.isAppOf specName then
-    return true
-  let (head, args) := target.getAppFnArgs
-  if head == ``And && args.size == 2 then
-    return (← tamaTargetContainsSpec specName args[0]!) || (← tamaTargetContainsSpec specName args[1]!)
-  return false
-
+"#,
+    );
+    out.push_str(TAMA_TARGET_HELPERS);
+    out.push_str(
+        r#"
 def tamaSpecIsPropValued (specDecl : String) (specName : Name) (dischargerDecl : String) : CoreM Unit := do
   let specType ← tamaSpecType specDecl specName dischargerDecl
   let ok ← MetaM.run'
@@ -2460,6 +2413,144 @@ def tamaEmitAxioms (decl : String) (constName : Name) : CoreM Unit := do
         ));
     }
     Ok(out)
+}
+
+/// Resolves each obligation's dischargers from the elaborated Lean environment:
+/// the theorems in the contract's proof namespace whose final target is the
+/// spec application (or a positive conjunction containing it). File-layout
+/// independent, so proofs split across submodules are handled.
+fn discover_dischargers(
+    root: &Utf8Path,
+    config: &TamaConfig,
+    manifests: &mut [ContractManifest],
+) -> Result<()> {
+    if manifests
+        .iter()
+        .all(|manifest| manifest.obligations.is_empty())
+    {
+        return Ok(());
+    }
+    let probe_dir = root.join(config.paths.out.join("dischargers"));
+    fs::create_dir_all(&probe_dir)
+        .map_err(|source| tama_common::io_error(probe_dir.clone(), source))?;
+    let source_path = probe_dir.join("Discover.lean");
+    let source = discover_dischargers_source(manifests)?;
+    tama_common::write_string(&source_path, &source)?;
+    let output = run_capture("lake", &["env", "lean", source_path.as_str()], root)?;
+    parse_discharger_output(&output.stdout, manifests)?;
+    let manifest_dir = root.join(config.paths.out.join("manifest"));
+    for manifest in manifests.iter() {
+        manifest.write_pretty(&manifest_dir.join(format!("{}.json", manifest.contract)))?;
+    }
+    Ok(())
+}
+
+fn discover_dischargers_source(manifests: &[ContractManifest]) -> Result<String> {
+    let mut modules = manifests
+        .iter()
+        .map(|manifest| manifest.lean.proof_module.as_str())
+        .collect::<Vec<_>>();
+    modules.sort_unstable();
+    modules.dedup();
+    let mut out = String::from(
+        "-- Generated by Tama. Discharger discovery via the Lean environment.\nimport Lean\n",
+    );
+    for module in modules {
+        validate_lean_name(module)?;
+        out.push_str(&format!("import {module}\n"));
+    }
+    out.push_str("\nopen Lean\nopen Lean.Meta\n");
+    out.push_str(TAMA_TARGET_HELPERS);
+    out.push_str(
+        r#"
+-- One fold over the environment dispatches each theorem to the proof namespace
+-- (group) that owns it, so the scan is not repeated per contract.
+def tamaEmitDischargers (groups : List (Name × List (String × Name))) : MetaM Unit := do
+  let env ← getEnv
+  for (declName, info) in env.constants.toList do
+    match info with
+    | .thmInfo ti =>
+        if !declName.isInternal then
+          -- A declaration can sit under more than one group when proof
+          -- namespaces nest (`proof.Foo` is a prefix of `proof.Foo.Bar`), so
+          -- check every prefix-matching group, not just the first.
+          let matching := groups.filter (fun group => group.1.isPrefixOf declName)
+          unless matching.isEmpty do
+            let target ← tamaFinalTheoremTarget ti.type
+            for (_, specs) in matching do
+              for (specDecl, specName) in specs do
+                if (← tamaTargetContainsSpec specName target) then
+                  IO.println ("TAMA_DISCHARGER_JSON " ++ (Json.mkObj [("spec", Json.str specDecl), ("discharger", Json.str (declName.toString))]).compress)
+    | _ => pure ()
+"#,
+    );
+    let mut groups = Vec::new();
+    for manifest in manifests {
+        if manifest.obligations.is_empty() {
+            continue;
+        }
+        let ns_lit = lean_name_literal(&manifest.lean.proof_module)?;
+        let mut specs = Vec::with_capacity(manifest.obligations.len());
+        for obligation in &manifest.obligations {
+            let name_lit = lean_name_literal(&obligation.lean_decl)?;
+            specs.push(format!("(\"{}\", {})", obligation.lean_decl, name_lit));
+        }
+        groups.push(format!("({ns_lit}, [{}])", specs.join(", ")));
+    }
+    if !groups.is_empty() {
+        out.push_str(&format!(
+            "\n#eval tamaEmitDischargers [{}]\n",
+            groups.join(", ")
+        ));
+    }
+    Ok(out)
+}
+
+fn parse_discharger_output(output: &str, manifests: &mut [ContractManifest]) -> Result<()> {
+    let mut map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for line in output.lines() {
+        let Some(rest) = line.trim().strip_prefix(DISCHARGER_MARKER) else {
+            continue;
+        };
+        let value: Value = serde_json::from_str(rest).map_err(|err| {
+            Error::Adapter(format!(
+                "discharger discovery emitted malformed marker JSON: {err}"
+            ))
+        })?;
+        let spec = value.get("spec").and_then(Value::as_str).ok_or_else(|| {
+            Error::Adapter("discharger discovery marker missing `spec`".to_string())
+        })?;
+        let discharger = value
+            .get("discharger")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                Error::Adapter("discharger discovery marker missing `discharger`".to_string())
+            })?;
+        // The manifest and trust probe reference dischargers as plain dotted
+        // identifiers, so skip any Lean `Name` that does not round-trip (e.g.
+        // guillemet-escaped or Unicode components). Such a name could otherwise
+        // poison a spec that already has a usable discharger; if it leaves a
+        // spec with none, the zero-discharger check below reports it clearly.
+        if !tama_manifest::is_qualified_lean_name(discharger) {
+            continue;
+        }
+        map.entry(spec.to_string())
+            .or_default()
+            .insert(discharger.to_string());
+    }
+    for manifest in manifests.iter_mut() {
+        for obligation in &mut manifest.obligations {
+            let found = map.get(&obligation.lean_decl).cloned().unwrap_or_default();
+            if found.is_empty() {
+                return Err(Error::Adapter(format!(
+                    "no proof theorem in `{}` discharges `{}`: a discharger must be a theorem whose conclusion is the spec applied (or a positive conjunction containing it), with no extra hypotheses",
+                    manifest.lean.proof_module, obligation.lean_decl
+                )));
+            }
+            obligation.dischargers = found.into_iter().collect();
+        }
+    }
+    Ok(())
 }
 
 fn parse_discharge_probe_error(message: &str) -> Option<String> {
@@ -3263,30 +3354,6 @@ end spec.Foo
     }
 
     #[test]
-    fn extract_dischargers_preserves_lean_prime_suffix() {
-        let dir = tempfile::tempdir().unwrap();
-        let proof = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
-            .unwrap()
-            .join("Proof.lean");
-        tama_common::write_string(
-            &proof,
-            r#"namespace proof.Foo
-
--- tama: discharges=transfer'
-theorem transfer'_meets : True := by trivial
-
-end proof.Foo
-"#,
-        )
-        .unwrap();
-        let map = extract_dischargers(&proof, "proof.Foo", &["transfer'".to_string()]).unwrap();
-        assert_eq!(
-            map.get("transfer'").map(|v| v.as_slice()),
-            Some(&["proof.Foo.transfer'_meets".to_string()][..])
-        );
-    }
-
-    #[test]
     fn extract_specs_rejects_forbidden_top_level_form() {
         let dir = tempfile::tempdir().unwrap();
         let spec = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
@@ -3332,96 +3399,6 @@ end spec.Foo
         assert!(matches!(
             err,
             Error::Adapter(message) if message.contains("must not carry `-- tama:` comments")
-        ));
-    }
-
-    #[test]
-    fn extract_dischargers_parses_discharges_tag() {
-        let dir = tempfile::tempdir().unwrap();
-        let proof = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
-            .unwrap()
-            .join("Proof.lean");
-        tama_common::write_string(
-            &proof,
-            r#"namespace proof.CounterProof
-
--- tama: discharges=increment_spec
-theorem increment_meets_spec : True := by trivial
-
--- tama: discharges=getCount_spec,getCount_preserves_state_spec
-theorem getCount_combo : True := by trivial
-
-lemma helper : True := by trivial
-
-end proof.CounterProof
-"#,
-        )
-        .unwrap();
-        let specs = vec![
-            "increment_spec".to_string(),
-            "getCount_spec".to_string(),
-            "getCount_preserves_state_spec".to_string(),
-        ];
-        let map = extract_dischargers(&proof, "proof.CounterProof", &specs).unwrap();
-        assert_eq!(
-            map.get("increment_spec").unwrap(),
-            &vec!["proof.CounterProof.increment_meets_spec".to_string()]
-        );
-        assert_eq!(
-            map.get("getCount_spec").unwrap(),
-            &vec!["proof.CounterProof.getCount_combo".to_string()]
-        );
-        assert_eq!(
-            map.get("getCount_preserves_state_spec").unwrap(),
-            &vec!["proof.CounterProof.getCount_combo".to_string()]
-        );
-    }
-
-    #[test]
-    fn extract_dischargers_rejects_unknown_spec() {
-        let dir = tempfile::tempdir().unwrap();
-        let proof = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
-            .unwrap()
-            .join("Proof.lean");
-        tama_common::write_string(
-            &proof,
-            r#"namespace proof.Foo
-
--- tama: discharges=does_not_exist
-theorem t : True := by trivial
-
-end proof.Foo
-"#,
-        )
-        .unwrap();
-        let err = extract_dischargers(&proof, "proof.Foo", &["foo_spec".to_string()]).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::Adapter(message) if message.contains("does not match any spec")
-        ));
-    }
-
-    #[test]
-    fn extract_dischargers_rejects_unknown_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let proof = Utf8PathBuf::from_path_buf(dir.path().to_path_buf())
-            .unwrap()
-            .join("Proof.lean");
-        tama_common::write_string(
-            &proof,
-            r#"namespace proof.Foo
-
--- tama: discharges=foo_spec coverage=mirror
-theorem t : True := by trivial
-
-end proof.Foo
-"#,
-        )
-        .unwrap();
-        let err = extract_dischargers(&proof, "proof.Foo", &["foo_spec".to_string()]).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::Adapter(message) if message.contains("unsupported Tama metadata key `coverage`")
         ));
     }
 
@@ -3687,12 +3664,6 @@ contract ConcreteFooTest is FooTestBase {
         let root =
             Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/projects/counter");
         let specs = extract_specs(&root.join("verity/spec/CounterSpec.lean")).unwrap();
-        let dischargers = extract_dischargers(
-            &root.join("verity/proof/CounterProof.lean"),
-            "proof.CounterProof",
-            &specs,
-        )
-        .unwrap();
         let mut spec_owner = BTreeMap::new();
         for name in &specs {
             spec_owner.insert(name.clone(), "Counter".to_string());
@@ -3704,11 +3675,9 @@ contract ConcreteFooTest is FooTestBase {
         assert!(test.contains("handlerDecrement"));
         assert!(test.contains("contract CounterTest is MinimalStdInvariant"));
         assert!(test.contains("function targetSelectors()"));
+        // Dischargers are resolved by a Lean meta-pass (`discover_dischargers`),
+        // not by scanning the proof file, so coverage here checks specs + mirrors.
         for spec in &specs {
-            assert!(
-                dischargers.contains_key(spec),
-                "spec `{spec}` has no discharger"
-            );
             let key = ("Counter".to_string(), spec.clone());
             assert!(mirrors.contains_key(&key), "spec `{spec}` has no mirror");
         }
@@ -3729,7 +3698,10 @@ contract ConcreteFooTest is FooTestBase {
             manifests[0].artifacts.yul,
             Utf8PathBuf::from("artifacts/yul/Counter.yul")
         );
-        assert!(root.join("artifacts/manifest/Counter.json").is_file());
+        // `adapt_verity_outputs` returns in-memory manifests and creates the
+        // output directory; the manifest file is first written (validated) by
+        // the `discover_dischargers` step.
+        assert!(root.join("artifacts/manifest").is_dir());
     }
 
     #[test]
@@ -3864,10 +3836,9 @@ contract ConcreteFooTest is FooTestBase {
             manifest.obligations[0].lean_decl,
             "spec.defi.VaultSpec.balance_spec"
         );
-        assert_eq!(
-            manifest.obligations[0].dischargers,
-            vec!["proof.defi.VaultProof.balance_meets_spec".to_string()]
-        );
+        // `adapt_verity_outputs` builds obligations with empty dischargers;
+        // they are populated later by the `discover_dischargers` Lean pass.
+        assert!(manifest.obligations[0].dischargers.is_empty());
         assert_eq!(
             manifest.obligations[0].mirrors,
             vec!["test/verity/defi/Vault.t.sol:VaultTest.testFuzzBalance".to_string()]
@@ -4218,6 +4189,113 @@ TAMA_AXIOMS_END proof.CounterProof.increment_meets_spec
         ));
         assert!(source.contains(
             "#eval show CoreM Unit from tamaEmitAxioms \"Tamago.Proof.CounterProof.increment_meets_spec\" `Tamago.Proof.CounterProof.increment_meets_spec"
+        ));
+    }
+
+    #[test]
+    fn discover_dischargers_source_emits_namespace_probe() {
+        let mut manifest = test_manifest("Counter");
+        manifest.obligations.push(fixture_obligation());
+        manifest.obligations.push(fixture_decrement_obligation());
+
+        let source = discover_dischargers_source(&[manifest]).unwrap();
+
+        assert!(source.contains("import proof.CounterProof"));
+        // The discharge criterion is shared verbatim with the trust probe.
+        assert!(source.contains("partial def tamaFinalTheoremTarget"));
+        assert!(source.contains("partial def tamaTargetContainsSpec"));
+        assert!(source.contains("def tamaEmitDischargers"));
+        // One fold over the environment dispatches by namespace group.
+        assert!(source.contains(
+            "#eval tamaEmitDischargers [(`proof.CounterProof, [(\"spec.CounterSpec.increment_spec\", `spec.CounterSpec.increment_spec), (\"spec.CounterSpec.decrement_spec\", `spec.CounterSpec.decrement_spec)])]"
+        ));
+    }
+
+    #[test]
+    fn discover_dischargers_source_dispatches_nested_namespaces() {
+        // Two contracts whose proof namespaces nest. Both must be passed as
+        // groups, and the fold must check each declaration against every
+        // matching group (`filter`, not first-match) so a theorem under the
+        // deeper namespace is still checked against the deeper contract's specs.
+        let mut outer = test_manifest("Foo");
+        outer.lean.proof_module = "proof.Foo".to_string();
+        let mut outer_ob = fixture_obligation();
+        outer_ob.lean_decl = "spec.Foo.outer_spec".to_string();
+        outer_ob.dischargers.clear();
+        outer.obligations.push(outer_ob);
+
+        let mut inner = test_manifest("Bar");
+        inner.lean.proof_module = "proof.Foo.Bar".to_string();
+        let mut inner_ob = fixture_obligation();
+        inner_ob.lean_decl = "spec.Foo.Bar.inner_spec".to_string();
+        inner_ob.dischargers.clear();
+        inner.obligations.push(inner_ob);
+
+        let source = discover_dischargers_source(&[outer, inner]).unwrap();
+
+        assert!(source.contains("groups.filter"));
+        assert!(!source.contains("groups.find?"));
+        assert!(source.contains("(`proof.Foo, [(\"spec.Foo.outer_spec\", `spec.Foo.outer_spec)])"));
+        assert!(source.contains(
+            "(`proof.Foo.Bar, [(\"spec.Foo.Bar.inner_spec\", `spec.Foo.Bar.inner_spec)])"
+        ));
+    }
+
+    #[test]
+    fn discover_dischargers_source_skips_contracts_without_obligations() {
+        let source = discover_dischargers_source(&[test_manifest("Counter")]).unwrap();
+        assert!(source.contains("import proof.CounterProof"));
+        assert!(!source.contains("#eval tamaEmitDischargers"));
+    }
+
+    #[test]
+    fn parse_discharger_output_fills_sorted_unique_dischargers() {
+        let mut manifest = test_manifest("Counter");
+        let mut increment = fixture_obligation();
+        increment.dischargers.clear();
+        let mut decrement = fixture_decrement_obligation();
+        decrement.dischargers.clear();
+        manifest.obligations.push(increment);
+        manifest.obligations.push(decrement);
+        let mut manifests = vec![manifest];
+
+        let output = concat!(
+            "TAMA_DISCHARGER_JSON {\"spec\":\"spec.CounterSpec.increment_spec\",\"discharger\":\"proof.CounterProof.increment_meets_spec\"}\n",
+            "unrelated probe noise\n",
+            "TAMA_DISCHARGER_JSON {\"spec\":\"spec.CounterSpec.decrement_spec\",\"discharger\":\"proof.CounterProof.decrement_b\"}\n",
+            "TAMA_DISCHARGER_JSON {\"spec\":\"spec.CounterSpec.decrement_spec\",\"discharger\":\"proof.CounterProof.decrement_a\"}\n",
+            "TAMA_DISCHARGER_JSON {\"spec\":\"spec.CounterSpec.decrement_spec\",\"discharger\":\"proof.CounterProof.decrement_b\"}\n",
+        );
+
+        parse_discharger_output(output, &mut manifests).unwrap();
+
+        assert_eq!(
+            manifests[0].obligations[0].dischargers,
+            vec!["proof.CounterProof.increment_meets_spec".to_string()]
+        );
+        assert_eq!(
+            manifests[0].obligations[1].dischargers,
+            vec![
+                "proof.CounterProof.decrement_a".to_string(),
+                "proof.CounterProof.decrement_b".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_discharger_output_errors_when_spec_has_no_discharger() {
+        let mut manifest = test_manifest("Counter");
+        let mut increment = fixture_obligation();
+        increment.dischargers.clear();
+        manifest.obligations.push(increment);
+        let mut manifests = vec![manifest];
+
+        let err = parse_discharger_output("", &mut manifests).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::Adapter(message)
+                if message.contains("no proof theorem in `proof.CounterProof` discharges `spec.CounterSpec.increment_spec`")
         ));
     }
 

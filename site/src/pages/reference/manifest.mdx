@@ -176,7 +176,7 @@ One entry per top-level definition in the spec file.
 | `name`               | Spec definition name as written.                                         |
 | `lean_decl`          | Fully qualified Lean declaration name of the spec def.                   |
 | `contract`           | The contract this obligation belongs to.                                 |
-| `dischargers`        | Array of fully qualified theorem decls (proof side) that discharge this. |
+| `dischargers`        | Array of fully qualified theorem decls (proof side) that discharge this, auto-discovered by type from the proof namespace during `tama build`. |
 | `mirrors`            | Array of `<file>:<sol_contract>.<sol_function>` mirror references.       |
 | `proof_only_reason`  | Non-empty string from `[coverage.proof_only]`, or `null`.                |
 

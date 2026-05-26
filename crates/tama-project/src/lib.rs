@@ -666,13 +666,11 @@ open Verity.EVM.Uint256
 open {spec_module}
 open {src_module}.{name}
 
--- tama: discharges=setValue_spec
 theorem setValue_meets_spec (newValue : Uint256) (s : ContractState) :
   let s' := ((setValue newValue).run s).snd
   setValue_spec newValue s s' := by
   sorry
 
--- tama: discharges=getValue_spec
 theorem getValue_returns_value (s : ContractState) :
   let result := ((getValue).run s).fst
   getValue_spec result s := by
@@ -913,10 +911,11 @@ open Verity.EVM.Uint256
 open spec.ERC20LiteSpec
 open src.ERC20Lite
 
--- Each `tama: discharges=` comment binds a proof theorem to a spec; the spec
--- in turn is mirrored by a Foundry test (or listed under
--- `[coverage.proof_only]` in `tama.toml`).
--- tama: discharges=mint_owner_preserved
+-- Tama auto-discovers, from the proof namespace, each theorem whose conclusion
+-- is a spec application (or a positive conjunction containing one); no
+-- annotation is needed to bind a theorem to its spec. Each spec is in turn
+-- mirrored by a Foundry test (or listed under `[coverage.proof_only]` in
+-- `tama.toml`).
 theorem mint_preserves_owner_after_run (toAddr : Address) (amount : Uint256) (s : ContractState) :
   let s' := ((mint toAddr amount).run s).snd
   mint_owner_preserved s s' := by
@@ -936,7 +935,6 @@ theorem mint_preserves_owner_after_run (toAddr : Address) (amount : Uint256) (s 
   · simp [mint, ownerSlot, msgSender, getStorageAddr, Contract.run, ContractResult.snd,
       Verity.bind, Bind.bind, Verity.require, h_owner]
 
--- tama: discharges=transfer_total_supply_preserved
 theorem transfer_total_supply_preserved_after_run (toAddr : Address) (amount : Uint256) (s : ContractState) :
   let s' := ((transfer toAddr amount).run s).snd
   transfer_total_supply_preserved s s' := by
@@ -965,7 +963,6 @@ theorem transfer_total_supply_preserved_after_run (toAddr : Address) (amount : U
 -- `setMapping` literally produces — they are definitionally equal via the
 -- HSub instance, but simp on `+` fires `add_comm` while `sub` is left
 -- alone, so the two sides need to be brought into the same shape by hand.
--- tama: discharges=transfer_balances_effect
 theorem transfer_balances_effect_after_run
     (toAddr : Address) (amount : Uint256) (s : ContractState) :
   transfer_balances_effect toAddr amount s ((transfer toAddr amount).run s).snd := by
@@ -996,19 +993,16 @@ theorem transfer_balances_effect_after_run
         Verity.require, Verity.Stdlib.Math.requireSomeUint, Verity.Stdlib.Math.safeAdd,
         h_balance, h_ne, h_not_overflow_strict]
 
--- tama: discharges=balanceOf_spec
 theorem balanceOf_returns_storage_balance (account : Address) (s : ContractState) :
   let result := ((balanceOf account).run s).fst
   balanceOf_spec account result s := by
   simp [balanceOf_spec, balanceOf, balancesSlot, Bind.bind, Pure.pure]
 
--- tama: discharges=totalSupply_spec
 theorem totalSupply_returns_storage_supply (s : ContractState) :
   let result := ((totalSupply).run s).fst
   totalSupply_spec result s := by
   simp [totalSupply_spec, totalSupply, totalSupplySlot, Bind.bind, Pure.pure]
 
--- tama: discharges=owner_spec
 theorem owner_returns_storage_owner (s : ContractState) :
   let result := ((owner).run s).fst
   owner_spec result s := by
@@ -1018,7 +1012,6 @@ theorem owner_returns_storage_owner (s : ContractState) :
 -- and a revert carries the original state unchanged. Specs whose body is an
 -- implication are stated without `let s'` so `intro` reaches the antecedent
 -- directly (a `let` binder would otherwise be the first thing introduced).
--- tama: discharges=mint_unauthorized_no_change
 theorem mint_unauthorized_no_change_after_run
     (toAddr : Address) (amount : Uint256) (s : ContractState) :
   mint_unauthorized_no_change toAddr amount s ((mint toAddr amount).run s).snd := by
@@ -1031,7 +1024,6 @@ theorem mint_unauthorized_no_change_after_run
 -- Authorized-path effect: when sender = owner, `transferOwnership` writes the
 -- new owner into slot 0. The single-branch proof is the simplest shape — no
 -- case split, just unfold and let `setStorageAddr` rewrite the slot.
--- tama: discharges=transferOwnership_authorized_sets_owner
 theorem transferOwnership_authorized_sets_owner_after_run
     (newOwner : Address) (s : ContractState) :
   transferOwnership_authorized_sets_owner newOwner s
@@ -1043,7 +1035,6 @@ theorem transferOwnership_authorized_sets_owner_after_run
     Verity.require, h_owner]
 
 -- Negative access control: a non-owner caller leaves slot 0 untouched.
--- tama: discharges=transferOwnership_unauthorized_owner_unchanged
 theorem transferOwnership_unauthorized_owner_unchanged_after_run
     (newOwner : Address) (s : ContractState) :
   transferOwnership_unauthorized_owner_unchanged s
@@ -1057,7 +1048,6 @@ theorem transferOwnership_unauthorized_owner_unchanged_after_run
 -- Frame condition: `transferOwnership` never touches the totalSupply slot.
 -- The proof case-splits on authorization so the same statement covers both
 -- branches — the authorized branch does write a slot, just not slot 2.
--- tama: discharges=transferOwnership_supply_preserved
 theorem transferOwnership_supply_preserved_after_run
     (newOwner : Address) (s : ContractState) :
   let s' := ((transferOwnership newOwner).run s).snd
@@ -1072,7 +1062,6 @@ theorem transferOwnership_supply_preserved_after_run
       Verity.require, h_owner]
 
 -- Frame condition: `transferOwnership` never touches the balances mapping.
--- tama: discharges=transferOwnership_balances_preserved
 theorem transferOwnership_balances_preserved_after_run
     (account : Address) (newOwner : Address) (s : ContractState) :
   let s' := ((transferOwnership newOwner).run s).snd
@@ -1523,13 +1512,12 @@ srcDir = "{src_dir}"
         assert!(!proof.contains("Placeholder"));
         assert!(!proof.contains("kind="));
         assert!(!proof.contains("coverage="));
-        assert!(proof.contains("tama: discharges=transfer_total_supply_preserved"));
-        assert!(proof.contains("tama: discharges=transfer_balances_effect"));
-        assert!(proof.contains("tama: discharges=mint_unauthorized_no_change"));
-        assert!(proof.contains("tama: discharges=transferOwnership_authorized_sets_owner"));
-        assert!(proof.contains("tama: discharges=transferOwnership_unauthorized_owner_unchanged"));
-        assert!(proof.contains("tama: discharges=transferOwnership_supply_preserved"));
-        assert!(proof.contains("tama: discharges=transferOwnership_balances_preserved"));
+        // Dischargers are auto-discovered from the proof namespace, so the
+        // starter proof carries no discharge tags.
+        assert!(!proof.contains("tama: discharges="));
+        assert!(proof.contains("Tama auto-discovers"));
+        assert!(proof.contains("theorem transfer_total_supply_preserved_after_run"));
+        assert!(proof.contains("theorem transferOwnership_supply_preserved_after_run"));
         assert!(proof.contains("((transfer toAddr amount).run s).snd"));
         assert!(proof.contains("((mint toAddr amount).run s).snd"));
         assert!(proof.contains("((transferOwnership newOwner).run s).snd"));
@@ -1747,8 +1735,7 @@ srcDir = "{src_dir}"
         assert!(proof.contains("namespace MyProtocol.Proof.TipJarProof"));
         assert!(proof.contains("((setValue newValue).run s).snd"));
         assert!(proof.contains("((getValue).run s).fst"));
-        assert!(proof.contains("tama: discharges=setValue_spec"));
-        assert!(proof.contains("tama: discharges=getValue_spec"));
+        assert!(!proof.contains("tama: discharges="));
         assert!(proof.contains("sorry"));
         let test = read_to_string(&root.join("test/verity/TipJar.t.sol")).unwrap();
         assert!(test.contains(
@@ -1868,7 +1855,7 @@ srcDir = "{src_dir}"
         assert!(root.join("contracts/proof/TipJarProof.lean").is_file());
         assert!(root.join("tests/verity/TipJar.t.sol").is_file());
         let proof = read_to_string(&root.join("contracts/proof/TipJarProof.lean")).unwrap();
-        assert!(proof.contains("tama: discharges=setValue_spec"));
+        assert!(!proof.contains("tama: discharges="));
         let test = read_to_string(&root.join("tests/verity/TipJar.t.sol")).unwrap();
         assert!(test.contains("// tama: mirrors=setValue_spec"));
         assert!(!root.join("verity/src/TipJar.lean").exists());
