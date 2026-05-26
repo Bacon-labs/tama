@@ -248,6 +248,10 @@ jobs:
 
           copy_case() {
             name="$1"
+            # Reclaim disk from earlier cases: keep only `base` plus the case
+            # being created so the mutation copies never accumulate and fill
+            # the runner disk.
+            find "$TAMA_NEGATIVE_TMP" -mindepth 1 -maxdepth 1 -type d ! -name base -exec rm -rf {} +
             target="$TAMA_NEGATIVE_TMP/$name"
             cp -R "$base" "$target"
             printf '%s\n' "$target"
