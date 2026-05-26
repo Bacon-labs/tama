@@ -115,10 +115,10 @@ What it inspects:
 - Every spec has at least one discharger AND either at least one
   Foundry mirror or a [`[coverage.proof_only]`](/reference/config)
   entry in `tama.toml`.
-- Every `-- tama: discharges=<spec>` tag in the proof file names a
-  real top-level def in the same contract's spec file, and `tama build`
-  has checked that the tagged theorem target is the spec application or
-  a positive conjunction containing it.
+- Every spec has at least one discharger that `tama build` discovered
+  in the proof namespace — a theorem whose conclusion (after stripping
+  non-`Prop` binders) is the spec application or a positive conjunction
+  containing it.
 - Every `// tama: mirrors=<spec>` tag sits directly above a function
   named `testFuzz*` or `invariant_*`, and names a real spec in some
   contract.
@@ -164,7 +164,8 @@ trust-boundary: error
     depends on: sorryAx
 
   `sorry` is denied for any theorem that discharges a spec. Replace the
-  sorry with a real proof, or remove the `discharges=` tag.
+  sorry with a real proof, or change the theorem so its conclusion no
+  longer matches the spec.
 
 trust-boundary: warning
   TipJarProof.deposit_preserves_invariant

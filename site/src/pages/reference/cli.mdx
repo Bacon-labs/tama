@@ -140,12 +140,13 @@ Steps:
 1. `lake build MyProtocol.Proof` — Lean elaborates implementation, spec, and proof. The target is the configured proof aggregate module; legacy projects without `[modules]` use `TamaProof`.
 2. `lake exe verity-compiler` — emits Yul, ABI, storage, trust reports.
 3. Tama adapts compiler output into `tama.contract-manifest.v1` files.
-4. Lean validates `discharges=` claims and records proof dependencies into `artifacts/trust-probe/axioms.json`.
-5. Tama validates each manifest's schema and artifact paths.
-6. `solc --standard-json` compiles each Yul into bytecode per `[yul]`.
-7. Tama generates Solidity interfaces and deployers from the manifests.
-8. `forge build` compiles user Solidity, generated bridges, and tests.
-9. `tama.lock` is refreshed.
+4. A Lean meta-pass discovers each spec's dischargers by type — enumerating the theorems in the contract's proof namespace and recording those whose elaborated conclusion (after stripping non-`Prop` binders) is the spec application or a positive conjunction containing it — and records them in the manifest's `dischargers` arrays.
+5. Lean's trust probe collects the axioms reachable from every discharger and records proof dependencies into `artifacts/trust-probe/axioms.json`.
+6. Tama validates each manifest's schema and artifact paths.
+7. `solc --standard-json` compiles each Yul into bytecode per `[yul]`.
+8. Tama generates Solidity interfaces and deployers from the manifests.
+9. `forge build` compiles user Solidity, generated bridges, and tests.
+10. `tama.lock` is refreshed.
 
 Useful flags:
 

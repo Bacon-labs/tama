@@ -105,7 +105,7 @@ def transfer_preserves_totalSupply := ...
 end MyProtocol.Spec.FooSpec
 ```
 
-`FooProof.lean` imports `FooSpec.lean` and contains the theorems that discharge those obligations. Each discharging theorem carries a `-- tama: discharges=<spec_name>` comment directly above it (multiple comma-separated spec names are allowed, with no whitespace after commas). Multiple theorems may discharge one spec; one theorem may discharge several. The tag is checked by Lean: after elaboration, the theorem target must be the named spec application directly, or a positive conjunction containing that spec application. Theorems and `lemma`s without a `discharges=` tag are silently treated as helpers and never appear in the manifest.
+`FooProof.lean` imports `FooSpec.lean` and contains the theorems that discharge those obligations. Discharging theorems carry no Tama annotations: during `tama build`, a Lean meta-pass enumerates the theorems in the contract's proof namespace from the elaborated environment and records a theorem as a discharger of a spec when, after stripping its leading non-`Prop` binders (the data inputs), its conclusion is that spec application directly or a positive conjunction containing it. Discovery is file-layout independent — the proof may be split across imported submodules that share the proof namespace. Multiple theorems may discharge one spec; one theorem may discharge several (via a conjunction). Theorems whose conclusion is anything else are treated as helpers and never appear in the manifest.
 
 Foundry tests that mirror specs live under the configured mirror test path (typically `test/verity/`). Each mirror is a `testFuzz*` or `invariant_*` function carrying a `// tama: mirrors=<spec_name>` Solidity comment directly above the function declaration. Putting a `mirrors=` tag on a plain `test_*` function is a build error.
 
@@ -646,12 +646,12 @@ Mirror references must point to contract-qualified, property-shaped Foundry symb
 Example Lean shape (proof side):
 
 ```lean
--- tama: discharges=transfer_preserves_total_supply
-theorem transfer_preserves_total_supply_after_run : ... := by
+theorem transfer_preserves_total_supply_after_run :
+    ... transfer_preserves_total_supply ... := by
   ...
 
--- tama: discharges=mint_increases_total,mint_owner_preserved
-theorem mint_combined : ... := by
+theorem mint_combined :
+    ... mint_increases_total ... ∧ ... mint_owner_preserved ... := by
   ...
 
 theorem arithmetic_helper : ... := by
@@ -672,9 +672,9 @@ function invariant_totalSupplyTracksMinted() public view {
 }
 ```
 
-Tag rules: `discharges=<spec_name>[,<spec_name>...]` (no whitespace after commas) on Lean theorems, and `mirrors=<spec_name>[,<spec_name>...]` on Solidity functions. Each spec name on the right of `discharges=` must be a real top-level def in the same contract's spec file; each spec name on the right of `mirrors=` must be a real spec in some contract. Unknown names are build-time errors.
+Dischargers are not tagged: Tama discovers them by type from the contract's proof namespace (above and below). Mirrors are tagged with `mirrors=<spec_name>[,<spec_name>...]` (no whitespace after commas) on Solidity functions; each spec name on the right of `mirrors=` must be a real spec in some contract, and unknown names are build-time errors.
 
-`discharges=` is not metadata-only. During `tama build`, the generated Lean trust probe checks the theorem's elaborated proposition. Accepted theorem targets are a direct spec application, or a positive `And` conjunction containing that spec application. Rejected shapes include unrelated theorems, `True`, arbitrary assumptions such as `P -> spec ...`, disjunctions, existentials, and helper-position mentions of the spec. Put preconditions inside the spec definition itself; after the theorem target is the spec application, the proof may unfold the spec and introduce those preconditions normally.
+The discharge criterion is a check on the theorem's elaborated proposition. During `tama build`, the Lean meta-pass strips each theorem's leading non-`Prop` binders and inspects the resulting conclusion. Accepted theorem targets are a direct spec application, or a positive `And` conjunction containing that spec application. Rejected shapes include unrelated theorems, `True`, arbitrary assumptions such as `P -> spec ...`, disjunctions, existentials, and helper-position mentions of the spec. Put preconditions inside the spec definition itself; once the theorem target is the spec application, the proof may unfold the spec and introduce those preconditions normally.
 
 Proof-only exemptions live in `tama.toml`:
 
@@ -711,8 +711,8 @@ For each spec, Tama queries or extracts the Lean environment dependency set of e
 
 The axiom allowlist lives in `tama.toml` under `[trust.allow_axioms]`. `sorryAx` is hard-denied and is not allowlistable for `tama audit`. Compiler-reported trust surfaces live under `[trust.allow_surfaces]` and use the exact identifier reported in `artifacts/trust-report.json`.
 
-The generated trust probe validates each `discharges=` claim, then uses
-Lean's `collectAxioms` API and writes `artifacts/trust-probe/axioms.json`
+For every discharger discovered by the meta-pass, the generated trust probe
+uses Lean's `collectAxioms` API and writes `artifacts/trust-probe/axioms.json`
 with schema `tama.trust-probe.v1`.
 
 Tama also consumes Verity compiler trust-surface artifacts when present. `artifacts/trust-report.json` localizes unsupported or partially modeled mechanics, unsafe blocks, and unchecked dependency buckets; `artifacts/assumption-report.json` flattens undischarged compiler assumptions. Trust surfaces must be explicitly allowlisted by their stable surface identifier. Undischarged assumptions must be explicitly allowlisted by their stable assumption or axiom identifier.

@@ -44,13 +44,12 @@ discharger AND either at least one Foundry mirror test or a
 ## Discharging via proof
 
 In the proof file [`verity/proof/<Contract>Proof.lean`](verity/proof),
-each theorem that discharges an obligation carries a
-`-- tama: discharges=<spec_name>` comment directly above it:
+write the theorems that discharge your obligations with no Tama
+annotations — dischargers are auto-discovered by type:
 
 ```lean
 namespace FooProof
 
--- tama: discharges=total_in_range_after_mint
 theorem mint_preserves_total_in_range
     (pre : Foo.State) (call : Foo.Call) :
     FooSpec.total_in_range_after_mint pre call := by
@@ -62,29 +61,35 @@ theorem mint_preserves_total_in_range
 end FooProof
 ```
 
-The right-hand side is a comma-separated list of spec names from the
-same contract — no whitespace after commas:
+During `tama build`, Tama enumerates the theorems in the proof namespace
+from the elaborated Lean environment. For each one it strips the leading
+non-`Prop` binders (the data inputs) and inspects the conclusion. A
+theorem discharges a spec when that conclusion is the spec application
+directly, or a positive conjunction containing it — so a single theorem
+that proves a conjunction discharges every spec named in the conjunction:
 
 ```lean
--- tama: discharges=total_in_range,mint_increases_total
-theorem mint_combined : ... := by ...
+theorem mint_combined
+    (pre : Foo.State) (call : Foo.Call) :
+    FooSpec.total_in_range pre call ∧ FooSpec.mint_increases_total pre call := by ...
 ```
 
-Multiple theorems may discharge the same spec (cover one branch each,
-for instance), and one theorem may discharge several specs. Every name
-on the right of `discharges=` must be a real top-level def in the
-contract's spec file; an unknown name is a build error.
+Discovery is file-layout independent: the proof may be split across
+imported submodules, since all of them share the proof namespace. Tama
+finds the theorems wherever they live.
 
-Tama checks the elaborated theorem target in Lean. A tagged theorem must
-target the named spec application directly, or a positive conjunction
-containing it. `True`, unrelated specs, `P -> spec ...`, disjunctions,
-existentials, and helper-position mentions do not discharge the spec.
-Put preconditions inside the spec definition, then unfold the spec in
-the proof and introduce those assumptions there.
+The discharge criterion is exactly the elaborated conclusion. A theorem
+discharges a spec only if, after stripping non-`Prop` binders, its
+conclusion is the spec application or a positive conjunction containing
+it. `True`, unrelated specs, `P -> spec ...`, disjunctions, existentials,
+and helper-position mentions do not discharge the spec. Put preconditions
+inside the spec definition, then unfold the spec in the proof and
+introduce those assumptions there.
 
-Theorems and `lemma`s without a `discharges=` tag are silently treated
-as helpers — Tama never reads them and the manifest never mentions
-them. Tag the ones that close obligations; leave the scaffolding alone.
+Theorems whose conclusion is anything else are treated as helpers — they
+never appear in the manifest. There is nothing to tag: write the
+obligation-closing theorems in the spec-application shape and leave the
+scaffolding alone.
 
 ## Discharging via mirror
 
@@ -144,7 +149,6 @@ The intent: keep working contracts in a half-proven state during
 development; gate releases on a real proof.
 
 ```lean
--- tama: discharges=withdraw_drops_total
 theorem withdraw_drops_total : ... := by
   sorry  -- ok locally, will fail audit
 ```
@@ -188,7 +192,7 @@ anything you allowlist is a project-level choice, not a framework one.
   catalogues the common error messages and tactic patterns from the
   Verity side — start here before reaching for `sorry`.
 - Read [the audit guide](/guides/audits) — many "proof failures" are
-  actually structural mistakes (e.g. a `discharges=` tag pointing at a
-  spec name that doesn't exist, or a theorem target that does not
+  actually structural mistakes (e.g. a spec with no theorem whose
+  conclusion is its application, or a theorem target that does not
   actually contain the spec application) that the build reports before
   audit inputs are written.

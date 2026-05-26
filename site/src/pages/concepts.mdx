@@ -116,16 +116,18 @@ file; they are internal scaffolding and never appear in the manifest.
 
 ### Discharger
 
-A theorem in the proof file
-[`verity/proof/<Contract>Proof.lean`](verity/proof) marked with a
-`-- tama: discharges=<spec>` comment on the line above. The tag claims
-the spec definition named on the right, and Tama asks Lean to verify the
-elaborated theorem target is that spec application directly or a
-positive conjunction containing it. Multiple comma-separated names are
-allowed (no whitespace after commas), one theorem can discharge several
-specs, and several theorems can discharge one spec. Theorems and
-`lemma`s without a `discharges=` tag are silently treated as helpers and
-never appear in the manifest.
+A theorem in the contract's proof namespace
+[`verity/proof/<Contract>Proof.lean`](verity/proof) whose conclusion is
+a spec application. Dischargers carry no Tama annotations: during
+`tama build`, Tama enumerates the theorems in the proof namespace from
+the elaborated Lean environment and, after stripping each theorem's
+leading non-`Prop` binders (the data inputs), records it as a discharger
+of a spec when its target is that spec application directly or a positive
+conjunction containing it. Discovery is file-layout independent — proofs
+may be split across imported submodules that share the proof namespace.
+One theorem can discharge several specs (via a conjunction), and several
+theorems can discharge one spec. Theorems whose target is anything else
+are treated as helpers and never appear in the manifest.
 
 ### Mirror test
 
