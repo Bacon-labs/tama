@@ -882,6 +882,21 @@ fn doctor_report(project: Option<&Utf8PathBuf>) -> Result<tama_toolchain::Doctor
             }
         }
         if let Some(config) = &config {
+            if let Ok(path) = tama_toolchain::resolve_solc_path(project_root, &config.yul.solc) {
+                let version = tama_toolchain::tool_version("solc", &path).ok();
+                if let Some(status) = report.tools.iter_mut().find(|s| match s {
+                    tama_toolchain::ToolStatus::Ok(t) => t.name == "solc",
+                    tama_toolchain::ToolStatus::Missing { name, .. } => name == "solc",
+                    tama_toolchain::ToolStatus::Incompatible { name, .. } => name == "solc",
+                }) {
+                    *status = tama_toolchain::ToolStatus::Ok(tama_toolchain::Tool {
+                        name: "solc".to_string(),
+                        path,
+                        version,
+                    });
+                }
+            }
+
             mark_version_mismatch(
                 &mut report,
                 "solc",

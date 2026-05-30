@@ -384,7 +384,7 @@ pub fn parse_expected_version(tool: &str, version: &str) -> Result<Version> {
     })
 }
 
-fn resolve_solc_path(root: &Utf8Path, expected: &str) -> Result<Utf8PathBuf> {
+pub fn resolve_solc_path(root: &Utf8Path, expected: &str) -> Result<Utf8PathBuf> {
     if let Ok(path) = std::env::var("TAMA_SOLC") {
         return Ok(Utf8PathBuf::from(path));
     }
