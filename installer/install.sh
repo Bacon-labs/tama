@@ -52,7 +52,11 @@ else
     ELAN="$HOME/.elan/bin/elan"
   fi
   echo "Ensuring Lean toolchain $LEAN_TOOLCHAIN is installed..."
-  "$ELAN" toolchain install "$LEAN_TOOLCHAIN"
+  # elan errors (and, under set -e, aborts the installer) if the toolchain is
+  # already installed, which breaks re-runs. Only install when it is missing.
+  if ! "$ELAN" toolchain list 2>/dev/null | grep -qF "$LEAN_TOOLCHAIN"; then
+    "$ELAN" toolchain install "$LEAN_TOOLCHAIN"
+  fi
   # Set as elan's default only if no default is currently configured, so we
   # don't clobber an existing user pin. settings.toml carries
   # `default_toolchain = "<name>"` when one is set.
@@ -87,7 +91,10 @@ SOLC_BIN="$SOLC_DIR/solc"
 if [ ! -x "$SOLC_BIN" ]; then
   case "$PLATFORM" in
     linux-x86_64)  SOLC_URL_PATH="linux-amd64/solc-linux-amd64-v${SOLC_VERSION}+commit.${SOLC_COMMIT}" ;;
-    linux-aarch64) SOLC_URL_PATH="linux-aarch64/solc-linux-aarch64-v${SOLC_VERSION}+commit.${SOLC_COMMIT}" ;;
+    # Solidity publishes the native ARM build under "linux-arm64". Mind the
+    # spelling: this script's PLATFORM token is "linux-aarch64", but the URL
+    # segment has to be "linux-arm64".
+    linux-aarch64) SOLC_URL_PATH="linux-arm64/solc-linux-arm64-v${SOLC_VERSION}+commit.${SOLC_COMMIT}" ;;
     macos-aarch64) SOLC_URL_PATH="macosx-amd64/solc-macosx-amd64-v${SOLC_VERSION}+commit.${SOLC_COMMIT}" ;;
     *) echo "no solc binary mapping for platform: $PLATFORM" >&2; exit 1 ;;
   esac
