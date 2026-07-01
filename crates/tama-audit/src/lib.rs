@@ -2142,6 +2142,9 @@ fn audit_assumption_entry(
         "linkedExternal" => {
             check_axiom_array(ctx, contract_name, entry, name, "linked external", issues)
         }
+        "externalSummary" => {
+            check_axiom_array(ctx, contract_name, entry, name, "external summary", issues)
+        }
         "ecmAxiom" => check_allowed_assumption(ctx, contract_name, name, "ECM axiom", issues),
         "localObligation" => issues.push(issue(
             "trust-boundary",
@@ -2871,6 +2874,47 @@ solc = "0.8.33"
         assert!(issues.iter().any(|issue| {
             issue.code == "TAMA_TRUST_ASSUMPTION"
                 && issue.message.contains("keccak256_memory_slice_matches_evm")
+        }));
+    }
+
+    #[test]
+    fn assumption_report_fails_on_unallowlisted_external_summary_axiom() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let config = test_config();
+        tama_common::write_string(
+            &root.join("artifacts/assumption-report.json"),
+            r#"{"contracts":[{"contract":"Counter","entries":[],"undischarged":[{"category":"externalSummary","siteKind":"function","siteName":"pull","name":"foglightPoolSummary","status":"assumed","detail":"","assumption":"","module":"","axioms":["foglight_pool_summary_matches_impl"]}]}]}"#,
+        )
+        .unwrap();
+        let mut issues = Vec::new();
+        trust(&root, &config, &[counter_manifest()], &mut issues);
+        assert!(issues.iter().any(|issue| {
+            issue.code == "TAMA_TRUST_ASSUMPTION"
+                && issue.message.contains("external summary")
+                && issue.message.contains("foglight_pool_summary_matches_impl")
+        }));
+    }
+
+    #[test]
+    fn assumption_report_accepts_allowlisted_external_summary_axiom() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let mut config = test_config();
+        config.trust.allow_axioms.insert(
+            "foglight_pool_summary_matches_impl".to_string(),
+            "Accepted summarized FoglightPool external call".to_string(),
+        );
+        tama_common::write_string(
+            &root.join("artifacts/assumption-report.json"),
+            r#"{"contracts":[{"contract":"Counter","entries":[],"undischarged":[{"category":"externalSummary","siteKind":"function","siteName":"pull","name":"foglightPoolSummary","status":"assumed","detail":"","assumption":"","module":"","axioms":["foglight_pool_summary_matches_impl"]}]}]}"#,
+        )
+        .unwrap();
+        let mut issues = Vec::new();
+        trust(&root, &config, &[counter_manifest()], &mut issues);
+        assert!(!issues.iter().any(|issue| {
+            issue.code == "TAMA_TRUST_ASSUMPTION"
+                || issue.code == "TAMA_TRUST_ASSUMPTION_REPORT_INVALID"
         }));
     }
 

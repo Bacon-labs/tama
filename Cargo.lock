@@ -818,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "tama-audit"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "camino",
  "regex",
@@ -833,7 +833,7 @@ dependencies = [
 
 [[package]]
 name = "tama-build"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "camino",
  "regex",
@@ -850,7 +850,7 @@ dependencies = [
 
 [[package]]
 name = "tama-cli"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anstream",
  "anstyle",
@@ -872,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "tama-common"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "camino",
  "hex",
@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "tama-config"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "camino",
  "serde",
@@ -901,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "tama-inspect"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "camino",
  "serde",
@@ -916,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "tama-manifest"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "camino",
  "regex",
@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "tama-project"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "camino",
  "serde",
@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "tama-toolchain"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "camino",
  "hex",
@@ -961,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "tamaup-cli"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anstream",
  "anstyle",
