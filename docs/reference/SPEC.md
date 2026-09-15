@@ -160,6 +160,15 @@ metadata_bytecode_hash = "none"          # reproducible bytecode by default
 
 `[coverage.proof_only]` lists obligations that have no executable mirror. Each key is a fully qualified obligation id (`<Contract>.<spec_name>`) and must match a real top-level def in the contract's spec file; each value is a non-empty trimmed reason string. Unknown keys are build errors; empty reasons are config-load errors. Specs not listed here must be mirrored by at least one `testFuzz*` or `invariant_*` function tagged `// tama: mirrors=<spec>`.
 
+`[yul].yul_optimizer_steps` is an optional string passed verbatim to solc's
+`settings.optimizer.details.yulDetails.optimizerSteps`. Omission preserves the
+pinned compiler's default sequence. An explicit `""` uses an empty main sequence
+and default cleanup; `":"` makes both sequences empty, without disabling
+mandatory compiler passes. Solc validates the sequence and compatible optimizer
+settings, and errors fail the build. Tama records a supplied string in the
+lockfile's `[yul]` table; changes or removal require a lock refresh. This setting
+does not configure Foundry.
+
 `[paths]` is optional; omitted fields fall back to the defaults above. Every
 Tama-owned path must be a non-empty relative path inside the project. Absolute
 paths, `..` components, and root-collapsing values such as `.` are rejected

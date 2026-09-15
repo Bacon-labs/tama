@@ -143,6 +143,8 @@ pub struct YulConfig {
     pub optimizer_runs: u32,
     #[serde(default = "default_true")]
     pub yul_optimizer: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yul_optimizer_steps: Option<String>,
     #[serde(default = "default_evm")]
     pub evm_version: String,
     #[serde(default = "default_metadata_hash", alias = "metadata_bytecode_hash")]
@@ -791,7 +793,7 @@ fn valid_lock_component(name: &str) -> bool {
 }
 
 fn yul_lock_entries(yul: &YulConfig) -> BTreeMap<String, toml::Value> {
-    BTreeMap::from([
+    let mut entries = BTreeMap::from([
         (
             "evm_version".to_string(),
             toml::Value::String(yul.evm_version.clone()),
@@ -809,7 +811,14 @@ fn yul_lock_entries(yul: &YulConfig) -> BTreeMap<String, toml::Value> {
             "yul_optimizer".to_string(),
             toml::Value::Boolean(yul.yul_optimizer),
         ),
-    ])
+    ]);
+    if let Some(steps) = &yul.yul_optimizer_steps {
+        entries.insert(
+            "yul_optimizer_steps".to_string(),
+            toml::Value::String(steps.clone()),
+        );
+    }
+    entries
 }
 
 fn is_safe_dependency_name(name: &str) -> bool {
@@ -1147,6 +1156,7 @@ solc = "0.8.33"
         assert_eq!(cfg.paths.src, Utf8PathBuf::from("verity/src"));
         assert_eq!(cfg.yul.optimizer_runs, 200);
         assert!(cfg.yul.yul_optimizer);
+        assert_eq!(cfg.yul.yul_optimizer_steps, None);
         assert!(cfg.trust.allow_axioms.contains_key("Classical.choice"));
         assert_eq!(
             cfg.trust
@@ -1162,6 +1172,74 @@ solc = "0.8.33"
                 .map(String::as_str),
             Some("quantifies over all key pairs")
         );
+    }
+
+    #[test]
+    fn yul_optimizer_steps_preserve_optional_strings() {
+        let base = "solc = '0.8.33'\n";
+        let default: YulConfig = toml::from_str(base).unwrap();
+        assert_eq!(default.yul_optimizer_steps, None);
+        assert!(!toml::to_string(&default)
+            .unwrap()
+            .contains("yul_optimizer_steps"));
+        for steps in ["", ":", " dhfoDgvulfnTUtnIf [xa] : fDnTOcmuO ", "invalid!"] {
+            let config: YulConfig =
+                toml::from_str(&format!("{base}yul_optimizer_steps = '{steps}'\n")).unwrap();
+            assert_eq!(config.yul_optimizer_steps.as_deref(), Some(steps));
+            let round_trip: YulConfig = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+            assert_eq!(round_trip, config);
+        }
+        for value in ["true", "42", "['u']"] {
+            assert!(
+                toml::from_str::<YulConfig>(&format!("{base}yul_optimizer_steps = {value}\n"))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn yul_optimizer_steps_lock_tracks_presence_and_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let path = root.join("tama.toml");
+        let base = tracked_input_fixture("tama.toml");
+        tama_common::write_string(&path, base).unwrap();
+        let mut lock = TamaLock {
+            version: 1,
+            resolved: BTreeMap::new(),
+            inputs: BTreeMap::new(),
+            yul: BTreeMap::new(),
+        };
+        update_lock_inputs(&root, &mut lock).unwrap();
+        let default_yul = lock.yul.clone();
+        assert!(!default_yul.contains_key("yul_optimizer_steps"));
+        for steps in ["u:", ""] {
+            tama_common::write_string(&path, &format!("{base}yul_optimizer_steps = '{steps}'\n"))
+                .unwrap();
+            assert!(matches!(
+                enforce_locked(&root, &lock),
+                Err(Error::StaleLock(_))
+            ));
+            update_lock_inputs(&root, &mut lock).unwrap();
+            assert_eq!(
+                lock.yul.get("yul_optimizer_steps"),
+                Some(&toml::Value::String(steps.to_string()))
+            );
+            assert!(enforce_locked(&root, &lock).is_ok());
+            lock.yul.remove("yul_optimizer_steps");
+            assert!(lock_drift(&root, &lock)
+                .unwrap()
+                .contains(&"yul".to_string()));
+            update_lock_inputs(&root, &mut lock).unwrap();
+        }
+        tama_common::write_string(&path, base).unwrap();
+        assert!(matches!(
+            enforce_locked(&root, &lock),
+            Err(Error::StaleLock(_))
+        ));
+        update_lock_inputs(&root, &mut lock).unwrap();
+        assert_eq!(lock.yul, default_yul);
+        assert!(enforce_locked(&root, &lock).is_ok());
     }
 
     #[test]

@@ -3879,6 +3879,7 @@ solc = "0.8.33"
                 optimizer: true,
                 optimizer_runs: 200,
                 yul_optimizer: true,
+                yul_optimizer_steps: None,
                 evm_version: "cancun".to_string(),
                 metadata_hash: "none".to_string(),
             },

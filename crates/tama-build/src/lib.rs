@@ -902,7 +902,7 @@ pub fn compile_yul_standard_json(
 }
 
 fn solc_standard_json_input(contract: &str, yul: &str, config: &TamaConfig) -> Value {
-    json!({
+    let mut input = json!({
         "language": "Yul",
         "sources": {
             format!("{contract}.yul"): { "content": yul }
@@ -923,7 +923,12 @@ fn solc_standard_json_input(contract: &str, yul: &str, config: &TamaConfig) -> V
                 "*": { "*": ["evm.bytecode.object", "evm.deployedBytecode.object"] }
             }
         }
-    })
+    });
+    if let Some(steps) = &config.yul.yul_optimizer_steps {
+        input["settings"]["optimizer"]["details"]["yulDetails"] =
+            json!({ "optimizerSteps": steps });
+    }
+    input
 }
 
 fn ensure_solc_success(
@@ -4549,9 +4554,28 @@ TAMA_AXIOMS_JSON {"lean_decl":"proof.CounterProof.increment_meets_spec","axioms"
 
         let input = solc_standard_json_input("Counter", "object \"Counter\" {}", &config);
 
-        assert_eq!(input["settings"]["optimizer"]["enabled"], false);
-        assert_eq!(input["settings"]["optimizer"]["runs"], 1);
-        assert_eq!(input["settings"]["optimizer"]["details"]["yul"], false);
+        assert_eq!(
+            input["settings"]["optimizer"],
+            json!({
+                "enabled": false, "runs": 1, "details": { "yul": false }
+            })
+        );
+    }
+
+    #[test]
+    fn solc_standard_json_preserves_explicit_yul_optimizer_steps() {
+        let mut config = test_config();
+        for steps in ["", ":", " dhfoDgvulfnTUtnIf [xa] : fDnTOcmuO ", "invalid!"] {
+            config.yul.yul_optimizer_steps = Some(steps.to_string());
+            let input = solc_standard_json_input("Counter", "object \"Counter\" {}", &config);
+            assert_eq!(
+                input["settings"]["optimizer"],
+                json!({
+                    "enabled": true, "runs": 200,
+                    "details": { "yul": true, "yulDetails": { "optimizerSteps": steps } }
+                })
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -4645,6 +4669,7 @@ TAMA_AXIOMS_JSON {"lean_decl":"proof.CounterProof.increment_meets_spec","axioms"
                 optimizer: true,
                 optimizer_runs: 200,
                 yul_optimizer: true,
+                yul_optimizer_steps: None,
                 evm_version: "cancun".to_string(),
                 metadata_hash: "none".to_string(),
             },
