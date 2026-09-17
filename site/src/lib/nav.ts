@@ -21,6 +21,7 @@ export const docsNav: NavSection[] = [
       { href: "/guides/proofs", label: "Writing proof obligations" },
       { href: "/guides/audits", label: "Reading audit output" },
       { href: "/guides/foundry", label: "Foundry interop" },
+      { href: "/guides/verify", label: "Verifying on a block explorer" },
     ],
   },
   {

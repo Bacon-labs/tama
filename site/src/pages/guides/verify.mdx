@@ -1,0 +1,88 @@
+---
+layout: ../../layouts/DocLayout.astro
+title: Verifying on a block explorer
+eyebrow: Guide
+description: What "verify" means for a Tama contract, and how to verify one on Sourcify today given that Tama compiles through Yul.
+---
+
+import Callout from "../../components/Callout.astro";
+
+## Two different "verify"
+
+The word **verify** means two unrelated things for a Tama contract. Decide which one you want before you start.
+
+| You mean | You do | What it gives you |
+| --- | --- | --- |
+| **Formal verification** (the Lean proof) | `tama build` + `tama audit`, reproduced by a third party | proof the code is *correct* against its spec on every input |
+| **Explorer (source) verification** | submit the `solc` standard-JSON to a verifier | proof the published source *matches* the deployed bytecode |
+
+These answer different questions. An explorer badge says the source at an address compiles to the bytecode there. It says nothing about whether the code is correct. The Tama proof is the machine-checked claim that the code satisfies its specification on every input, which is the stronger guarantee. The rest of this guide covers the explorer side, but read the next section first.
+
+## Reproduce the proof yourself
+
+The proof is the trust anchor for a Tama contract. Anyone can reproduce it without trusting you:
+
+1. Clone the source at the tag you deployed.
+2. Run `tama build`. It elaborates the Lean proof, emits Yul, compiles it with `solc`, and records a `bytecode_hash` in each `artifacts/manifest/<Name>.json`.
+3. Run `tama audit`. It confirms the proof has no `sorryAx` or axiom holes, every spec is covered, storage layout and selectors agree everywhere, and the proof and bytecode are bound together in the manifest.
+4. Diff the rebuilt bytecode against what is on chain. The on-chain runtime bytecode equals `artifacts/bytecode/<Name>.runtime.bin` byte for byte (`tama inspect <Name> runtime-bytecode` prints it).
+
+Tama builds with `metadata_bytecode_hash = "none"`, so that rebuild is deterministic across machines. See [Generated artifacts](/reference/artifacts) and [Reading audit output](/guides/audits).
+
+> The proof is what an auditor should check. Explorer verification just makes the bytecode browsable to anyone who lands on the address page.
+
+## Why the explorer side depends on Yul
+
+A Tama contract compiles through Yul. Every contract takes the same path: the Verity EDSL lowers to Yul, and `tama build` runs `solc` over a standard-JSON whose `"language"` is `"Yul"` (it lands at `artifacts/solc-json/<Name>.input.json`). A verifier has to accept Yul standard-JSON, and not every one does yet.
+
+<Callout kind="warning" title="A submit that returns OK is not a verification">
+Etherscan-style endpoints accept a submission and hand back a GUID before they compile anything. The real result comes from polling <code>checkverifystatus</code> (or the Sourcify job). Confirm there, or on the address page, before you believe a contract is verified.
+</Callout>
+
+Where each Monad verifier stands as of May 2026:
+
+- **monadscan (Etherscan):** no Yul support. The submit is accepted, then `checkverifystatus` fails with `Unable to locate ContractName`, because Etherscan only has Solidity and Vyper code formats and recompiles the input as Solidity. Renaming the source to `.sol` and passing constructor args fail the same way, so there is no workaround here yet.
+- **Sourcify:** supports Yul (added early 2026). The public `sourcify.dev` server verifies Tama contracts today, with the recipe below.
+- **monadvision:** backed by a Sourcify host that still runs a pre-Yul build, so it returns `unsupported_language`. It will display Tama contracts once that host upgrades to a Sourcify build with Yul support.
+
+## Verify on Sourcify (works today)
+
+Submit the Yul standard-JSON to Sourcify's v2 API. The job is async, so poll it.
+
+```sh
+ADDR=0xYourContract
+curl -sS -X POST "https://sourcify.dev/server/v2/verify/10143/$ADDR" \
+  -H 'content-type: application/json' \
+  -d @- <<JSON
+{
+  "stdJsonInput": $(cat artifacts/solc-json/ERC20Lite.input.json),
+  "compilerVersion": "0.8.33+commit.64118f21",
+  "contractIdentifier": "ERC20Lite.yul:ERC20Lite"
+}
+JSON
+```
+
+Get these right:
+
+- `compilerVersion` is the full string with the commit, e.g. `0.8.33+commit.64118f21`. A short `0.8.33` fails to resolve.
+- `contractIdentifier` is the `<file>:<object>` from the standard-JSON, e.g. `ERC20Lite.yul:ERC20Lite`.
+- `stdJsonInput` is the parsed object from `artifacts/solc-json/<Name>.input.json`.
+
+The POST returns a `verificationId`. Poll it until the job finishes:
+
+```sh
+curl -sS "https://sourcify.dev/server/v2/verify/<verificationId>"
+```
+
+Then read the contract's match state:
+
+```sh
+curl -sS "https://sourcify.dev/server/v2/contract/10143/$ADDR?fields=all"
+# -> "match": "match", "runtimeMatch": "match", "language": "Yul"
+```
+
+<Callout kind="note" title="Constructor arguments">
+A runtime match does not need constructor args. The example <code>ERC20Lite</code> has <code>constructor(initialOwner: address)</code> and got a runtime match without them. For a creation match, supply the ABI-encoded constructor args (here, the <code>initialOwner</code> address).
+</Callout>
+
+The `ERC20Lite` example is verified on `sourcify.dev` for chain 10143 at `0x33bA3Ac847E0E30108Cb8eAD018b7ec1fB2d3678`.
